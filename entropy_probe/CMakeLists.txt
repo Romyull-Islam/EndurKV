@@ -20,6 +20,14 @@ if (NOT EXISTS "${LLAMA_CPP_DIR}/include/llama.h")
                         "Re-run cmake with -DLLAMA_CPP_DIR=<path-to-llama.cpp>.")
 endif()
 
+# Android NDK toolchain sets CMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY, which
+# prevents find_library from looking outside the NDK sysroot — even with
+# NO_DEFAULT_PATH + explicit PATHS. Relax to BOTH so the cross-built
+# libllama.so / libggml*.so under $LLAMA_BUILD_DIR/bin can be located.
+if (ANDROID)
+    set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY BOTH)
+endif()
+
 find_library(LLAMA_LIBRARY
     NAMES llama
     PATHS "${LLAMA_BUILD_DIR}/bin"
@@ -55,11 +63,20 @@ add_executable(entropy_probe   entropy_probe.cpp)
 add_executable(attention_probe attention_probe.cpp)
 add_executable(prune_probe     prune_probe.cpp)
 
+# Per-target arch flags. On Android (cross-compile via NDK) -march=native is
+# meaningless and the toolchain rejects it; pick an explicit aarch64 baseline
+# instead. On a host build keep -march=native for the server study.
+if (ANDROID)
+    set(_arch_flag "-march=armv8.7-a")
+else()
+    set(_arch_flag "-march=native")
+endif()
+
 foreach(_t entropy_probe attention_probe prune_probe)
     target_compile_options(${_t} PRIVATE
         -O3 -Wall -Wextra
         -ffast-math
-        -march=native
+        ${_arch_flag}
         -fopenmp-simd
         -funroll-loops
     )
@@ -69,10 +86,20 @@ foreach(_t entropy_probe attention_probe prune_probe)
         "${CMAKE_CURRENT_SOURCE_DIR}"
     )
     target_link_libraries(${_t} PRIVATE ${LLAMA_LIBRARY} ${GGML_LIBRARY} ${GGML_BASE_LIBRARY})
-    set_target_properties(${_t} PROPERTIES
-        BUILD_RPATH   "${LLAMA_BUILD_DIR}/bin"
-        INSTALL_RPATH "${LLAMA_BUILD_DIR}/bin"
-    )
+    if (ANDROID)
+        # On the phone the binary and its .so files will sit in the same
+        # directory under /data/local/tmp; rpath $ORIGIN finds them without
+        # requiring LD_LIBRARY_PATH at the shell.
+        set_target_properties(${_t} PROPERTIES
+            BUILD_RPATH   "\$ORIGIN"
+            INSTALL_RPATH "\$ORIGIN"
+        )
+    else()
+        set_target_properties(${_t} PROPERTIES
+            BUILD_RPATH   "${LLAMA_BUILD_DIR}/bin"
+            INSTALL_RPATH "${LLAMA_BUILD_DIR}/bin"
+        )
+    endif()
 endforeach()
 
 if (ENABLE_PROBE)
