@@ -27,3 +27,24 @@ Host build (entropy_probe/build-host, libllama rebuilt), Llama-3.2-1B-Instruct-Q
 ## Architecture figure, wide layout (2026-09-08)
 
 fig_architecture_tikz.tex/.pdf is now the wide two-row layout (486 x 212 pt, aspect 2.3; the three-row version is kept as fig_architecture_tikz_tall.*). Same content and numbers: pass with the KV strip on top; thermal, energy and learning columns in two rows below; steps 1 to 9. Used by both drafts (Figure 1), the main talk deck slide 10 and the energy deck slide 5.
+
+## StreamingLLM faithful campaign (2026-09-08 audit)
+
+Source: `/tmp/sllm_faithful`, produced by `scripts/android/run_streamingllm_faithful.sh` (2026-08-14).
+Llama-3.2-1B-Instruct Q4_K_M, phone GPU (Adreno 840), ctx 16384, prompt_12k.txt (9737 tokens),
+4096 generated, `taskset f0 nice -n -20`, cooled to DDR<=36C per cell, arms interleaved across reps.
+
+| Arm | config | tok/s (n=3) | SD | vs vanilla | retained KV | PPL (dis.txt) |
+|---|---|---|---|---|---|---|
+| vanilla | full cache | 24.28 | 0.12 | 1.00 | 304.4 MB | 23.480 |
+| muKV | K=1024, FA-on, in-place | 29.05 | 0.13 | 1.20 | 22.6 MB | 22.980 |
+| StreamingLLM, own budget | K=2004 (4 sink + 2000 recent), FA-on, in-place | 29.07 | 0.18 | 1.20 | 62.6 MB | 23.218 |
+| StreamingLLM, as published in earlier drafts | K=1024, FA-off, --no-defrag | 6.41 | 1.10 | 0.26 | 24.3 MB | invalid |
+
+K=2004 is StreamingLLM's own documented default: `examples/run_streaming_llama.py` in
+mit-han-lab/streaming-llm sets `--start_size 4` and `--recent_size 2000`.
+
+**Consequence.** The earlier "StreamingLLM 5.55 tok/s, 0.23x" row was a harness artifact, not a
+device property. StreamingLLM is sequence-level and compacts natively. Corrected, it ties muKV on
+throughput. muKV's separation from it is cache size at equal speed (22.6 vs 62.6 MB) and retrieval
+(needle 13/14 vs 3/14 on Llama-1B; see tab:niah).

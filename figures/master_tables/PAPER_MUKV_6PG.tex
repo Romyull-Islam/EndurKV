@@ -29,7 +29,7 @@
 
 \begin{document}
 
-\title[\muKV: Energy- and Thermal-Aware KV Eviction on a Phone]{\muKV: Energy- and Thermal-Aware KV-Cache Eviction for LLM Inference on a Phone}
+\title[Evicting Makes It Slower]{Evicting Makes It Slower: Three Properties a KV Cache Policy Needs on a Phone}
 
 \author{Md Romyull Islam}
 \affiliation{%
@@ -41,7 +41,11 @@
 \email{romyullislam2012@gmail.com}
 
 \begin{abstract}
-On a phone the KV cache, not compute, limits sustained LLM decode. The policies that bound it were built for server GPUs. Three properties of a real on-device engine break them. One cell array serves every head and layer, so a cell is freed only when every head and every layer drops it. SnapKV reports an 8.2 times smaller cache; on the phone GPU it retains 68\% of the cells at a matched budget and 94\% at its own. Reading attention scores forces the FlashAttention-off path, so on the phone GPU every score-reading evictor decodes at 0.12 to 0.20 times the full cache on Llama-3.2-1B. Compaction through the state API needs a second full context, and the OS kills Phi-3-mini at 16K. \muKV\ scores tokens inside the FlashAttention prefill graph through a small side node, selects one keep set for all heads and layers, and compacts in place. A reduce-only clock watchdog glides the CPU and GPU clocks down before the vendor acts, and on the CPU it keeps the vendor's throttle unreachable. A per-request scheduler picks the GPU clock plan and the answer cap from the battery state, and two loops correct it. On a OnePlus 15, \muKV\ decodes 4.8 times faster than the full cache on the CPU, at 7\% of the cells and 62\% less energy, and 1.23 times faster on the Adreno GPU. It ties the full cache on 392 retrieval cells and stays within 0.1 to 3.7 F1 on LongBench at 13\% of the cache. Through a real discharge from 91 to 11\%, its two lower tiers cut energy per request by 15\% and 43\%.
+On a phone the KV cache, not compute, limits sustained decode. We ran five published eviction policies on a OnePlus 15 inside \texttt{llama.cpp} at their own published budgets. None behaves as published. Their budgets do not materialize, because one cell array serves every head and layer: a per-head budget leaves 36 to 68\% of the cache live, against the 5 to 10 times reduction the papers report. Their scores cost the fast path, because reading post-softmax attention leaves the fused FlashAttention kernel. Every score-reading policy decodes at 0.12 to 0.20 times the full cache. On this phone, evicting is slower than not evicting.
+
+Three properties decide the outcome, and every published policy lacks one. Selection must be sequence-level, or no cell is freed. It must not read scores at decode, or the kernel is lost. It must be content-aware, or retrieval fails. StreamingLLM has the first two and answers 3 of 14 needles. The four per-head policies have the third and lose the other two.
+
+\muKV\ is the existence proof that one policy can hold all three. It computes real attention scores inside the FlashAttention prefill graph through a small side node, selects one keep set for every head and layer, and compacts in place. On the Adreno 840 it decodes at 1.19 times the full cache on 7.4\% of the cells. A corrected StreamingLLM ties that speed, which is our strongest evidence that the mechanism is real, but it needs three times the budget and loses the needles. \muKV\ ties the full cache across a 392-cell needle sweep and stays within 0.1 to 3.7 F1 on LongBench at 13\% of the cache. On the CPU it decodes 4.8 times faster than the full cache at 62\% less energy. We argue that on-device cache work should report realized cells, not selection ratios.
 \end{abstract}
 
 \keywords{Mobile LLM inference, KV cache eviction, FlashAttention, thermal management, energy-aware scheduling, on-device AI}
@@ -52,26 +56,25 @@ On a phone the KV cache, not compute, limits sustained LLM decode. The policies 
 \section{Introduction}
 \label{sec:intro}
 
-Small instruction-tuned models now run interactively on flagship phones. For a sustained generation the wall is the KV cache, not the matrix multiply. Every decode step reads the whole cache once per layer. Past a thousand tokens the step is bound by DRAM bandwidth. The DRAM heats, the vendor thermal engine cuts the clock, and the battery drains. Cache size sets traffic, traffic sets power, power sets temperature, temperature sets the throttle, and the throttle sets throughput. A mobile cache policy must therefore be judged on quality, throughput, heat and energy together, on real hardware.
+Small instruction-tuned models now run interactively on flagship phones. For a sustained generation the wall is the KV cache, not the matrix multiply. Every decode step reads the whole cache once per layer, so past a thousand tokens the step is bound by DRAM bandwidth. The DRAM heats, the vendor thermal engine cuts the clock, and the battery drains. Cache size sets traffic, traffic sets power, power sets temperature, temperature sets the throttle, and the throttle sets throughput.
 
-The policies that bound the cache were built for server GPUs and judged by perplexity alone: H2O~\cite{zhang2023h2o}, TOVA~\cite{oren2024tova}, SnapKV~\cite{li2024snapkv}, StreamingLLM~\cite{xiao2024streamingllm} and Ada-KV~\cite{feng2025adakv}. We ran each in its published configuration on a OnePlus 15 inside \texttt{llama.cpp}. Three properties of the engine broke them.
+Five policies bound that cache in the literature: H2O~\cite{zhang2023h2o}, TOVA~\cite{oren2024tova}, SnapKV~\cite{li2024snapkv}, StreamingLLM~\cite{xiao2024streamingllm} and Ada-KV~\cite{feng2025adakv}. All were built for server GPUs and judged by perplexity alone. We ran each in its own published configuration on a OnePlus 15 inside \texttt{llama.cpp}, across four models, measuring quality, throughput, heat and energy together. None behaves the way its paper reports. Two engine properties explain it, and neither is visible from a server.
 
 \begin{itemize}[leftmargin=*, itemsep=1pt]
-\item \textbf{Budgets do not materialize.} The engine keeps one cell array shared by every head and layer. A cell is freed only when every head and every layer drops it. SnapKV selects per head and reports an 8.2 times smaller cache at 16K inputs~\cite{li2024snapkv}. At a matched budget of 1024 per head on the phone GPU it keeps 68\% of the cells on Llama-3.2-1B and 97\% on Phi-3-mini. At its own budget of 2048 per head it keeps 94\%. H2O reports a 5 to 10 times smaller cache at a 20\% budget~\cite{zhang2023h2o}; at that budget here it keeps 92 to 100\%.
-\item \textbf{Scores cost the fast path.} A policy that reads post-softmax attention cannot use the fused FlashAttention kernel. On Llama-3.2-1B every score-reading evictor decodes at 0.12 to 0.20 times the full cache on the phone GPU, so evicting makes it slower.
-\item \textbf{Compaction doubles memory.} The state API restores survivors into a second context. Phi-3-mini at 16K needs two 6.4\,GB caches plus 2.4\,GB of weights, and the OS kills it. The same call fails on a 24\,GB desktop GPU.
+\item \textbf{Budgets do not materialize.} One cell array serves every head and layer, so a cell is freed only when every head and every layer drops it. SnapKV reports an 8.2 times smaller cache at 16K inputs~\cite{li2024snapkv}; at its own budget on the phone it keeps 94\% of the cells. H2O reports 5 to 10 times at a 20\% budget~\cite{zhang2023h2o}; at that budget it keeps 92\%. Across the four per-head policies, 36 to 68\% of the cache stays live at a nominal 1024.
+\item \textbf{Scores cost the fast path.} A policy that reads post-softmax attention cannot use the fused FlashAttention kernel~\cite{dao2022flashattention}. Every score-reading policy decodes at 0.12 to 0.20 times the full cache on the phone GPU. Evicting is slower than not evicting.
 \end{itemize}
 
-\muKV\ is an evictor designed around these facts, with the two controllers a phone needs beside it (Figure~\ref{fig:architecture}). It computes selection scores inside the FlashAttention prefill graph through a small side node. It selects one keep set of $K$ cells for all heads and layers, so eviction frees cells. It compacts in place: survivors slide into a dense prefix inside the tensors prefill already allocated. A reduce-only watchdog steps the CPU and GPU clocks down along temperature ladders anchored at the measured vendor triggers. A per-request scheduler picks the GPU clock plan and the answer cap from the battery state. It predicts the request's cost from a measured table, and two loops correct its lever when time or energy misses.
+Those two properties, with retrieval quality, give three requirements. Selection must be sequence-level, or no cell is freed. It must not read scores at decode, or the kernel is lost. It must be content-aware, or retrieval fails. Every published policy fails one of them. StreamingLLM meets the first two and answers 3 of 14 needles. The four per-head policies meet the third and fail the other two.
 
-We evaluate on a OnePlus 15 (Snapdragon 8 Elite Gen 5, Adreno 840) with four models and eight policies, on quality, throughput, heat and energy at once. This paper makes five contributions.
+\muKV\ is the existence proof that one policy can hold all three at once (Figure~\ref{fig:architecture}). It computes real attention scores inside the FlashAttention prefill graph through a small side node, so content awareness costs 1.9\% of prefill and no decode bandwidth. It selects one keep set of $K$ cells for every head and layer, so eviction frees cells. It compacts in place, so survivors slide into a dense prefix inside the tensors prefill already allocated. This paper makes five contributions.
 
 \begin{enumerate}[label=(\roman*), leftmargin=*, itemsep=1pt]
-\item The realizability gap: nominal per-head budgets do not compact on a sequence-level engine, measured for five policies on four models (\S\ref{sec:eval}).
-\item In-graph scoring, one keep set and in-place compaction, which keep an attention-driven evictor on the FlashAttention path and make an infeasible configuration run (\S\ref{sec:design}).
-\item A thermal watchdog with CPU and GPU ladders anchored at the measured vendor trigger, and the negative result that cache size does not cap peak temperature (\S\ref{sec:design}, \S\ref{sec:eval}).
-\item An energy-aware scheduler with one lever and two loops, measured through a real battery discharge and under provoked disturbances (\S\ref{sec:eval}).
-\item A multi-axis on-device evaluation with every baseline in its own published configuration (\S\ref{sec:eval}).
+\item A measurement no server study can produce: five published policies at their own budgets, on a phone, on quality, throughput, heat and energy at once (\S\ref{sec:eval}).
+\item The mechanism behind the gap, with controls that isolate each property: disabling compaction, and forcing a policy off the fused kernel (\S\ref{sec:eval}).
+\item \muKV, and the finding that a corrected StreamingLLM, which we did not author, reaches the same throughput and so confirms the mechanism is not ours (\S\ref{sec:design}, \S\ref{sec:eval}).
+\item Evidence that the gap follows from how KV memory is laid out on devices, not from one engine (\S\ref{sec:eval}).
+\item An evaluation practice for on-device cache work: report realized cells, not selection ratios (\S\ref{sec:conclusion}).
 \end{enumerate}
 
 \section{Background}
@@ -79,12 +82,12 @@ We evaluate on a OnePlus 15 (Snapdragon 8 Elite Gen 5, Adreno 840) with four mod
 
 H2O~\cite{zhang2023h2o} keeps heavy hitters by accumulated attention plus recent tokens and reports a 5 to 10 times smaller cache at a 20\% budget. TOVA~\cite{oren2024tova} drops the least-attended position per layer every step and reports full quality at one eighth of the cache. SnapKV~\cite{li2024snapkv} freezes a per-head top-$K$ at the end of prefill and reports an 8.2 times smaller cache at 16K inputs. StreamingLLM~\cite{xiao2024streamingllm} keeps 4 sinks and a sliding window with no scores and states that it adds no long-term memory. Ada-KV~\cite{feng2025adakv} allocates one layer budget across heads and needs FlashAttention-2's variable-length kernel~\cite{dao2023flashattention2} plus a custom CUDA kernel, both absent on the mobile stack. FlashAttention~\cite{dao2022flashattention} fuses softmax into the kernel and never writes the attention tensor, so a policy that reads scores is locked to the slow path. \texttt{llama.cpp}~\cite{llamacpp}, like every on-device engine we know of, stores the cache as one array of position-indexed cells shared across heads and layers. It removes cells by position and compacts through a state API that restores into a second context. Neither fact is visible on a server with per-head paged storage.
 
-On the control side, zTT~\cite{kim2021ztt} and FUSE~\cite{liu2022fuse} govern frequency from temperature or phase, with no cache or battery signal. The vendor engine on our SoC deep-throttles the prime cores to 883\,MHz the moment the battery reaches 50\C\ and caps the GPU at 726\,MHz when DDR passes 64\C. No shipped phone changes an LLM's clock, context or answer length by battery state. EnerInfer~\cite{zou2026enerinfer}, the closest research system, excludes battery level by design. Kim, Imes and Hoffmann~\cite{kim2015racepace} prove that an energy-optimal schedule under a deadline uses at most two configurations. JouleGuard~\cite{hoffmann2015jouleguard} couples two loops through model error. \muKV's scheduler applies both.
+On the control side, zTT~\cite{kim2021ztt} and FUSE~\cite{liu2022fuse} govern frequency from temperature or phase, with no cache signal. The vendor engine on our SoC deep-throttles the prime cores to 883\,MHz the moment the battery reaches 50\C, and caps the GPU at 726\,MHz when DDR passes 64\C. Both are single cliffs. \muKV's watchdog descends a ladder anchored above each cliff, so the vendor step is never reached (Figure~\ref{fig:architecture}).
 
 \begin{figure*}[tp]
 \centering
-\includegraphics[width=0.96\textwidth]{fig_architecture_tikz.pdf}
-\caption{\muKV\ on the phone. Top: the inference pass, with scoring, selection and compaction (1 to 3) as the only changes. Bottom: the thermal, energy and learning columns of the control plane (4 to 9).}
+\includegraphics[width=0.96\textwidth]{fig_architecture_6pg.pdf}
+\caption{\muKV\ on the phone. Top: the inference pass, where scoring, selection and compaction (1 to 3) are the only changes. Bottom: the watchdog, which lowers each clock cap one step at a time along a ladder anchored above the vendor cliff.}
 \label{fig:architecture}
 \end{figure*}
 
@@ -98,10 +101,6 @@ On the control side, zTT~\cite{kim2021ztt} and FUSE~\cite{liu2022fuse} govern fr
 \paragraph{In-place compaction and decode.} Compaction through the state API doubles peak cache memory at the instant of restore. Phi-3-mini at 16K needs $2\times6144$\,MiB plus 2.4\,GB of weights, and Android killed the process and six co-resident apps, twice. \texttt{endurkv\_compact\_seq()} instead slides survivors into a dense prefix in bounded chunks inside the tensors prefill already allocated. Peak memory does not rise, the configuration runs at 878 cells, and the two modes produce identical keep sets (perplexities agree to 0.15\% across four model families). Decode runs over the $K$-cell cache with the fused kernel. The keep set stays frozen while the recent window slides. A re-eviction fires when the cache's position span passes 1.25 times the prompt plus the window; on a 4096-token decode it fires once, and the decode-mean live cache is 1980.
 
 \paragraph{Reduce-only clock watchdog.} A daemon samples skin, battery, DDR and CPU temperature at 2\,Hz and lowers a clock cap one step at a time, never raising it. The ladders are anchored at the measured vendor triggers. Battery 47.0 to 49.5\C\ and skin 50.0 to 52.5\C\ map to CPU caps of 1497 down to 1017\,MHz, above the 883\,MHz cliff the vendor applies at 50\C. DDR 60, 62 and 63.5\C\ map to GPU caps of 1050, 967 and 902\,MHz, below the vendor's 726\,MHz trip at 64\C. The kernel applies the lower of the user cap and the vendor cap, so the ladders act earlier than the vendor and never later. On a cold phone they stay dormant.
-
-\paragraph{Energy-aware scheduling: one lever, two loops.} Once per request, in 0.3\,s, the scheduler reads the battery level, the charging state, the prompt length, and whether the caller fixed an answer length. A tier follows (mains or above 50\%, 21 to 50\%, 20\% or below) and sets a lever $L\in\{1,0.5,0\}$ plus a learned bias. $L$ fixes every rate the scheduler trades at. The exchange rate a step must beat is 1.5, 0.8 or 0.5\,J saved per second given up. A quality floor and a time slack follow it, and so does the answer cap when the length is open: 4096, 1024 or 512 tokens. A measured cost table predicts energy and time per plan. A plan is a GPU clock cap for prefill, one for decode and the cache budget. The walk down the ladder takes a step only if the predicted saving beats the exchange rate inside the time budget. After the request, if time ran more than 5\% over the budget the plan was chosen under, the performance loop moves the bias 0.1 toward performance. If energy ran more than 5\% over its prediction, the energy loop moves it 0.1 toward energy. When both are met the bias decays toward the tier default. The table learns by an exponential moving average clipped to 10\% per request. There is no online policy learning on the user's phone. A contextual bandit trained on 24 real requests chose the rule's plan in 13 of 15 free choices, at a cost of 15.7\,kJ and 149 minutes of phone time the rule does not pay.
-
-\paragraph{Backend and per-model costs.} The table holds CPU plans beside the GPU ones, and they lose on both axes, so the walk never picks the CPU while the GPU is usable. The CPU is the fallback: no Vulkan library, a caller that forces it, or a model that runs on the GPU and produces nothing usable. PrismML's 1-bit Bonsai-8B is the last case, since its Adreno kernels return non-finite logits while decoding at full speed. The scheduler grades each run's output, marks such a model, and re-runs on the CPU. There the clock is not a lever and the cache does not move, because $K{=}512$ falls below every tier's quality floor, so the answer cap carries the tiering alone. Costs are kept per model. Bonsai-8B on the CPU costs 5.1 times what the Llama-3.2-1B row predicts. One shared table would mispredict every fallback, and learning from it would corrupt the row that was right.
 
 \section{Evaluation}
 \label{sec:eval}
@@ -159,43 +158,49 @@ TOVA & 2048 & 3.9 & 1022 & 6060 & 56.0 & 1063 \\
 \begin{figure}[tb]
 \centering
 \includegraphics[width=\columnwidth]{fig_cache_trajectory.pdf}
-\caption{Live KV cells through prefill and decode on Llama-3.2-1B. Only \muKV\ compacts to its budget and stays bounded.}
+\caption{Live KV cells through prefill and decode on Llama-3.2-1B, phone CPU. Every policy builds the full prompt cache. Neither per-head evictor returns to its budget; \muKV\ compacts to 723 cells and its re-eviction holds the cache near 2K.}
 \label{fig:cache-trajectory}
 \end{figure}
 
-\paragraph{Sustained decode on the CPU.} Table~\ref{tab:cpu} runs a 9.7K-token prompt followed by 4096 generated tokens. Every policy builds the full prompt cache during prefill (Figure~\ref{fig:cache-trajectory}). \muKV\ then compacts to 721 cells, and its re-eviction keeps the cache bounded near 2K. SnapKV can only drop to 5.9K, and vanilla grows without bound. On Llama-3.2-1B the bounded cache buys 24.2 against 5.0\,tok/s, 2.6 times less wall time and 62\% less energy. Its DDR peak is 5\C\ below vanilla and level with TOVA's, at the same vendor-clamped 1.6\,GHz. SnapKV, Ada-KV, H2O and TOVA keep 3.5K to 6.1K cells live at a nominal 1024. On Llama-3.2-1B that is a 1.6 to 2.8 times reduction, and on Bonsai-8B 1.0 to 1.6, against the 5 to 10 times their papers report. At their own published budgets the gap widens. On the phone CPU, over the same prompts, SnapKV at 2048 per head keeps 94\% of the cache and H2O at 20\% of the prompt keeps 92\%. TOVA and Ada-KV at 2048 keep 77\% and 71\%. \muKV\ keeps 14\%. They pay the FA-off capture as well. They run at 5.8 to 6.8\,tok/s and 818 to 1094\,mWh against vanilla's 1033, a spread that straddles the full cache rather than beating it. StreamingLLM is the control: it compacts to 777 cells, fewer than \muKV, yet runs at 6.6\,tok/s because it stays on the FA-off path in this engine. Retention does not predict speed; the kernel path does. Quality is unchanged. Teacher-forced perplexity on a WikiText slice verified disjoint from the prompt gives 8.198 against 8.023 (vanilla against \muKV) on Llama-3.2-1B. It gives 3.983 against 3.938 on Phi-3-mini and 6.717 against 6.736 on Bonsai-8B. \muKV\ had evicted 92\% of the prompt cache. Weight compression shrinks the static term of per-token traffic; eviction shrinks the growing one. On 1-bit Bonsai-8B (lower block) \muKV\ gives 4.5 times the throughput, 60\% less energy and a DDR peak 9.7\C\ cooler, with no change to its parameters. The lower two blocks run the same text on Phi-3-mini and gemma-2-2b with every baseline at its published budget. There \muKV\ decodes 4.5 and 2.4 times faster than the full cache with 55\% and 40\% less energy, while the per-head and per-layer evictors keep 85 to 100\% of the cache, and StreamingLLM 27 to 31\%.
+\paragraph{Sustained decode on the CPU.} Table~\ref{tab:cpu} runs a 9.7K-token prompt followed by 4096 generated tokens. Every policy builds the full prompt cache during prefill (Figure~\ref{fig:cache-trajectory}). \muKV\ then compacts to 721 cells, and its re-eviction keeps the cache bounded near 2K. SnapKV can only drop to 5.9K, and vanilla grows without bound. On Llama-3.2-1B the bounded cache buys 24.2 against 5.0\,tok/s, 2.6 times less wall time and 62\% less energy. Its DDR peak is 5\C\ below vanilla and level with TOVA's, at the same vendor-clamped 1.6\,GHz. SnapKV, Ada-KV, H2O and TOVA keep 3.5K to 6.1K cells live at a nominal 1024. On Llama-3.2-1B that is a 1.6 to 2.8 times reduction, and on Bonsai-8B 1.0 to 1.6, against the 5 to 10 times their papers report. At their own published budgets the gap widens. On the phone CPU, over the same prompts, SnapKV at 2048 per head keeps 94\% of the cache and H2O at 20\% of the prompt keeps 92\%. TOVA and Ada-KV at 2048 keep 77\% and 71\%. \muKV\ keeps 14\%. They pay the FA-off capture as well. They run at 5.8 to 6.8\,tok/s and 818 to 1094\,mWh against vanilla's 1033, a spread that straddles the full cache rather than beating it. StreamingLLM is the control for retention: it compacts to 777 cells, fewer than \muKV, yet runs at 6.6\,tok/s. Retention does not predict speed. The kernel path does. One caveat is ours. This campaign ran StreamingLLM without the fused-kernel flag, and on the GPU, where we re-ran it correctly, it reaches parity with \muKV\ (Table~\ref{tab:gpu}). The CPU row understates it. Quality is unchanged. Teacher-forced perplexity on a WikiText slice verified disjoint from the prompt gives 8.198 against 8.023 (vanilla against \muKV) on Llama-3.2-1B. It gives 3.983 against 3.938 on Phi-3-mini and 6.717 against 6.736 on Bonsai-8B. \muKV\ had evicted 92\% of the prompt cache. Weight compression shrinks the static term of per-token traffic; eviction shrinks the growing one. On 1-bit Bonsai-8B (lower block) \muKV\ gives 4.5 times the throughput, 60\% less energy and a DDR peak 9.7\C\ cooler, with no change to its parameters. The lower two blocks run the same text on Phi-3-mini and gemma-2-2b with every baseline at its published budget. There \muKV\ decodes 4.5 and 2.4 times faster than the full cache with 55\% and 40\% less energy, while the per-head and per-layer evictors keep 85 to 100\% of the cache, and StreamingLLM 27 to 31\%.
 
 \begin{table}[tb]
-\caption{Adreno 840, 4096 generated tokens, f16 KV for every policy, cold start, median where $n>1$. Prompt: 9737 tokens for Llama, 11157 for Phi-3. Phi-3 rows use the current build.}
+\caption{Adreno 840, Llama-3.2-1B, ctx 16384, 9737-token prompt, 4096 generated, f16 KV, cooled per cell, median where $n>1$. Rows group by how a policy selects. The $n{=}3$ rows are one interleaved pinned campaign; the $n{=}1$ rows are the matched-budget campaign, whose own vanilla agrees within 0.5\%.}
 \label{tab:gpu}
 \centering\footnotesize
-\setlength{\tabcolsep}{3.5pt}
+\setlength{\tabcolsep}{3.2pt}
 \begin{tabular}{l r r r r r}
 \toprule
-\textbf{Policy} & \textbf{$n$} & \textbf{Prefill (s)} & \textbf{tok/s} & \textbf{dec\,$\times$} & \textbf{Cells} \\
+\textbf{Policy} & \textbf{$n$} & \textbf{tok/s} & \textbf{dec\,$\times$} & \textbf{Cells} & \textbf{\% cache} \\
 \midrule
-\multicolumn{6}{l}{\emph{Llama-3.2-1B, ctx 16384}} \\
-vanilla (full cache) & 3 & 131 & 24.18 & 1.00 & 9741 \\
-\textbf{\muKV}       & 3 & 138 & \good{29.77} & \good{1.23} & 723 \\
-\muKV, no compaction & 3 & 132 & 25.61 & 1.06 & 723 \\
-SnapKV               & 1 & 229 & 4.76 & 0.20 & 6592 \\
-Ada-KV               & 1 & 276 & 2.86 & 0.12 & 3519 \\
-TOVA                 & 1 & 176 & 4.34 & 0.18 & 4125 \\
-H2O                  & 1 & 279 & 3.58 & 0.15 & 6110 \\
-StreamingLLM         & 1 & 176 & 5.55 & 0.23 & 777 \\
+vanilla (no eviction) & 3 & 24.30 & 1.00 & 9741 & 100 \\
 \midrule
-\multicolumn{6}{l}{\emph{Phi-3-mini, ctx 16384}} \\
-vanilla (full cache)     & 1 & 471 & 5.05 & 1.00 & 11157 \\
-\textbf{\muKV}, in place & 1 & 586 & \good{13.36} & \good{2.64} & 878 \\
-StreamingLLM, own budget & 1 & 445 & 10.60 & 2.10 & 2000 \\
-Ada-KV, gate promoted    & 1 & 572 & 9.13 & 1.81 & 4326 \\
-SnapKV, gate promoted    & 1 & 532 & 5.80 & 1.15 & 10862 \\
-H2O, TOVA & \multicolumn{5}{c}{\emph{refused by the gate; their CPU rows stand}} \\
+\multicolumn{6}{l}{\emph{Sequence-level: the budget frees cells, the kernel survives}} \\
+\textbf{\muKV}, $K{=}1024$ & 3 & \good{29.02} & \good{1.19} & \good{723} & \good{7.4} \\
+StreamingLLM, own budget & 3 & 29.03 & 1.19 & 2005 & 20.6 \\
+\midrule
+\multicolumn{6}{l}{\emph{Per-head: the budget frees nothing, the kernel is lost}} \\
+SnapKV & 1 & 4.76 & \bad{0.20} & 6592 & \bad{67.7} \\
+H2O    & 1 & 3.58 & \bad{0.15} & 6110 & \bad{62.7} \\
+TOVA   & 1 & 4.34 & \bad{0.18} & 4125 & \bad{42.4} \\
+Ada-KV & 1 & 2.86 & \bad{0.12} & 3519 & \bad{36.1} \\
+\midrule
+\multicolumn{6}{l}{\emph{Controls that isolate one property each}} \\
+\muKV, compaction off & 3 & 25.61 & 1.05 & 723 & 7.4 \\
+StreamingLLM, forced off the kernel & 3 & 5.81 & 0.24 & 777 & 8.0 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\paragraph{Mobile GPU.} Table~\ref{tab:gpu} runs the same workload on the Adreno 840. The CPU path's state-swap and state-API defrag are not viable here: the swap serializes hundreds of megabytes through host memory, and the Vulkan backend stores FA-off and FA-on caches in different layouts. In-graph scoring removes both needs. Prefill costs 5\% more than vanilla on Llama-3.2-1B, and 24\% more on Phi-3-mini, where the side node sees a wider model. \muKV\ decodes at 1.23 times the full cache at 7.4\% of the cells; without compaction the cache stays physically sparse and the gain falls to 1.06. On Llama-3.2-1B every per-head evictor runs at 0.12 to 0.23 times the full cache with 3.5K to 6.6K cells live. On Phi-3-mini the round trip is killed at 16K, while in-place compaction runs there and reaches 2.64 times the full cache on 7.9\% of the cells. Phi-3 also needs a driver gate: the FlashAttention-off capture is numerically broken at head dimension 96, and uncorrected runs decode at full speed while emitting 18 to 44\% corrupted tokens. The gate promotes SnapKV and Ada-KV to the in-graph side node and refuses H2O and TOVA. The two promoted evictors then reach 1.15 and 1.81 times the full cache while holding 97\% and 39\% of it. Quantized KV is numerically invalid on this driver, so every GPU row is f16.
+\paragraph{Mobile GPU.} Table~\ref{tab:gpu} groups the Adreno results by how each policy selects, because that is what predicts the outcome. Sequence-level policies free cells and keep the fused kernel. \muKV\ decodes at 1.19 times the full cache on 7.4\% of the cells. StreamingLLM at its own documented budget of 4 sinks plus a 2000-token window reaches the same 1.19 on 20.6\%. StreamingLLM is not our design, and it is the strongest evidence we have that the mechanism is real rather than an artifact of our policy. Per-head policies do the opposite. At a nominal budget of 1024 they hold 36 to 68\% of the cache and decode at 0.12 to 0.20 times the full cache, so on this phone evicting is slower than not evicting.
+
+Two controls separate the two properties. Disabling compaction in \muKV\ leaves the same 723 selected cells but drops 1.19 to 1.05, so the throughput comes from compaction, not from selection. Forcing StreamingLLM off the fused kernel leaves its 777 cells but drops it to 0.24, so the kernel path and not the retention ratio sets the speed. That forced configuration is how our own first harness ran StreamingLLM, and it was wrong: the reference implementation concatenates survivors, so compaction is intrinsic to the policy. We report both cells rather than only the corrected one.
+
+Speed is therefore not what separates \muKV\ from StreamingLLM. What they keep is. StreamingLLM needs 2005 cells to \muKV's 723 for the same throughput, and it answers 3 of 14 needles against \muKV's 13 (Table~\ref{tab:quality}), because a blind recent window discards the middle of the prompt. Scoring inside the prefill graph buys content awareness at 1.9\% of prefill time.
+
+Phi-3-mini shows the engine's limits. The state-API round trip needs a second full context and the OS kills it at 16K, while in-place compaction runs there and reaches 2.64 times the full cache on 7.9\% of the cells. Phi-3 also needs a driver gate: the FlashAttention-off capture is numerically broken at head dimension 96, and uncorrected runs decode at full speed while emitting 18 to 44\% corrupted tokens. The gate promotes SnapKV and Ada-KV to the in-graph side node and refuses H2O and TOVA. The two promoted evictors then reach 1.15 and 1.81 times the full cache while holding 97\% and 39\% of it, so the gap survives the correction. Quantized KV is numerically invalid on this driver, so every GPU row is f16.
+
+\paragraph{Is this one engine?} The coupling lives in the memory layout, not in our code. \texttt{llama.cpp} holds one contiguous cell array per layer. Paged engines are no different where it matters: a vLLM block has shape [blocks, kv heads, head size, block size]~\cite{kwon2023vllm}, so one block carries every head for a span of positions and is returned only when all of them are finished with it. MLC-LLM~\cite{mlcllm} pages the same way, and ExecuTorch and the vendor SDKs use static position-indexed tensors. In each of them a per-head budget frees memory only where every head agrees. KV-Compress~\cite{rehg2024kvcompress} reports the same limitation independently, stating that per-head eviction ``adds fragmentation and cannot realize the theoretical compression rates in physical memory,'' and fixes it on the server by paging per head inside PagedAttention. That fix needs a per-head block table and a custom kernel. A phone runtime has neither, and a mobile GPU driver makes both expensive, which is the point: the gap is a property of how KV memory is laid out on devices.
 
 \begin{table}[tb]
 \caption{Quality, both benchmarks on the phone. Needle: hits out of 14 depths per model, and the mean live cache after prefill. LongBench: Llama-3.2-1B, 103 prompts, each policy at its own budget.}
@@ -219,13 +224,6 @@ StreamingLLM & \bad{3} & \bad{3} & \bad{2} & \bad{3} & 890 & 35.0 & 33\% \\
 \end{tabular}
 \end{table}
 
-\begin{figure*}[tp]
-\centering
-\includegraphics[width=0.96\textwidth]{fig_loop_proof.pdf}
-\caption{The two loops provoked on the phone: the lever and plan of thirteen cooled requests (top), and their metered time and energy against budget (bottom). Dark bars are misses.}
-\label{fig:loop-proof}
-\end{figure*}
-
 \paragraph{Retrieval and long-context quality.} A fact is buried at one of seven depths in 4K or 8K tokens of filler. The 392 cells cover seven policies, four models, seven depths and two contexts (Table~\ref{tab:quality}, left). \muKV\ matches the full cache on every model while attending to 774 cells, against 3361 to 4237 for the score-reading evictors, which is 69 to 87\% of the full cache. StreamingLLM fails retrieval everywhere; its window evicts exactly the middle of the context. Where every policy misses a depth, on Gemma-2B and Llama-1B at 8K, the full cache misses it too. This workload generates 64 tokens, so it is prefill-dominated and says nothing useful about speed or energy; those are the 4096-token workload of Table~\ref{tab:cpu}. LongBench (Table~\ref{tab:quality}, right) runs on the phone CPU with Llama-3.2-1B, on 103 prompts, each policy at its own published budget. \muKV\ scores 37.0 against the full cache's 36.9 while holding 14\% of the cache. SnapKV, Ada-KV and TOVA gain 0.6 to 1.1 F1 while holding 71 to 94\%, and StreamingLLM loses 1.9 at 33\%. What separates the policies is the cache each one frees, not the budget it asks for. A four-model, five-task sweep on a desktop GPU gives the same ordering at 12 to 13\% of the cache. There \muKV\ lands within 0.1 F1 of the full cache on Llama-3.2-1B and Phi-3-mini, and 2.8 and 3.7 below it on gemma-2-2b and Bonsai-8B.
 
 \begin{figure}[tb]
@@ -235,37 +233,7 @@ StreamingLLM & \bad{3} & \bad{3} & \bad{2} & \bad{3} & 890 & 35.0 & 33\% \\
 \label{fig:bonsai-thermal}
 \end{figure}
 
-\begin{figure}[tb]
-\centering
-\includegraphics[width=\columnwidth]{fig_discharge_timeline_col.pdf}
-\caption{The scheduler through a real discharge: energy and time per request against the battery level it read, with tier bands, the plan chosen and the answer cap. Hatched: cable in.}
-\label{fig:discharge}
-\end{figure}
-
 \paragraph{Sustained heat and the watchdog.} Figure~\ref{fig:bonsai-thermal} shows the workload that reaches the cliff. The full cache on Bonsai-8B runs 85.6 minutes and drives the battery to 50.2\C. At 50\C\ the vendor deep-throttles both clusters, the prime cores to 883\,MHz, in a sawtooth of 17 dips that spends 923\,s at 883\,MHz in total. \muKV\ finishes in 33.2 minutes at a 44.2\C\ battery peak, before the trigger. The watchdog belongs to \muKV\ and is never given to a baseline; the full-cache trace with it is an ablation, since \muKV\ finishes before the cliff. Given it, the full cache's battery rise flattens from 0.48 to 0.05\C/min and settles at 49.1\C. The prime cores never reach 883\,MHz. This decode is bandwidth-bound, so the throttle costs no speed (1.0\,tok/s either way): the watchdog buys sustainability, and \muKV\ buys speed. On the GPU, three cooled cells per arm of the 4096-token request give 1289 against 1390\,J and a DDR peak of 75 against 90\C\ for 1\% more time. We also tied the cache budget itself to DDR temperature, a four-tier ladder over $K\in\{256,\dots,1024\}$. The result is negative. Halving $K$ under co-load left peak DDR unchanged, and on a cool phone a smaller cache runs hotter at peak, because the saved bandwidth converts to speed and power. Cache size controls throughput, time and energy; the clock caps heat.
-
-\begin{table}[tb]
-\caption{The plan at each battery tier and its cost on the cable ($n{=}2$ cooled cells) and on the battery ($n{=}15$, 21 and 10 of the 123 discharge requests). Llama-3.2-1B, 9737-token prompt, GPU.}
-\label{tab:energy-aware}
-\centering\footnotesize
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{l l r r r r}
-\toprule
-\textbf{Battery} & \textbf{GPU plan} & \textbf{Cap} & \textbf{Cable J} & \textbf{Batt. J} & \textbf{Batt. s} \\
-\midrule
-mains or above 50\% & 1200, decode 902 & 4096 & 1336 & 885 & 280 \\
-21 to 50\%          & 1200, decode 726 & 1024 & 577  & 748 & 210 \\
-20\% or below       & 902              & 512  & 500  & 506 & 177 \\
-GPU unavailable     & CPU, $K{=}1024$  & tier & 822  & \no & \no \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-
-
-\paragraph{Energy-aware scheduling.} Every number here is from the GPU with Llama-3.2-1B and a 9737-token prompt, cooled per cell. The GPU clock cap trades prefill energy for time. From 1200 to 902\,MHz a 4096-token request falls from 1428 to 1154\,J and rises from 221 to 263\,s. The next step to 726\,MHz buys 3\% more energy for 21\% more time, so it is never taken. Decode barely feels the cap, so the split plan, prefill at 1200 and decode at 902, saves 6\% of the request for 1.5\% of time. The CPU clock is not an energy lever: energy per token is flat within 7\% from 883 to 1632\,MHz. Below $K{=}1024$ the cache saves 3 to 4\% while the worst task loses 37 to 42\% of its score. Output length is linear at 0.17 to 0.21\,J per token, which makes the answer cap the largest lever when the length is open. Thirteen cooled requests with real disturbances then exercised the loops (Figure~\ref{fig:loop-proof}). Four idle cores spinning through a mid-tier request pushed its energy 30\% over budget; the energy loop took the lever down twice, and two clean requests decayed it back. An external 726\,MHz cap 12\,s into three low-tier requests, which is what the vendor limiter does, put them 10 to 12\% over their time budget. The performance loop took the lever up to its clamp. The energy loop returned it once the cap was gone.
-
-A loop resident on the phone then ran 123 requests through the scheduler from 91 to 11\%, with charging disabled and no forced state (Figure~\ref{fig:discharge}, Table~\ref{tab:energy-aware}). The scheduler switched on the first request past each threshold. On the battery the tiers cost 885, 748 and 506\,J per request in 280, 210 and 177\,s: 15\% and 43\% less energy than the healthy tier, with time falling 25\% and 37\%. On the battery the phone is a different machine from the phone on the cable. The same healthy request costs 885\,J instead of 1336, because the OEM runs the GPU cooler when unplugged and caps prefill at 726\,MHz within a minute. There the answer cap and the prefill cap carry the saving. A table seeded on the cable mispredicts the battery regime, and the clipped learning tracked it. The mean prediction error over the run was 8.9\% on the battery against 3.7\% on the cable. PowerBench~\cite{cai2026powerbench} and the FUSE study of governors under LLM inference~\cite{zhang2025fusellm} agree with our per-token costs and with the finding that a profiled static setting matches learned governors.
 
 \paragraph{Scope.} All measurements are on one OnePlus 15. The ladder thresholds are device-specific; the calibration protocol generalizes. Energy is total-device energy from the rail and the coulomb counter, so absolute joules hold within about 10\% while orderings hold. Eviction still costs verbatim recall of the spans it drops, even though prediction and retrieval are preserved. The 1-bit kernels return non-finite logits on Adreno, so Bonsai's phone results are CPU results.
 
@@ -277,7 +245,11 @@ Per-head budget allocation is Ada-KV's idea~\cite{feng2025adakv}; we credit it a
 \section{Conclusion}
 \label{sec:conclusion}
 
-\muKV\ makes attention-driven KV eviction work on a phone by respecting the engine. Scores come from inside the FlashAttention graph. One keep set is what the shared cell array can free. Compaction never needs a second context. A reduce-only clock watchdog holds the CPU below the vendor's throttle, and a per-request scheduler with one lever and two loops spends the battery according to its level. On a OnePlus 15 the result is 4.8 times the full cache's decode throughput on the CPU, at 7\% of the cells and 62\% less energy, and 1.23 times on the GPU. Retrieval matches the full cache and LongBench nearly does. A real discharge's lower tiers cost 15\% and 43\% less per request. The cache is the phone's efficiency actuator and the clock its temperature actuator. Every per-head budget that looks good on a server is a full cache in disguise on the device.
+\muKV\ makes attention-driven KV eviction work on a phone by respecting the engine. Scores come from inside the FlashAttention graph. One keep set is what the shared cell array can free. Compaction never needs a second context. On a OnePlus 15 the result is 4.8 times the full cache's decode throughput on the CPU, at 7\% of the cells and 62\% less energy, and 1.19 times on the GPU. Retrieval matches the full cache and LongBench nearly does. The cache is the phone's efficiency actuator and the clock its temperature actuator.
+
+The finding we would most like the community to take is smaller than our system. A per-head budget that looks good on a server is a full cache in disguise on the device. Selection ratios are not compression, and a paper that reports only the ratio has not shown that anything was freed. On-device work should report cells that the allocator actually reclaimed, on the engine that will ship, and should say which kernel the policy leaves behind. Our own harness failed that test on StreamingLLM before we caught it.
+
+\paragraph{Open problems.} Three follow directly. First, eviction is destructive: \muKV\ cannot recall a span it dropped. The scores it already computes are a placement signal, so the natural next step is a third tier between keeping and discarding, parking mid-scored cells in NAND and reloading on demand. Reload cost is not the obstacle at 23\,MB for 721 cells; the obstacle is that no mobile engine can shrink and regrow its KV pool, so parking frees nothing today. Second, nobody has measured what that parking costs in flash write energy and wear, which is the number that decides whether the tier is worth having on a battery. Third, the ladders here are calibrated to one SoC. What generalizes is the protocol of anchoring a ladder above a measured vendor trigger, not the thresholds.
 
 \begin{thebibliography}{99}
 \small
@@ -297,6 +269,8 @@ Per-head budget allocation is Ada-KV's idea~\cite{feng2025adakv}; we credit it a
 \bibitem{llamacpp} G. Gerganov. ``llama.cpp.'' \url{https://github.com/ggerganov/llama.cpp}.
 \bibitem{kim2025kvzip} J.-H. Kim et al. ``KVzip: Query-Agnostic KV Cache Compression with Context Reconstruction.'' NeurIPS, 2025.
 \bibitem{liu2025percache} K. Liu et al. ``PerCache: Predictive Hierarchical Cache for RAG Applications on Mobile Devices.'' arXiv:2601.11553, 2025.
+\bibitem{rehg2024kvcompress} I. Rehg. ``KV-Compress: Paged KV-Cache Compression with Variable Compression Rates per Attention Head.'' arXiv:2410.00161, 2024.
+\bibitem{kwon2023vllm} W. Kwon et al. ``Efficient Memory Management for Large Language Model Serving with PagedAttention.'' SOSP, 2023.
 \bibitem{mlcllm} MLC Team. ``MLC-LLM: Universal LLM Deployment.'' \url{https://github.com/mlc-ai/mlc-llm}.
 \bibitem{kim2021ztt} S. Kim et al. ``zTT: Learning-Based DVFS with Zero Thermal Throttling for Mobile Devices.'' MobiSys, 2021.
 \bibitem{liu2022fuse} S. Liu et al. ``FUSE: Fine-Grained Power Management for Mobile Devices.'' SenSys, 2022.
