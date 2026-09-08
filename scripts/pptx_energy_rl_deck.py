@@ -82,10 +82,15 @@ text(s,6.8,6.0,5.9,0.9,"Every output token costs 0.17 to 0.21 J on top of a fixe
 foot(s,"fig_energy_curves.py, panels (a) and (c). n=3 at 4096 tokens, n=5 to 11 at 1024.")
 
 # 4 GPU or CPU
-s,k=slide(); header(s,"GPU OR CPU?","The GPU whenever it exists; the CPU is the fallback",k)
-table(s,0.6,1.8,7.4,2.6,[["plan, 9737-token prompt + 1024 tokens","energy","time"],["GPU 1200 MHz","782 J","142 s"],["GPU 902 MHz","589 J","181 s"],["GPU 726 MHz","571 J","219 s"],["CPU, K = 1024","822 J","304 s"]],colw=[4.0,1.7,1.7],size=15,hl=[4])
-bullets(s,8.4,1.8,4.5,4.5,["The cost table holds CPU plans too. They lose to every GPU plan on both energy and time, so the walk never picks them.","The scheduler uses the CPU only when the GPU is unavailable: no Vulkan library, or the caller forced CPU.","A hot phone (battery ≥ 40 °C or DDR ≥ 60 °C) does not switch to the CPU. It removes the 1200 MHz plan without a decode cap.","The CPU clock is never an energy decision. It belongs to the thermal watchdog."],15)
-foot(s,"Predicted from the measured cost table (ukv_sched_table, per-token costs) for this request; GPU_OK and HOT rules in ukv_sched.sh.")
+s,k=slide(); header(s,"GPU OR CPU?","The GPU whenever it works; the CPU is the fallback",k)
+table(s,0.6,1.8,6.9,2.3,[["plan, 9737-token prompt + 1024 tokens","energy","time"],["GPU 1200 MHz","782 J","142 s"],["GPU 902 MHz","589 J","181 s"],["GPU 726 MHz","571 J","219 s"],["CPU, K = 1024","822 J","304 s"]],colw=[3.6,1.7,1.6],size=14,hl=[4])
+text(s,0.6,4.3,6.9,0.8,"CPU plans lose on both axes, so the ladder walk never reaches them while the GPU works.",15,BODY)
+box(s,7.8,1.8,5.0,1.0,"1  No Vulkan library, or the caller forced CPU",tsize=14,anchor=MSO_ANCHOR.MIDDLE)
+box(s,7.8,3.0,5.0,1.5,"2  The GPU runs it but the output is garbage","PrismML's 1-bit Bonsai-8B: non-finite logits on Adreno, decoded at full speed",fill=RUSTF,line=RUST,tsize=14,ssize=12)
+text(s,7.8,4.7,5.0,0.5,"Every run is graded. A model that fails is marked, and the request re-runs on the CPU.",14,BODY)
+box(s,7.8,5.4,5.0,1.1,"On the CPU one lever is left","the clock saves nothing, K cannot drop below 1024, so the answer cap tiers alone",fill=GREENF,line=GREEN,tsize=14,ssize=12)
+table(s,0.6,5.3,6.9,1.2,[["Bonsai-8B on the CPU","cap 4096","cap 1024","cap 512"],["measured per-token costs","7853 J","5310 J, -32%","4886 J, -38%"]],colw=[2.7,1.4,1.4,1.4],size=13)
+foot(s,"GPU and CPU plan costs predicted from the measured cost table. Bonsai figures from its own per-token costs, /tmp/nat_bonsai. Backend rules in ukv_sched.sh v2.5.")
 
 # 4b the whole system: the final architecture figure
 s,k=slide(); header(s,"THE WHOLE SYSTEM","Where the scheduler sits: below an unchanged inference pass",k)
