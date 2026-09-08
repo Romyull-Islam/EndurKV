@@ -279,26 +279,26 @@ Table~\ref{tab:gpu} runs the same workload on the Adreno 840 under native GPU DV
 \label{sec:eval-quality}
 
 \begin{table}[tb]
-\caption{Needle retrieval on the phone, 392 cells: hits out of 14 depths (7 at 4K and 7 at 8K) per model, and mean USB-rail energy per cell over all models.}
+\caption{Needle retrieval on the phone, 392 cells: hits out of 14 depths, 7 at 4K and 7 at 8K, per model. Cells attended: mean live cache after prefill, over all 56 cells of a policy. A quality axis only.}
 \label{tab:niah}
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
-\begin{tabular}{l c c c c r}
+\begin{tabular}{l c c c c c}
 \toprule
-\textbf{Policy} & \textbf{Phi-3} & \textbf{Llama-1B} & \textbf{Gemma-2B} & \textbf{Bonsai-8B} & \textbf{mWh} \\
+\textbf{Policy} & \textbf{Phi-3} & \textbf{Llama-1B} & \textbf{Gemma-2B} & \textbf{Bonsai-8B} & \textbf{Cells attended} \\
 \midrule
-vanilla (full cache) & 14 & 13 & 11 & 14 & 309 \\
-\textbf{\muKV}       & \good{14} & \good{13} & \good{11} & \good{14} & \good{307} \\
-SnapKV               & 14 & 12 & 11 & 14 & 327 \\
-Ada-KV               & 14 & 12 & 11 & 14 & 331 \\
-TOVA                 & 14 & 12 & 11 & 14 & 369 \\
-H2O                  & 14 & 8 & 10 & 13 & 350 \\
-StreamingLLM         & \bad{3} & \bad{3} & \bad{2} & \bad{3} & 336 \\
+vanilla (full cache) & 14 & 13 & 11 & 14 & 4858 \\
+\textbf{\muKV}       & \good{14} & \good{13} & \good{11} & \good{14} & \good{774} \\
+SnapKV               & 14 & 12 & 11 & 14 & 4237 \\
+Ada-KV               & 14 & 12 & 11 & 14 & 3361 \\
+TOVA                 & 14 & 12 & 11 & 14 & 3670 \\
+H2O                  & 14 & 8 & 10 & 13 & 4212 \\
+StreamingLLM         & \bad{3} & \bad{3} & \bad{2} & \bad{3} & 890 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\paragraph{Needle in a haystack.} A fact is buried at one of seven depths in 4K or 8K tokens of filler, and the model is asked for it. The 392 cells cover seven policies, four models, seven depths and two contexts, all behind the cooling gate. Table~\ref{tab:niah} gives the hits. \muKV\ matches the full cache on every model. It attends to about 1024 cells against 3000 to 3700 for the score-reading evictors and decodes at 17.6 against 8.8\,tok/s over all cells. It is also the lowest-energy policy. Every other evictor costs more than the full cache, because it pays the eviction cost without collecting the bandwidth saving. StreamingLLM fails retrieval everywhere; its window evicts exactly the middle of the context. Where every policy misses a depth, on Gemma-2B and Llama-1B at 8K, the full cache misses it too. Energy is a tie with the full cache here (307 against 309\,mWh), because the workload generates 64 tokens and is prefill-dominated. The watchdog never fired on these four-minute cells.
+\paragraph{Needle in a haystack.} A fact is buried at one of seven depths in 4K or 8K tokens of filler, and the model is asked for it. The 392 cells cover seven policies, four models, seven depths and two contexts, all behind the cooling gate. Table~\ref{tab:niah} gives the hits. \muKV\ matches the full cache on every model while attending to 774 cells of its 1024 budget. The score-reading evictors need 3361 to 4237, which is 69 to 87\% of what the full cache holds, so the realizability gap appears on retrieval too. StreamingLLM fails retrieval everywhere; its window evicts exactly the middle of the context. Where every policy misses a depth, on Gemma-2B and Llama-1B at 8K, the full cache misses it too, so the model and not the evictor is the cause. We read nothing about speed or energy from this table. The workload generates 64 tokens, so it is prefill-dominated and the two axes are a tie by construction; they are the 4096-token workload of Table~\ref{tab:cpu}. The watchdog never fired on these four-minute cells, so the table is the cache lever alone.
 
 \begin{table*}[tp]
 \caption{LongBench token-F1 on the RTX 4500 Ada, f16 KV for every policy, $K{=}1024$; StreamingLLM at its own budget of 2004 cells. Cells kept: retained cache after prefill as a share of the prompt.}
@@ -382,7 +382,7 @@ StreamingLLM         & 2004     & 22.59 & 22.63 & 18.59 & 76.14 & 34.99 & 33\% \
 \label{fig:bonsai-thermal}
 \end{figure}
 
-Figure~\ref{fig:bonsai-thermal} shows the workload that reaches the cliff. The full cache on Bonsai-8B runs 85.6 minutes and drives the battery to 50.2\C. At 50\C\ the vendor deep-throttles both clusters, the prime cores to 883\,MHz, in a sawtooth of 17 dips. The longest lasts 123\,s; the run spends 923\,s at 883\,MHz in total. \muKV\ finishes in 33.2 minutes at a 44.2\C\ battery peak, before the trigger. The orange trace gives the full cache the watchdog as an ablation. The glide, driven by the battery and the skin ladders, flattens the battery rise from 0.48 to 0.05\C/min and settles it at 49.1\C. The prime cores never reach 883\,MHz and spend 9\,s in total below 1\,GHz. This decode is bandwidth-bound, so preventing the throttle adds no speed: 1.0\,tok/s either way. The watchdog buys thermal sustainability; \muKV\ buys speed and efficiency through the cache. The DDR panel separates the two levers. DDR peaks near 70\C\ in both full-cache runs, set by memory traffic, while each 883\,MHz dip sheds about 8\C.
+Figure~\ref{fig:bonsai-thermal} shows the workload that reaches the cliff. The full cache on Bonsai-8B runs 85.6 minutes and drives the battery to 50.2\C. At 50\C\ the vendor deep-throttles both clusters, the prime cores to 883\,MHz, in a sawtooth of 17 dips. The longest lasts 123\,s; the run spends 923\,s at 883\,MHz in total. \muKV\ finishes in 33.2 minutes at a 44.2\C\ battery peak, before the trigger. The watchdog belongs to \muKV\ and is never given to a baseline in any comparison in this paper. The orange trace is an ablation, included because \muKV\ finishes before the cliff and so cannot show the clock lever by itself. The glide, driven by the battery and the skin ladders, flattens the battery rise from 0.48 to 0.05\C/min and settles it at 49.1\C. The prime cores never reach 883\,MHz and spend 9\,s in total below 1\,GHz. This decode is bandwidth-bound, so preventing the throttle adds no speed: 1.0\,tok/s either way. The watchdog buys thermal sustainability; \muKV\ buys speed and efficiency through the cache. The DDR panel separates the two levers. DDR peaks near 70\C\ in both full-cache runs, set by memory traffic, while each 883\,MHz dip sheds about 8\C.
 
 \paragraph{The GPU ladder, measured.} On the 4096-token GPU request at 1200\,MHz the vendor limiter fires in every cell. Three cooled cells per arm give 1289 against 1390\,J, 216 against 214\,s, and a DDR peak of 75 against 90\C. The ladder saves 7\% of energy and 15 degrees for 1\% more time.
 
