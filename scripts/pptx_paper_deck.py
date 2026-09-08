@@ -85,13 +85,13 @@ text(s,0.6,4.3,12.1,2.2,["None of the three is visible on a server with per-head
 # 4 break 1
 s,k=slide(); header(s,"BREAK 1","A nominal budget is not a freed cell",k,RUST)
 table(s,0.6,1.8,7.6,2.9,[["at a matched budget of 1024","live cells","share of the prompt"],["vanilla, Llama-3.2-1B CPU","9737","100%"],["\u03bcKV","721","7.4%"],["SnapKV","5929","61%"],["H2O","6110","63%"],["TOVA","4091","42%"],["Ada-KV","3484","36%"]],colw=[3.4,2.1,2.1],size=14,hl=[2])
-bullets(s,8.4,1.8,4.5,4.6,["A cell survives if any head or any layer keeps it, so the per-head unions cover most of the prompt.","At their own published budgets the gap widens: on 110 LongBench prompts SnapKV at 2048 per head keeps 94% of the cache and H2O at 20% of the prompt keeps 92%.","SnapKV reports an 8.2 times smaller cache, H2O 5 to 10 times. On this engine they deliver 1.6 to 2.8.","\u03bcKV picks one keep set for every head and layer, which is what lets the cache compact."],15)
+bullets(s,8.4,1.8,4.5,4.6,["A cell survives if any head or any layer keeps it, so the per-head unions cover most of the prompt.","At their own published budgets the gap widens: on 110 LongBench prompts SnapKV at 2048 per head keeps 94% of the cache and H2O at 20% of the prompt keeps 92%.","SnapKV reports an 8.2 times smaller cache, H2O 5 to 10 times. On Llama-3.2-1B they deliver 1.6 to 2.8, and on Bonsai-8B 1.0 to 1.6.","\u03bcKV picks one keep set for every head and layer, which is what lets the cache compact."],15)
 foot(s,"Live cells measured with the engine's own state size call, which serializes live cells only.")
 
 # 5 break 2
 s,k=slide(); header(s,"BREAK 2","Reading attention scores costs more than eviction saves",k,RUST)
 table(s,0.6,1.8,6.4,2.9,[["Llama-3.2-1B, Adreno 840","tok/s","vs full cache"],["vanilla (full cache)","24.18","1.00"],["\u03bcKV","29.77","1.23"],["SnapKV","4.76","0.20"],["TOVA","4.34","0.18"],["H2O","3.58","0.15"],["Ada-KV","2.86","0.12"]],colw=[3.2,1.6,1.6],size=14,hl=[2])
-bullets(s,7.2,1.8,5.7,4.6,["FlashAttention never writes the attention tensor, so a policy that reads scores cannot use it.","Every score-reading evictor decodes slower than not evicting at all, 0.12 to 0.30 times the full cache.","Retention does not predict speed. StreamingLLM keeps 777 cells, fewer than \u03bcKV's 723, and still runs at 0.23 because it stays on the slow path in this engine.","\u03bcKV scores inside the FlashAttention graph, so it keeps the signal and the fast path."],15)
+bullets(s,7.2,1.8,5.7,4.6,["FlashAttention never writes the attention tensor, so a policy that reads scores cannot use it.","On Llama-3.2-1B every score-reading evictor decodes slower than not evicting at all, 0.12 to 0.20 times the full cache.","Retention does not predict speed. StreamingLLM keeps 777 cells, fewer than \u03bcKV's 723, and still runs at 0.23 because it stays on the slow path in this engine.","\u03bcKV scores inside the FlashAttention graph, so it keeps the signal and the fast path."],15)
 foot(s,"12K-token prompt plus 4096 generated tokens, f16 KV for every policy, cold start.")
 
 # 6 break 3
@@ -124,7 +124,7 @@ table(s,0.6,1.75,7.9,3.5,[["Llama-3.2-1B, K = 1024","tok/s","wall (s)","live cel
  ["SnapKV","6.8","902","5929","56.3","818"],["Ada-KV","6.7","875","3484","57.1","1002"],
  ["StreamingLLM","6.6","877","777","56.7","1052"],["H2O","5.8","1006","6110","54.8","1094"],["TOVA","6.0","947","4091","54.4","1069"]],
  colw=[2.8,1.0,1.1,1.3,0.9,0.8],size=13,hl=[2])
-for i,(num,lab) in enumerate([("4.8\u00d7","the full cache's throughput"),("\u221262%","energy for the same work"),("7.4%","of the cells kept"),("\u22125 \u00b0C","peak DDR")]):
+for i,(num,lab) in enumerate([("4.8\u00d7","the full cache's throughput"),("\u221262%","energy for the same work"),("7.4%","of the cells kept"),("\u22125 \u00b0C","peak DDR, joint coolest with TOVA")]):
     bignum(s,8.8,1.8+i*1.25,4.0,num,lab,GREEN,26)
 text(s,0.6,5.5,7.9,1.2,["Both policies run the same vendor-clamped 1.6 GHz, so the heat comes from memory traffic, not the clock.","Only \u03bcKV both compacts and keeps decode on the fused kernel."],14,BODY)
 foot(s,"Table 1 of the paper. Three more models are in the paper: Bonsai-8B 4.5x, Phi-3-mini 4.5x, gemma-2-2b 2.4x, all against their own full cache.")
@@ -158,7 +158,7 @@ foot(s,"392 needle cells and 103 LongBench prompts, all on the phone. A four-mod
 s,k=slide(); header(s,"RESULT  \u00b7  SUSTAINED HEAT","Two levers against the vendor's cliff",k,GREEN)
 img(s,FIG+"/fig_bonsai_thermal.png",1.1,1.55,h=5.0)
 bullets(s,4.6,1.8,8.2,4.8,["The full cache on Bonsai-8B runs 85.6 minutes and drives the battery to 50.2 \u00b0C. At 50 \u00b0C the vendor deep-throttles both clusters: 17 dips, 923 s at 883 MHz.",
- "\u03bcKV finishes in 33.2 minutes at a 44.2 \u00b0C peak, before the trigger. That is the cache lever.",
+ "\u03bcKV finishes in 33.5 minutes at a 44.2 \u00b0C peak, before the trigger. That is the cache lever.",
  "Given the watchdog as an ablation, the full cache's battery rise flattens from 0.48 to 0.05 \u00b0C per minute and settles at 49.1 \u00b0C. The prime cores never reach 883 MHz. That is the clock lever.",
  "The watchdog belongs to \u03bcKV and is never given to a baseline.",
  "On the GPU the ladder gives 1289 against 1390 J and a DDR peak of 75 against 90 \u00b0C, for 1% more time.",
@@ -197,6 +197,6 @@ bullets(s,0.6,1.9,12.2,4.6,["Cache size is not a temperature actuator. Halving K
 s,k=slide(); header(s,"SUMMARY","\u03bcKV in four lines",k)
 bullets(s,0.6,1.9,12.2,4.6,["Three engine properties break server eviction policies on a phone: shared cells, the fast path, and the second context.",
  "\u03bcKV answers all three: scores from inside the FlashAttention graph, one keep set for every head and layer, compaction in place.",
- "4.8 times the full cache's decode throughput on the CPU and 1.23 on the GPU, at 7% of the cells and 62% less energy, with full-cache retrieval and LongBench.",
- "Around it, a clock watchdog keeps the vendor throttle unreachable and a per-request scheduler spends the battery by its level: 15% and 43% less per request at the lower tiers."],17)
+ "4.8 times the full cache's decode throughput on the CPU, at 7% of the cells and 62% less energy, and 1.23 times on the GPU, with full-cache retrieval and LongBench.",
+ "Around it, a clock watchdog holds the CPU below the vendor's throttle and a per-request scheduler spends the battery by its level: 15% and 43% less per request at the lower tiers."],17)
 prs.save(OUT); print("saved",OUT,n)
