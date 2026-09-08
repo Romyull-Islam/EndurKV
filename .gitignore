@@ -6,3 +6,12 @@ logs/
 models/
 data/
 logs/
+# 2026-09-08: results data, build trees and traces stay out of the repository
+benchmarks/
+entropy_probe/build*/
+llama.cpp/build*/
+llama.cpp/*textbook.txt
+scripts/android/live_monitor/*.csv
+eval_pipeline/data/
+.probe_write_test
+*.pyc

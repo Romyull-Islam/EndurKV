@@ -1,0 +1,133 @@
+{
+  "figure_name": "14_memutil_vs_temp",
+  "file_path": "/home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/14_memutil_vs_temp.png",
+  "title": "Memory utilization correlates with both SoC and DRAM temperature",
+  "layout": {
+    "rows": 2,
+    "cols": 2
+  },
+  "panels": [
+    {
+      "position": "top-left",
+      "x_col": "soc_c",
+      "y_col": "rss_gb",
+      "n": 22,
+      "slope": 0.04299565368795003,
+      "intercept": 0.9628489257210017,
+      "r2": 0.014042091540664185,
+      "outliers": [],
+      "family_counts": {
+        "vanilla": 4,
+        "tova": 1,
+        "v1": 7,
+        "v1_fa": 5,
+        "v1_fa2": 1,
+        "v1_fa2_selective": 1,
+        "v1_fa2_stack": 1,
+        "other": 2
+      }
+    },
+    {
+      "position": "top-right",
+      "x_col": "ddr_c",
+      "y_col": "rss_gb",
+      "n": 22,
+      "slope": 0.13508362580730499,
+      "intercept": -4.243059793297851,
+      "r2": 0.17954116663178338,
+      "outliers": [],
+      "family_counts": {
+        "vanilla": 4,
+        "tova": 1,
+        "v1": 7,
+        "v1_fa": 5,
+        "v1_fa2": 1,
+        "v1_fa2_selective": 1,
+        "v1_fa2_stack": 1,
+        "other": 2
+      }
+    },
+    {
+      "position": "bot-left",
+      "x_col": "soc_c",
+      "y_col": "swap_mb",
+      "n": 22,
+      "slope": 13.679580011054401,
+      "intercept": -760.4555626326868,
+      "r2": 0.04249560397442198,
+      "outliers": [
+        {
+          "wave": "wave7_v1fa2_1780782482",
+          "cell": "v1_fa2",
+          "swap_mb": 1551.84765625,
+          "x": 74.4,
+          "y": 1551.84765625,
+          "label": "Wave-7  v1_fa2  (1552 MB swap)"
+        },
+        {
+          "wave": "wave3_phi3_1780719530",
+          "cell": "v1_fa_K512",
+          "swap_mb": 515.10546875,
+          "x": 63.6,
+          "y": 515.10546875,
+          "label": "Wave-3  v1_fa_K512  (515 MB swap)"
+        }
+      ],
+      "family_counts": {
+        "vanilla": 4,
+        "tova": 1,
+        "v1": 7,
+        "v1_fa": 5,
+        "v1_fa2": 1,
+        "v1_fa2_selective": 1,
+        "v1_fa2_stack": 1,
+        "other": 2
+      }
+    },
+    {
+      "position": "bot-right",
+      "x_col": "ddr_c",
+      "y_col": "swap_mb",
+      "n": 22,
+      "slope": 13.612240865227152,
+      "intercept": -654.0030670054081,
+      "r2": 0.05450466387775908,
+      "outliers": [
+        {
+          "wave": "wave7_v1fa2_1780782482",
+          "cell": "v1_fa2",
+          "swap_mb": 1551.84765625,
+          "x": 66.4,
+          "y": 1551.84765625,
+          "label": "Wave-7  v1_fa2  (1552 MB swap)"
+        },
+        {
+          "wave": "wave3_phi3_1780719530",
+          "cell": "v1_fa_K512",
+          "swap_mb": 515.10546875,
+          "x": 58.7,
+          "y": 515.10546875,
+          "label": "Wave-3  v1_fa_K512  (515 MB swap)"
+        }
+      ],
+      "family_counts": {
+        "vanilla": 4,
+        "tova": 1,
+        "v1": 7,
+        "v1_fa": 5,
+        "v1_fa2": 1,
+        "v1_fa2_selective": 1,
+        "v1_fa2_stack": 1,
+        "other": 2
+      }
+    }
+  ],
+  "n_cells": 22,
+  "source": "phone-logs/<wave>/<cell>/{sensors.csv,stress.csv}",
+  "metrics": {
+    "rss_gb": "max(stress.peak_rss_kb) / 1024 / 1024",
+    "swap_mb": "(max-min)(sensors.vmstat_pswpout) * 4 KB / 1024",
+    "soc_c": "max over CPU thermal zones (cpu*_temp_mc) / 1000",
+    "ddr_c": "max(sensors.ddr_temp_mc) / 1000"
+  }
+}

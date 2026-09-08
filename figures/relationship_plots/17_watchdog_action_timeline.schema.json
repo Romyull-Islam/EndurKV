@@ -1,0 +1,114 @@
+{
+  "kind": "ANALYSIS_SCHEMA",
+  "name": "17_watchdog_action_timeline",
+  "figure": "/home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/17_watchdog_action_timeline.png",
+  "title": "Preempt-throttle watchdog: closed-loop temperature control, no kernel cliff",
+  "tier_freq_mhz": {
+    "0": 1632.0,
+    "1": 1497.6,
+    "2": 1267.2,
+    "3": 883.2
+  },
+  "tier_engage_c": {
+    "1": 58,
+    "2": 62,
+    "3": 65
+  },
+  "sources": {
+    "wave9_watchdog_log": "/home/mislam22/EndurKV_workspace/phone-logs/wave9_v1fa2_stack_1780796320/watchdog.log",
+    "wave9_sensors_csv": "/home/mislam22/EndurKV_workspace/phone-logs/wave9_v1fa2_stack_1780796320/v1_fa2_stack/sensors.csv",
+    "wave10_watchdog_log": "/home/mislam22/EndurKV_workspace/phone-logs/wave10_ksweep_1780815847/watchdog.log",
+    "wave11_watchdog_log": "/home/mislam22/EndurKV_workspace/phone-logs/wave11_eval_1780862534/Phi-3-mini-128k/v1_fa2_stack/ppl/watchdog.log",
+    "wave11_sensors_csv": "/home/mislam22/EndurKV_workspace/phone-logs/wave11_eval_1780862534/Phi-3-mini-128k/v1_fa2_stack/ppl/sensors.csv"
+  },
+  "wave9": {
+    "watchdog_t_start_unix": 1780797824,
+    "watchdog_t_end_unix": 1780801668,
+    "n_events": 31,
+    "n_tier1": 16,
+    "n_tier2": 6,
+    "n_tier3": 0,
+    "first_engagements": {
+      "1": {
+        "unix_ts": 1780798072,
+        "ddr_c_at_engage": 58,
+        "freq_cap_mhz": 1497.6,
+        "ddr_drop_c_90s": 6.199999999999996
+      },
+      "2": {
+        "unix_ts": 1780798924,
+        "ddr_c_at_engage": 62,
+        "freq_cap_mhz": 1267.2,
+        "ddr_drop_c_90s": 1.1000000000000014
+      }
+    },
+    "ddr_min_c": 37.4,
+    "ddr_max_c": 64.1,
+    "duration_min": 64.06666666666666
+  },
+  "wave10": {
+    "watchdog_t_start_unix": 1780815847,
+    "watchdog_t_end_unix": 1780830434,
+    "duration_min": 243.11666666666667,
+    "n_events_total": 1958,
+    "per_K": [
+      {
+        "K": 1024,
+        "t_start_min": 0.016666666666666666,
+        "t_end_min": 61.416666666666664,
+        "duration_min": 61.4,
+        "n_tier1": 415,
+        "n_tier2": 412,
+        "n_tier3": 0,
+        "tier1_per_min": 6.758957654723127,
+        "tier2_per_min": 6.710097719869707
+      },
+      {
+        "K": 384,
+        "t_start_min": 87.96666666666667,
+        "t_end_min": 153.36666666666667,
+        "duration_min": 65.4,
+        "n_tier1": 260,
+        "n_tier2": 255,
+        "n_tier3": 0,
+        "tier1_per_min": 3.9755351681957185,
+        "tier2_per_min": 3.899082568807339
+      },
+      {
+        "K": 256,
+        "t_start_min": 153.36666666666667,
+        "t_end_min": 243.08333333333334,
+        "duration_min": 89.71666666666667,
+        "n_tier1": 304,
+        "n_tier2": 299,
+        "n_tier3": 0,
+        "tier1_per_min": 3.3884451049600592,
+        "tier2_per_min": 3.332714099944269
+      }
+    ],
+    "K_phase_boundaries_unix": [
+      {
+        "K": 1024,
+        "t_start_unix": 1780815848,
+        "t_end_unix": 1780819532
+      },
+      {
+        "K": 384,
+        "t_start_unix": 1780821125,
+        "t_end_unix": 1780825049
+      },
+      {
+        "K": 256,
+        "t_start_unix": 1780825049,
+        "t_end_unix": 1780830432
+      }
+    ]
+  },
+  "wave11": {
+    "watchdog_t_start_unix": null,
+    "watchdog_t_end_unix": null,
+    "available": false,
+    "expected_path": "/home/mislam22/EndurKV_workspace/phone-logs/wave11_eval_1780862534/Phi-3-mini-128k/v1_fa2_stack/ppl/watchdog.log"
+  },
+  "narrative": "The watchdog polls DDR thermal_zone47 once per second and clamps the big-core max-frequency before the kernel TJ_MAX cliff at 65 C. Across Wave-9 and Wave-10 the closed-loop control held DDR below the 65 C hard-cap with zero tier-3 engagements -- every tier-1 / tier-2 step caused a measurable DDR drop within 90 s."
+}

@@ -1,0 +1,92 @@
+# PowerInfer-2 / OnePlus 15 — Perfetto trace config.
+# Captures the "Xcode Instruments"-style timeline for LLM inference:
+#   - per-core CPU usage (sched) + CPU frequency tracks
+#   - ~40 thermal zones (CPU / GPU / NSP=Hexagon NPU) over time
+#   - whole-device battery power (V, I, charge counter) -> energy
+#   - GPU frequency, memory, per-process CPU
+# Open the pulled .pftrace at https://ui.perfetto.dev
+#
+# Streams to file (write_into_file) so long decode runs don't overflow the ring buffer.
+
+buffers {
+  size_kb: 131072          # 128 MB main ring buffer (sched/ftrace)
+  fill_policy: RING_BUFFER
+}
+buffers {
+  size_kb: 8192            # counters (power/thermal/freq) — keep everything
+  fill_policy: RING_BUFFER
+}
+
+write_into_file: true
+file_write_period_ms: 1000
+flush_period_ms: 1000
+
+# --- CPU scheduling + frequency + thermal + GPU via ftrace ---
+data_sources {
+  config {
+    name: "linux.ftrace"
+    target_buffer: 0
+    ftrace_config {
+      ftrace_events: "sched/sched_switch"
+      ftrace_events: "sched/sched_waking"
+      ftrace_events: "sched/sched_process_exit"
+      ftrace_events: "sched/sched_process_free"
+      ftrace_events: "power/cpu_frequency"
+      ftrace_events: "power/cpu_idle"
+      ftrace_events: "power/gpu_frequency"
+      ftrace_events: "power/suspend_resume"
+      ftrace_events: "thermal/thermal_temperature"
+      ftrace_events: "thermal/cdev_update"
+      ftrace_events: "task/task_newtask"
+      ftrace_events: "task/task_rename"
+      compact_sched { enabled: true }
+    }
+  }
+}
+
+# --- polled system stats: per-core CPU time, cpufreq, meminfo ---
+data_sources {
+  config {
+    name: "linux.sys_stats"
+    target_buffer: 1
+    sys_stats_config {
+      stat_period_ms: 500
+      stat_counters: STAT_CPU_TIMES
+      stat_counters: STAT_FORK_COUNT
+      meminfo_period_ms: 1000
+      cpufreq_period_ms: 250
+    }
+  }
+}
+
+# --- battery power: whole-device V / I / charge / capacity ---
+data_sources {
+  config {
+    name: "android.power"
+    target_buffer: 1
+    android_power_config {
+      battery_poll_ms: 250
+      battery_counters: BATTERY_COUNTER_CAPACITY_PERCENT
+      battery_counters: BATTERY_COUNTER_CHARGE
+      battery_counters: BATTERY_COUNTER_CURRENT
+      battery_counters: BATTERY_COUNTER_CURRENT_AVG
+      battery_counters: BATTERY_COUNTER_VOLTAGE
+      collect_power_rails: true
+    }
+  }
+}
+
+# --- per-process names + CPU so the inference proc is labelled ---
+data_sources {
+  config {
+    name: "linux.process_stats"
+    target_buffer: 1
+    process_stats_config {
+      scan_all_processes_on_start: true
+      proc_stats_poll_ms: 1000
+    }
+  }
+}
+
+# run until explicitly stopped (capture.sh uses --detach/--attach --stop)
+duration_ms: 0

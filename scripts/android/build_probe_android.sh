@@ -47,7 +47,7 @@ echo "[probe-android] probe build:  $PROBE_BUILD"
 mkdir -p "$PROBE_BUILD"
 cd "$PROBE_BUILD"
 
-cmake "$PROBE_SRC" -G Ninja \
+cmake "$PROBE_SRC" \
   -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a \
   -DANDROID_PLATFORM=android-28 \
@@ -56,9 +56,9 @@ cmake "$PROBE_SRC" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DENABLE_PROBE=ON
 
-ninja -j8
+cmake --build . -j8
 
 echo
 echo "[probe-android] artifacts:"
-ls -lh entropy_probe attention_probe prune_probe 2>/dev/null || true
+ls -lh entropy_probe attention_probe prune_probe controller_probe 2>/dev/null || true
 file entropy_probe 2>/dev/null || true

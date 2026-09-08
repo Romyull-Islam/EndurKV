@@ -1,0 +1,24 @@
+# muKV energy-aware scheduler: measured cost table (OnePlus 15, Llama-3.2-1B-Instruct Q4_K_M).
+# One row per plan. The scheduler scores every row for the request at hand and updates the
+# chosen row from the request's own measurement (EMA, alpha 0.3), so the seeds below are
+# starting points, not constants.
+#   e_pre : mJ per prompt token (prefill)        t_pre : ms per prompt token
+#   e_dec : mJ per decoded token (decode phase)  t_dec : ms per decoded token
+#   q     : answer quality relative to K=1024 on the same backend, taken as the WORST task
+#           (qasper), not the mean, so a step that wrecks one task cannot hide behind another
+# Seeds (2026-09-03, reseeded from the controller proof /tmp/ea_proof_v2, pinned protocol):
+#   GPU 1200 n=3; GPU 902 and 726 n=1; CPU rows n=1, CPU-only build, unpinned scheduler,
+#   CPU caps 1497.6/1785.6 MHz. Phase energy from the end-anchored split, rail + pack.
+# Split-clock plans (name carries d<MHz>): prefill at gpu_mhz, decode capped at <MHz> via
+# --gpu-mhz-decode. Decode columns measured 2026-09-03 in /tmp/split_proof, n=3 each, pinned
+# protocol. Prefill columns are the 1200 MHz row's: the prefill is identical by construction,
+# and the 3% spread the split cells showed in prefill energy is noise, not a property of the plan.
+# plan           backend gpu_mhz K     e_pre  e_dec  t_pre  t_dec  q
+gpu1200_k1024    gpu     1200    1024  58.2   210.3  12.0   25.0   1.00
+gpu1200d902_k1024 gpu    1200    1024  58.2   185.9  12.0   25.9   1.00
+gpu1200d726_k1024 gpu    1200    1024  58.2   179.0  12.0   27.0   1.00
+gpu902_k1024     gpu     902     1024  40.6   189.6  15.9   26.0   1.00
+gpu726_k1024     gpu     726     1024  40.4   173.3  19.6   27.2   1.00
+cpu_k1024        cpu     0       1024  60.7   225.7  26.5   45.3   1.00
+cpu_k512         cpu     0       512   60.0   198.5  26.5   41.8   0.63
+cpu_k256         cpu     0       256   62.6   186.8  26.2   40.3   0.58

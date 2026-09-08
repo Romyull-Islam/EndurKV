@@ -172,10 +172,12 @@ def run_one(prompt: dict, remote_model: str, host_log_dir: Path) -> int:
     r = adb_shell(cmd, check=False, capture=True)
     elapsed = time.time() - t0
 
-    # 3) Pull the outputs.  attention_probe also produces a .attn.bin sidecar.
+    # 3) Pull the outputs. attention_probe also produces .attn.bin (ATNH per-head)
+    # and (since 2026-05-24 dual-format probe) .v1.attn.bin (ATTN head-averaged).
     pull_exts = [".entropy.csv", ".sensors.csv", ".probe.stderr", ".run.json"]
     if PROBE_NAME == "attention_probe":
         pull_exts.append(".attn.bin")
+        pull_exts.append(".v1.attn.bin")
     for ext in pull_exts:
         remote = f"{remote_log}/{pid}{ext}"
         local  = host_log_dir / f"{pid}{ext}"

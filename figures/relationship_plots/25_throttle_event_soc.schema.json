@@ -1,0 +1,101 @@
+{
+  "kind": "PLOT_SCHEMA",
+  "version": 1,
+  "generator": "host_plot_throttle_soc.py",
+  "figure": "/home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/25_throttle_event_soc.png",
+  "title": "Throttle events on OnePlus 15 \u2014 which sensor crossed first?",
+  "role_in_paper": "Per-cell time-series of HAL telemetry (sys-therm-2), skin (shell_front), battery temperature, and battery current around the throttle event \u2014 identifies which sensor crossed its empirical trip first.",
+  "x_axis": "time since first sensors.csv sample (min)",
+  "y_axis_primary": "temperature (\u00b0C)",
+  "y_axis_secondary": "battery current (mA)",
+  "channels": [
+    {
+      "name": "sys-therm-2",
+      "column": "sys-therm-2_temp_mc",
+      "scale": "value / 1000",
+      "trips": [
+        48.0,
+        60.0
+      ]
+    },
+    {
+      "name": "shell_front",
+      "column": "shell_front_temp_mc",
+      "scale": "value / 1000",
+      "trips": [
+        55.0
+      ]
+    },
+    {
+      "name": "battery_temp",
+      "column": "#2ca02c",
+      "scale": "value / 1000",
+      "trips": [
+        45.0,
+        50.0
+      ]
+    },
+    {
+      "name": "bat_current_ma",
+      "column": "#1f77b4",
+      "scale": "raw mA (right axis)",
+      "trips": []
+    }
+  ],
+  "panels": [
+    {
+      "wave": "Wave-4 vanilla",
+      "throttle_t_s": 2128.8399999999965,
+      "snap": {
+        "sys_therm_2_C": 55.7,
+        "shell_front_C": 49.0,
+        "battery_temp_C": 47.2,
+        "bat_current_ma": 312.0,
+        "bat_current_pre_ma": null,
+        "bat_current_post_ma": null
+      },
+      "observed_at_throttle": {
+        "sys_therm_2_C": 55.603,
+        "shell_front_C": 48.902,
+        "battery_temp_C": 47.2,
+        "bat_current_ma": 312.0
+      },
+      "first_crossed": "sys-therm-2 (55.7\u00b0C, 4.3\u00b0C below 60\u00b0C trip)"
+    },
+    {
+      "wave": "Wave-8 v1_fa2_selective",
+      "throttle_t_s": 3218.0899999999965,
+      "snap": {
+        "sys_therm_2_C": 62.1,
+        "shell_front_C": 53.0,
+        "battery_temp_C": 51.1,
+        "bat_current_ma": 296.0,
+        "bat_current_pre_ma": 371.0,
+        "bat_current_post_ma": 296.0
+      },
+      "observed_at_throttle": {
+        "sys_therm_2_C": 62.004,
+        "shell_front_C": 53.001,
+        "battery_temp_C": 51.1,
+        "bat_current_ma": 421.0
+      },
+      "first_crossed": "sys-therm-2 (62.1\u00b0C, +2.1\u00b0C past 60\u00b0C HAL trip)"
+    },
+    {
+      "wave": "Wave-9 v1_fa2_stack",
+      "throttle_t_s": null,
+      "peak": {
+        "sys_therm_2_C": 55.702,
+        "shell_front_C": 49.009,
+        "battery_temp_C": 47.3
+      },
+      "first_crossed": "none crossed (watchdog clamped early)"
+    }
+  ],
+  "key_finding": {
+    "wave4_vanilla": "sys-therm-2 reached 55.7\u00b0C first; shell_front and battery_temp both lagged it \u2014 sys-therm-2 is the leading indicator and is the empirical throttle trigger here.",
+    "wave8_v1fa2_selective": "sys-therm-2 crossed the 60\u00b0C HAL trip first (62.1\u00b0C); battery_temp followed (51.1\u00b0C > 50\u00b0C BCL knee) which is what produced the bat_current 371 \u2192 296 mA clamp.",
+    "wave9_v1fa2_stack": "no sensor crossed any empirical trip \u2014 the preemptive watchdog held sys-therm-2 below 56\u00b0C and battery_temp below 48\u00b0C for the whole cell.",
+    "summary": "sys-therm-2 is the first-mover sensor at every throttle we observed; shell_front and battery_temp follow it by 2-3\u00b0C and only matter when the preemptive controller has already failed."
+  }
+}

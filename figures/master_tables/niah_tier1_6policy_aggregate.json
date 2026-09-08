@@ -1,0 +1,90 @@
+{
+  "Phi-3-mini": {
+    "vanilla": {
+      "acc": "7/8",
+      "tps": 2.8,
+      "prefill_s": 496.85,
+      "rss_MB": 3842.5,
+      "evicted": 0
+    },
+    "h2o": {
+      "acc": "4/8",
+      "tps": 1.73,
+      "prefill_s": 745.03,
+      "rss_MB": 4013.1,
+      "evicted": 0
+    },
+    "tova": {
+      "acc": "7/8",
+      "tps": 1.78,
+      "prefill_s": 715.71,
+      "rss_MB": 3955.9,
+      "evicted": 1906
+    },
+    "streamingllm": {
+      "acc": "0/8",
+      "tps": 1.71,
+      "prefill_s": 763.55,
+      "rss_MB": 3956.1,
+      "evicted": 3328
+    },
+    "adakv": {
+      "acc": "7/8",
+      "tps": 1.81,
+      "prefill_s": 646.9,
+      "rss_MB": 3956.9,
+      "evicted": 1522
+    },
+    "v1_fa2_stack": {
+      "acc": "0/8",
+      "tps": 6.73,
+      "prefill_s": 621.42,
+      "rss_MB": 3585.7,
+      "evicted": 3943
+    }
+  },
+  "Llama-3.2-1B": {
+    "vanilla": {
+      "acc": "8/8",
+      "tps": 11.71,
+      "prefill_s": 101.86,
+      "rss_MB": 953.3,
+      "evicted": 0
+    },
+    "h2o": {
+      "acc": "8/8",
+      "tps": 5.87,
+      "prefill_s": 142.1,
+      "rss_MB": 1031.7,
+      "evicted": 0
+    },
+    "tova": {
+      "acc": "8/8",
+      "tps": 5.8,
+      "prefill_s": 144.46,
+      "rss_MB": 1006.5,
+      "evicted": 1278
+    },
+    "streamingllm": {
+      "acc": "1/8",
+      "tps": 5.71,
+      "prefill_s": 158.44,
+      "rss_MB": 1006.2,
+      "evicted": 2816
+    },
+    "adakv": {
+      "acc": "8/8",
+      "tps": 6.12,
+      "prefill_s": 141.22,
+      "rss_MB": 1007.0,
+      "evicted": 868
+    },
+    "v1_fa2_stack": {
+      "acc": "0/8",
+      "tps": 20.61,
+      "prefill_s": 136.15,
+      "rss_MB": 974.6,
+      "evicted": 3303
+    }
+  }
+}

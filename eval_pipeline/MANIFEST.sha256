@@ -1,0 +1,172 @@
+# EndurKV Reproducibility Manifest (Dimension 6 audit)
+# Generated: 2026-06-07
+# Repo: /home/mislam22/EndurKV_workspace/EndurKV
+# Repo git HEAD: 07dca629a0b2596aa0d2e6ac2761179f0f8307c1
+# (NOTE: working tree currently contains uncommitted modifications for the
+#  fixes in this revision. The fixes should be committed before publication;
+#  see SECTION 6 / WARNING below for the freeze procedure.)
+#
+# llama.cpp upstream snapshot: vendored copy under llama.cpp/ (no real submodule)
+#   build-info recorded at compile: LLAMA_COMMIT="07dca62" (parent repo SHA, NOT
+#   an upstream llama.cpp commit — the vendored copy was last mirrored from
+#   ggerganov/llama.cpp on 2026-05-23 per llama.cpp/AUTHORS / mtime). For real
+#   reproducibility, pin the upstream sha by adding llama.cpp as a proper
+#   `git submodule add https://github.com/ggerganov/llama.cpp.git llama.cpp`
+#   in a follow-up commit and re-record the sha here.
+#
+# Phone device: OnePlus CPH2749 (OnePlus 15)
+# Phone Android release: 16  build_id: BP2A.250605.015
+# Phone fingerprint: OnePlus/CPH2749/OP611FL1:16/BP2A.250605.015/B.R4T3.2da5ed5-a4bd5e-a4bd63:user/release-keys
+# Phone kernel: 6.12.23-android16-5-gb3b66ace21e0-ab14672634-4k  (built 2026-01-06)
+# cpu0 governor: performance   cpu7 governor: walt
+# Global seed used in wave11_cells.json: 42 (eviction_bench --seed 42 --greedy)
+# Bootstrap seed in score_ppl.py default: 0 (per-cell reseed: 0 XOR hash((model,policy)) & 0xFFFFFFFF)
+
+# ============================================================
+# SECTION 1: GGUF models on phone (sha256 computed on-device)
+# ============================================================
+6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83  /data/local/tmp/endurkv/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
+dde15f8155119acc4cab4ed4cdcfe2d511f713e4b3fc5c96047634dd626f6cc3  /data/local/tmp/endurkv/models/Phi-3-mini-128k-instruct-Q4_K_M.gguf
+e0aee85060f168f0f2d8473d7ea41ce2f3230c1bc1374847505ea599288a7787  /data/local/tmp/endurkv/models/gemma-2-2b-it-Q4_K_M.gguf
+
+# ============================================================
+# SECTION 2: On-device binaries (build-android, host-side copy)
+# IMPORTANT: the sha256 below is for the binary BUILT FROM THE PRE-FIX
+# eviction_bench.cpp. After applying the Wave-11 fixes (H2O recent+heavy
+# split, accumulator over all prefill chunks, etc.) the eviction_bench
+# source has changed and the binary must be rebuilt + re-checksummed.
+# Run `scripts/android/build_probe_android.sh` and update SECTION 2.
+# ============================================================
+7311526d0ae5923fd0ec8c684c88df125d6860a17329c0bc959963d59e8555f8  entropy_probe/build-android/eviction_bench  # PRE-FIX; REBUILD REQUIRED
+726262da978665995458ad7732239a311f220c12bafeb13973f88ee0a396d683  entropy_probe/build-android/attention_probe
+92d9c830a23b039bc0da3febdf2221f47e62cb72caaf4389d7b1a2537e89a83a  entropy_probe/build-android/controller_probe
+abe5e0e5fd52dbb27a8dfaed137752167211773a40166235fed3ad618d89a411  entropy_probe/build-android/entropy_probe
+9b790f9a4328bd9ce42621509b4e0fffdc9c1406296a28b3ac33f81547cf8580  entropy_probe/build-android/prune_probe
+
+# ============================================================
+# SECTION 3: WikiText-2-RAW-V1 raw + 9 chunks (perplexity corpus)
+# ------------------------------------------------------------
+# Upstream source pinned in eval_pipeline/data/PROVENANCE.md.
+#   Dataset:      Salesforce/wikitext on HuggingFace
+#   Config:       wikitext-2-raw-v1  (the canonical raw, NOT the tokenized v1)
+#   Split:        test
+#   Parquet URL:  https://huggingface.co/datasets/Salesforce/wikitext/resolve/main/wikitext-2-raw-v1/test-00000-of-00001.parquet
+#   Retrieval:    2026-06-07
+# Build command:
+#   python3 eval_pipeline/data/build_wiki_chunks.py --n-chunks 9
+# Bug history: prior wiki.test.raw (sha256 d790b833…) was the TOKENIZED
+# wikitext-2-v1 with <unk> substitutions and is NOT comparable to literature
+# PPL baselines. Replaced 2026-06-07 with the canonical wikitext-2-raw-v1.
+# ============================================================
+5f1bea067869d04849c0f975a2b29c4ff47d867f484f5010ea5e861eab246d91  eval_pipeline/data/test.parquet
+bbf94c53a05abe9ee670d3b6343608095822c85e26de37c70b24fc571964574a  eval_pipeline/data/wiki.test.raw
+55e0dabe18771caa3fb4a1b9886fd8caf3e61281df68a0d64f9b9c44c34e61f1  eval_pipeline/data/wiki.test.raw.chunk0
+105cd502006a5edf3917be7d246eda11c3842ae4607646d7a2e41ad98fb086bb  eval_pipeline/data/wiki.test.raw.chunk1
+01c5d5088aed9e84ccbad513f6aad32f9139015c974ba8a9e4e6104cf679e53d  eval_pipeline/data/wiki.test.raw.chunk2
+766c443832ff71dd8d0c10f7b01441ea3087755fda504c6787a9452be34c1134  eval_pipeline/data/wiki.test.raw.chunk3
+24ad6eca49009f1dde3068eae9030a4744d74d47418f75ffdf9513defdb406fd  eval_pipeline/data/wiki.test.raw.chunk4
+a9e492675a13fd5067126522475dcdfe9586d64e0ec78ff8e96e90aaca54f4a3  eval_pipeline/data/wiki.test.raw.chunk5
+8ba658d3758bf661d9e252bf002584803e81bd7d5b0482bdffbcb900c9cfc710  eval_pipeline/data/wiki.test.raw.chunk6
+5e2bb1cfd60b910d59adccab7765a0cb87c5f50ac1b01aefe0896a79cf13222a  eval_pipeline/data/wiki.test.raw.chunk7
+7015d95ef3fc797e1fc11142e9ddd74105bdbf4a4145e773963347c3fad734cd  eval_pipeline/data/wiki.test.raw.chunk8
+938667ee006ab1078a1f618806b531ca778cf3be712daf46db535bb3d7fc24da  eval_pipeline/data/wiki.test.raw.sha256
+c5ff57ebc98ce14e2b2fb34ccd99c12c10645c5ed3cf7def2577d550a5da602a  eval_pipeline/data/PROVENANCE.md
+db83b6c7040eac3e0de11c3a078f35ccc634d5ce274c11f4dc92a1d31092d789  eval_pipeline/data/build_wiki_chunks.py
+
+# ============================================================
+# SECTION 4: NIAH stimuli (32 prompts: 4 ctx_lens x 8 depths)
+# NOTE: These are SYNTHETIC repeated-paragraph stimuli, not the canonical
+# Kamradt NIAH built from Paul Graham essays. See NIAH_HONESTY.md and
+# PROVENANCE.md for the disclosure and recommended publication fix.
+# ============================================================
+9bdd48d67a3ebd8136a26da0b8c6ec6b07158335894a79b3911002c965039759  eval_pipeline/data/NIAH_HONESTY.md
+f21b001fc032aeeb9e71450e561fb73eeebca2b2f6173523e35a1265aa6e6e85  eval_pipeline/data/niah/MANIFEST.txt
+fc4d42a51ad2971f7eba59094aca197d69c2ccf73fe4f32eaf47c816eaa18bef  eval_pipeline/data/niah/niah_c2048_d00.txt
+cfe0fc03a88fa4d26d36e4be56c6511a33d51f91d6e13f5836cbc80ab6e535d3  eval_pipeline/data/niah/niah_c2048_d12.txt
+1f248d58bd0a49b8768878d10ebd23c81f61a69f648bafbf5fab53fb8b574e78  eval_pipeline/data/niah/niah_c2048_d25.txt
+328ca88c78099188191f314658f9fe4d7d47637404cbed5745b10435f4c36476  eval_pipeline/data/niah/niah_c2048_d37.txt
+9c8e9414328f9896467e7eb6753dd87fdb80f43fa9631b107f887f0fe5fbd0d3  eval_pipeline/data/niah/niah_c2048_d50.txt
+2d1e77fcb3fe8e71ae441ce1802f95e12022db131a1cd9e963b442d044622f97  eval_pipeline/data/niah/niah_c2048_d62.txt
+851fb9dea78c6702351262f2471800e8dfcddf5c61660171fc3d1a47bc8c4773  eval_pipeline/data/niah/niah_c2048_d75.txt
+b9a069a6c7fd09dcd4d78b53d97d1b233c03c3f5c9c1a1e9e48f67f2dc5072ac  eval_pipeline/data/niah/niah_c2048_d87.txt
+1f1c5c435154c6c5c2d3a0e7e0efe87e4f73e67ccda471c476df694b439d2564  eval_pipeline/data/niah/niah_c4096_d00.txt
+3152eccedac0fbd376012e559b6404df53a5fb0a14dcfa29e26d3d464c66f95e  eval_pipeline/data/niah/niah_c4096_d12.txt
+6e42c1767d2198c212c9c15777c61d7a53578a728fc987fb5eca2f16dc7ef446  eval_pipeline/data/niah/niah_c4096_d25.txt
+e38cdcb1e42d8d291a6553432bd8793f6f8d378127329775d93e115f86f27802  eval_pipeline/data/niah/niah_c4096_d37.txt
+514f1b73df32f8e5c01e6a0c95b674a6fd86cc3a688cb43bc8e9f73446a0cf88  eval_pipeline/data/niah/niah_c4096_d50.txt
+a0533e9e0549af1e4be8fa17ac454d10eaddf8d178b5a97a1e59fcd73e56c7fe  eval_pipeline/data/niah/niah_c4096_d62.txt
+3c5e703c41e4133ffbb3bbb2c1a3339b7125894eb3937b874eaa63fbd65eb480  eval_pipeline/data/niah/niah_c4096_d75.txt
+b80065ff4d6f383aeb22baa2f3f2823abf4b1f385cc620a58d35da45c87f2d42  eval_pipeline/data/niah/niah_c4096_d87.txt
+8a8e98ccd37406200fc3c14c1ed1cd975e3314a0c8760a748a8058c2c3fbbf51  eval_pipeline/data/niah/niah_c6144_d00.txt
+e3eb4902af40f02e315e04c8c75710f754c4b0a66643a3e982ffdd130707e74f  eval_pipeline/data/niah/niah_c6144_d12.txt
+b7d2856f2f50064c8a3d8dc8c88a35805f5214d6c4b0e55f58f3b2dc7b3ca9c0  eval_pipeline/data/niah/niah_c6144_d25.txt
+2bf1f866dfd1af570f1c6eb8b1201d7e9b3c3b6905e4ab758f1bee40c18d6101  eval_pipeline/data/niah/niah_c6144_d37.txt
+c579d74628a4f7b21a8d723040b993520e72297ab5ff3eba8655c500031c21e9  eval_pipeline/data/niah/niah_c6144_d50.txt
+a6a652272cf33d2cf0d1251c350762d8da7d004a01ef227638123d6368b3b5e4  eval_pipeline/data/niah/niah_c6144_d62.txt
+3c80fac7119686c0445c52c15d84fb1b934a447d2c17ea12ba6451e83a062976  eval_pipeline/data/niah/niah_c6144_d75.txt
+067164400e652b048b6e83682fb135708403e384baeb0964e75b35aad5b3f91f  eval_pipeline/data/niah/niah_c6144_d87.txt
+2d0493588ac5eda6276c95c02a11308240859d73deb2d5023bae65e8e5fc8c78  eval_pipeline/data/niah/niah_c8192_d00.txt
+9b84580ff2c046930c5399cfd73cfe3814d528cd671e86179d18688a7886122a  eval_pipeline/data/niah/niah_c8192_d12.txt
+e8af352f93ed523353c5d0f7c0350a32ef0d3868348c1da6b596a91fc5769e50  eval_pipeline/data/niah/niah_c8192_d25.txt
+ae5ee4b860604e30adccdefb480ca53fb53bc9c882831a3f9d40f5362f790a0a  eval_pipeline/data/niah/niah_c8192_d37.txt
+260805cba05d8965f7c22ba2ec81729c0cb2ff64f38e60c5d3abf842ed316855  eval_pipeline/data/niah/niah_c8192_d50.txt
+0c961f9d64e847c421c80d5399f8f3a9d813e11de8bfb78becd4025ac99a1dd9  eval_pipeline/data/niah/niah_c8192_d62.txt
+a7a28fc5974c72b6f1ed1d8e996aeff1cec9d5891d8d2807c34a4294b5c6874c  eval_pipeline/data/niah/niah_c8192_d75.txt
+2e2e7dc92dc5ed4d578c337cb5183b371af1c172f4c1383f8402f9d7576e0174  eval_pipeline/data/niah/niah_c8192_d87.txt
+
+# ============================================================
+# SECTION 5: Pipeline scripts (host) — Wave-11 fix revision
+# ============================================================
+530b2a05d41bad98ba8c4f79ba1d50633f494ba30e6076ca7505c4d45988304a  eval_pipeline/data/build_niah_stimuli.py
+26b2deee089f2a52751c78b95b34915d327e4e2a9ef722f5be067471ced6d764  eval_pipeline/score_niah.py
+e5c088ed29780bd22e043d83d10d9dcdf185ed5e14ecc5263b504962c019a4f3  eval_pipeline/score_ppl.py
+b29549ed3ba248cff058c99ecf4fed6be121536e7116708c98432df032a7fc97  eval_pipeline/score_sig.py
+7e088572038efeeee6809cde37dd8e80867c68a19fc5ff3981c6b8c56238613c  eval_pipeline/wave11_cells.json
+7db730c95d2bad822d88467f22cdbc2038dbfcec8dafe8a2b3ba95cb369bab1a  eval_pipeline/wave11_interim_plot.py
+
+# ============================================================
+# SECTION 6: Freeze procedure for publication
+# ============================================================
+# Before treating this manifest as authoritative for repro:
+#   1. Commit all working-tree modifications:
+#        git add -A && git commit -m "freeze repro state for wave11"
+#   2. Record the new HEAD here.
+#   3. Add llama.cpp as a real submodule pinned at a specific upstream
+#      ggerganov/llama.cpp commit; record that sha.
+#   4. Rebuild eviction_bench and the four probes from the committed tree;
+#      update the SECTION 2 sha256s.
+#   5. Re-run `sha256sum eval_pipeline/data/*` and update SECTION 3/4 if
+#      any data file changed.
+#
+# Status as of this manifest:
+#   - WikiText-2 corpus replaced with canonical raw-v1 (SECTION 3 updated).
+#   - NIAH stimuli unchanged; honesty note added (SECTION 4 + NIAH_HONESTY.md).
+#   - Pipeline scripts updated for paired-test + token-weighted-geomean PPL
+#     + Pareto-frontier filter + canonical H2O recent+heavy + cumulative
+#     prefill H2O accumulator + NIAH negation-guarded judge.
+#   - eviction_bench BINARY NOT YET REBUILT (source updated; SECTION 2 sha256
+#     above is for the pre-fix binary).
+#   - Repo HEAD NOT YET MOVED to capture these changes.
+#
+# ============================================================
+# WARNING (audit notes — not signed by sha256):
+#   1. Repo has UNCOMMITTED MODIFICATIONS that include this fix set.
+#      Commit them and update the HEAD line in this file's header.
+#   2. The llama.cpp/ directory is a VENDORED COPY, not a real submodule.
+#      The recorded build-info LLAMA_COMMIT "07dca62" is the parent repo's
+#      sha, not an upstream commit. Add a real submodule pinning before
+#      claiming reproducibility against ggerganov/llama.cpp.
+#   3. WikiText-2 provenance is now recorded in eval_pipeline/data/PROVENANCE.md
+#      and pinned via the test.parquet sha256 in SECTION 3.
+#   4. NIAH stimuli are deterministic by construction (no RNG, fixed FILLER +
+#      fixed needle string). They will rebuild bit-identical from
+#      build_niah_stimuli.py without a seed. See NIAH_HONESTY.md for the
+#      canonical-Kamradt-NIAH disclosure (haystack is NOT Paul Graham essays).
+#   5. DVFS: cpu0=performance, cpu7=walt (mixed governors). Pin all
+#      cores to `performance` via scripts/android/pin_dvfs.sh before
+#      every run and record the post-pin governor state per run.
+#   6. Watchdog config not yet captured (preempt_throttle_watchdog.sh
+#      exists in scripts/android but its applied state is not logged).
+#   7. Phone thermal zone temperatures and battery state at run start
+#      are not in this manifest — log them per cell in run metadata.
+# ============================================================

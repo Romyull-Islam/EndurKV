@@ -1,0 +1,102 @@
+{
+  "kind": "ANALYSIS_SCHEMA",
+  "name": "12_kv_cache_vs_memory_temp",
+  "figure": "/home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/12_kv_cache_vs_memory_temp.png",
+  "ddr_temp_sensor_column": "ddr_temp_mc",
+  "ddr_throttle_c": 65.0,
+  "ddr_danger_c": 60.0,
+  "wave_sources": {
+    "wave4": "/home/mislam22/EndurKV_workspace/phone-logs/wave4_longdecode_1780750084",
+    "wave9": "/home/mislam22/EndurKV_workspace/phone-logs/wave9_v1fa2_stack_1780796320",
+    "wave10": "/home/mislam22/EndurKV_workspace/phone-logs/wave10_ksweep_1780815847"
+  },
+  "regression": {
+    "model": "OLS: DDR_C = slope * n_kv_cells + intercept",
+    "slope_c_per_cell": 0.001347874204498979,
+    "intercept_c": 57.035342241247484,
+    "r2": 0.058097427191710405,
+    "n_samples": 135168
+  },
+  "wave4_peak_ddr_swing_c": 8.5,
+  "wave4_steady_state_ddr_swing_c": 5.5810980832035355,
+  "per_cell": [
+    {
+      "wave": "wave4",
+      "label": "W4 vanilla",
+      "src_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave4_longdecode_1780750084/vanilla",
+      "n_sensor_samples": 13829,
+      "n_cache_samples": 18432,
+      "n_matched_samples": 18432,
+      "ddr_steady_mean_c": 59.0117848830087,
+      "peak_kv_cells": 2311.0,
+      "peak_ddr_c": 62.9
+    },
+    {
+      "wave": "wave4",
+      "label": "W4 v1 K=512",
+      "src_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave4_longdecode_1780750084/v1_K512",
+      "n_sensor_samples": 13873,
+      "n_cache_samples": 10240,
+      "n_matched_samples": 10240,
+      "ddr_steady_mean_c": 53.430686799805166,
+      "peak_kv_cells": 748.0,
+      "peak_ddr_c": 54.4
+    },
+    {
+      "wave": "wave4",
+      "label": "W4 v1_fa K=512",
+      "src_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave4_longdecode_1780750084/v1_fa_K512",
+      "n_sensor_samples": 13267,
+      "n_cache_samples": 16384,
+      "n_matched_samples": 16384,
+      "ddr_steady_mean_c": 58.01738467403736,
+      "peak_kv_cells": 2311.0,
+      "peak_ddr_c": 62.5
+    },
+    {
+      "wave": "wave9",
+      "label": "W9 v1_fa2_stack",
+      "src_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave9_v1fa2_stack_1780796320/v1_fa2_stack",
+      "n_sensor_samples": 12607,
+      "n_cache_samples": 20480,
+      "n_matched_samples": 20480,
+      "ddr_steady_mean_c": 59.27843294558096,
+      "peak_kv_cells": 2314.0,
+      "peak_ddr_c": 64.1
+    },
+    {
+      "wave": "wave10",
+      "label": "W10 K=256",
+      "src_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave10_ksweep_1780815847/K256",
+      "n_sensor_samples": 13546,
+      "n_cache_samples": 24576,
+      "n_matched_samples": 24576,
+      "ddr_steady_mean_c": 60.47264767542238,
+      "peak_kv_cells": 2314.0,
+      "peak_ddr_c": 64.1
+    },
+    {
+      "wave": "wave10",
+      "label": "W10 K=384",
+      "src_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave10_ksweep_1780815847/K384",
+      "n_sensor_samples": 13758,
+      "n_cache_samples": 24576,
+      "n_matched_samples": 24576,
+      "ddr_steady_mean_c": 60.48713123710089,
+      "peak_kv_cells": 2316.0,
+      "peak_ddr_c": 63.3
+    },
+    {
+      "wave": "wave10",
+      "label": "W10 K=1024",
+      "src_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave10_ksweep_1780815847/K1024",
+      "n_sensor_samples": 12866,
+      "n_cache_samples": 20480,
+      "n_matched_samples": 20480,
+      "ddr_steady_mean_c": 60.62991808607463,
+      "peak_kv_cells": 2314.0,
+      "peak_ddr_c": 63.7
+    }
+  ],
+  "missing_cell_dirs": []
+}

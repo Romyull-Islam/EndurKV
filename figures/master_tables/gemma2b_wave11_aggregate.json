@@ -1,0 +1,74 @@
+{
+  "vanilla": {
+    "K": "infinity",
+    "cache_K": "f16",
+    "n_chunks": 7,
+    "ppl": 9.027,
+    "ci95": [
+      6.903,
+      11.99
+    ],
+    "decode_tps": 4.67,
+    "total_wall_s": 4248.4
+  },
+  "h2o": {
+    "K": 512,
+    "cache_K": "f16",
+    "n_chunks": 7,
+    "ppl": 9.353,
+    "ci95": [
+      7.208,
+      12.35
+    ],
+    "decode_tps": 2.91,
+    "total_wall_s": 6199.2
+  },
+  "tova": {
+    "K": 512,
+    "cache_K": "f16",
+    "n_chunks": 7,
+    "ppl": 9.524,
+    "ci95": [
+      7.339,
+      12.588
+    ],
+    "decode_tps": 2.93,
+    "total_wall_s": 6167.4
+  },
+  "streamingllm": {
+    "K": 512,
+    "cache_K": "f16",
+    "n_chunks": 7,
+    "ppl": 9.645,
+    "ci95": [
+      7.487,
+      12.721
+    ],
+    "decode_tps": 2.88,
+    "total_wall_s": 6258.5
+  },
+  "adakv": {
+    "K": 512,
+    "cache_K": "f16",
+    "n_chunks": 7,
+    "ppl": 8.915,
+    "ci95": [
+      6.842,
+      11.873
+    ],
+    "decode_tps": 2.86,
+    "total_wall_s": 6293.8
+  },
+  "v1_fa2_stack": {
+    "K": 512,
+    "cache_K": "q8_0",
+    "n_chunks": 7,
+    "ppl": 10.555,
+    "ci95": [
+      8.17,
+      14.111
+    ],
+    "decode_tps": 7.36,
+    "total_wall_s": 3092.0
+  }
+}

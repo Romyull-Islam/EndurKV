@@ -1,0 +1,245 @@
+{
+  "kind": "PLOT_SCHEMA",
+  "name": "15_eviction_rate_vs_temp",
+  "title": "Eviction events visibly reduce DDR temperature (cause->effect on the timeline)",
+  "figure_path": "/home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/15_eviction_rate_vs_temp.png",
+  "panels": [
+    {
+      "row": 0,
+      "name": "cumulative_evictions_vs_walltime",
+      "y": "cumulative tokens evicted (decode-only, all layers)",
+      "y_scale": "symlog (linthresh=1000)",
+      "x": "wall time since cell start [s]",
+      "lines_per_policy": true
+    },
+    {
+      "row": 1,
+      "name": "per_iter_eviction_rate_vs_walltime",
+      "y": "per-iter eviction rate [tokens / s]",
+      "y_scale": "symlog (linthresh=10)",
+      "x": "wall time since cell start [s]",
+      "encoding": "bar per iter, centred on iter midpoint, width=iter span"
+    },
+    {
+      "row": 2,
+      "name": "ddr_temp_vs_walltime",
+      "y": "DDR temperature [deg C]  (sensors.csv ddr_temp_mc / 1000)",
+      "x": "wall time since cell start [s]",
+      "annotations": [
+        "vertical dashed line at every iter boundary that produced evictions",
+        "text callout 'drop Xdeg' when post-eviction DDR drop >= 1.0 C within 45.0 s",
+        "horizontal dotted line at DDR throttle ~65 deg C"
+      ]
+    }
+  ],
+  "policies": [
+    {
+      "policy": "v1",
+      "label": "v1 (ours, K=512)",
+      "color": "#1f77b4",
+      "cell_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave3_phi3_1780719530/v1_K512",
+      "has_data": true,
+      "n_iter": 2,
+      "total_evicted": 3739170.0,
+      "anchored_drops": [
+        {
+          "iter_idx": 0,
+          "t_end_s": 2077.0,
+          "delta_evicted": 1869585.0,
+          "pre_ddr_c": 60.2,
+          "post_min_ddr_c": 53.6,
+          "drop_c": 6.600000000000001
+        },
+        {
+          "iter_idx": 1,
+          "t_end_s": 4154.0,
+          "delta_evicted": 1869585.0,
+          "pre_ddr_c": 53.2,
+          "post_min_ddr_c": 52.9,
+          "drop_c": 0.30000000000000426
+        }
+      ]
+    },
+    {
+      "policy": "h2o",
+      "label": "H2O (K=512)",
+      "color": "#d62728",
+      "cell_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave11_eval_1780862534/Phi-3-mini-128k/h2o/ppl",
+      "has_data": true,
+      "n_iter": 4,
+      "total_evicted": 2664273.0,
+      "anchored_drops": [
+        {
+          "iter_idx": 0,
+          "t_end_s": 2600.0,
+          "delta_evicted": 868748.0,
+          "pre_ddr_c": 60.6,
+          "post_min_ddr_c": 55.2,
+          "drop_c": 5.399999999999999
+        },
+        {
+          "iter_idx": 1,
+          "t_end_s": 3975.0,
+          "delta_evicted": 888559.0,
+          "pre_ddr_c": 60.6,
+          "post_min_ddr_c": 55.2,
+          "drop_c": 5.399999999999999
+        },
+        {
+          "iter_idx": 2,
+          "t_end_s": 5477.0,
+          "delta_evicted": 9329.0,
+          "pre_ddr_c": 61.7,
+          "post_min_ddr_c": 56.3,
+          "drop_c": 5.400000000000006
+        }
+      ]
+    },
+    {
+      "policy": "tova",
+      "label": "TOVA (K=512)",
+      "color": "#9467bd",
+      "cell_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave3_phi3_1780719530/tova_K512",
+      "has_data": true,
+      "n_iter": 2,
+      "total_evicted": 3898340.0,
+      "anchored_drops": [
+        {
+          "iter_idx": 0,
+          "t_end_s": 2071.0,
+          "delta_evicted": 1949170.0,
+          "pre_ddr_c": 60.2,
+          "post_min_ddr_c": 54.0,
+          "drop_c": 6.200000000000003
+        },
+        {
+          "iter_idx": 1,
+          "t_end_s": 4142.0,
+          "delta_evicted": 1949170.0,
+          "pre_ddr_c": 52.1,
+          "post_min_ddr_c": 51.7,
+          "drop_c": 0.3999999999999986
+        }
+      ]
+    },
+    {
+      "policy": "streamingllm",
+      "label": "StreamingLLM (sim-only; on-device run aborted in wave11)",
+      "color": "#e67e22",
+      "cell_dir": null,
+      "has_data": false,
+      "n_iter": 0,
+      "total_evicted": 0,
+      "anchored_drops": []
+    },
+    {
+      "policy": "v1_fa2_stack",
+      "label": "v1_fa2_stack (ours+FA2, K=512)",
+      "color": "#2ca02c",
+      "cell_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave9_v1fa2_stack_1780796320/v1_fa2_stack",
+      "has_data": true,
+      "n_iter": 10,
+      "total_evicted": 12127050.0,
+      "anchored_drops": [
+        {
+          "iter_idx": 0,
+          "t_end_s": 312.0,
+          "delta_evicted": 1212705.0,
+          "pre_ddr_c": 57.1,
+          "post_min_ddr_c": 50.5,
+          "drop_c": 6.600000000000001
+        },
+        {
+          "iter_idx": 1,
+          "t_end_s": 652.0,
+          "delta_evicted": 1212705.0,
+          "pre_ddr_c": 59.4,
+          "post_min_ddr_c": 52.1,
+          "drop_c": 7.299999999999997
+        },
+        {
+          "iter_idx": 2,
+          "t_end_s": 1012.0,
+          "delta_evicted": 1212705.0,
+          "pre_ddr_c": 61.0,
+          "post_min_ddr_c": 54.8,
+          "drop_c": 6.200000000000003
+        },
+        {
+          "iter_idx": 3,
+          "t_end_s": 1388.0,
+          "delta_evicted": 1212705.0,
+          "pre_ddr_c": 61.4,
+          "post_min_ddr_c": 53.2,
+          "drop_c": 8.199999999999996
+        },
+        {
+          "iter_idx": 4,
+          "t_end_s": 1749.0,
+          "delta_evicted": 1212705.0,
+          "pre_ddr_c": 60.6,
+          "post_min_ddr_c": 53.2,
+          "drop_c": 7.399999999999999
+        },
+        {
+          "iter_idx": 5,
+          "t_end_s": 2113.0,
+          "delta_evicted": 1212705.0,
+          "pre_ddr_c": 61.0,
+          "post_min_ddr_c": 54.8,
+          "drop_c": 6.200000000000003
+        },
+        {
+          "iter_idx": 6,
+          "t_end_s": 2486.0,
+          "delta_evicted": 1212705.0,
+          "pre_ddr_c": 62.1,
+          "post_min_ddr_c": 56.0,
+          "drop_c": 6.100000000000001
+        },
+        {
+          "iter_idx": 7,
+          "t_end_s": 2976.0,
+          "delta_evicted": 1212705.0,
+          "pre_ddr_c": 56.0,
+          "post_min_ddr_c": 53.2,
+          "drop_c": 2.799999999999997
+        },
+        {
+          "iter_idx": 8,
+          "t_end_s": 3355.0,
+          "delta_evicted": 1212705.0,
+          "pre_ddr_c": 62.1,
+          "post_min_ddr_c": 56.0,
+          "drop_c": 6.100000000000001
+        },
+        {
+          "iter_idx": 9,
+          "t_end_s": 3719.0,
+          "delta_evicted": 1212705.0,
+          "pre_ddr_c": 55.6,
+          "post_min_ddr_c": 54.4,
+          "drop_c": 1.2000000000000028
+        }
+      ]
+    }
+  ],
+  "params": {
+    "DROP_THRESHOLD_C": 1.0,
+    "POST_EVICT_WINDOW_S": 45.0,
+    "PRE_EVICT_WINDOW_S": 5.0
+  },
+  "data_sources": {
+    "per_iter_eviction_count": [
+      "iter*/meta.json::evicted_total_decode  (preferred, paper canonical)",
+      "stress.csv::evicted  (fallback, treated as cumulative-then-diffed)"
+    ],
+    "ddr_temp": "sensors.csv::ddr_temp_mc (millidegree C / 1000)",
+    "iter_boundaries": "stress.csv::t_elapsed_s (re-zeroed per cell)"
+  },
+  "notes": [
+    "Each cell ran on a separate boot/thermal state; per-cell time is wall_time_s_since_cell_start, so traces are OVERLAID (not chained).",
+    "StreamingLLM is listed in the legend but has NO on-device data: the wave11_eval run was interrupted after the h2o cell completed (progress.log line 3 lists it; no /streamingllm/ dir exists).",
+    "wave3 per-iter eviction counts in stress.csv look constant because the field is the cumulative-decode total; we instead read evicted_total_decode from each iter's meta.json."
+  ]
+}

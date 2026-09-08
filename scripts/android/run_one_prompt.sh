@@ -82,6 +82,37 @@ fi
 PROBE_DIR=$(dirname "$PROBE")
 export LD_LIBRARY_PATH="$PROBE_DIR:$PROBE_DIR/../lib:$LD_LIBRARY_PATH"
 
+# ---- 0. Optional pre-cooldown ----
+# If $COOLDOWN_TEMP_C is set, wait until the hottest non-trip thermal zone is
+# below that threshold (in degrees C) before starting the sampler/probe. This
+# enforces a cold-baseline start for repeatable thermal measurements.
+# Tip: set COOLDOWN_TEMP_C=55 for routine repeatability; 45 for controller A/B.
+if [ -n "$COOLDOWN_TEMP_C" ]; then
+    threshold_mc=$((COOLDOWN_TEMP_C * 1000))
+    wait_start=$(date +%s)
+    max_wait=300   # cap at 5 minutes; never block indefinitely
+    while :; do
+        hottest=$(for z in /sys/class/thermal/thermal_zone*; do
+            [ -r "$z/temp" ] || continue
+            name=$(cat "$z/type" 2>/dev/null)
+            case "$name" in *trip*|*pmh*|*pmr*|*vbat*|*bcl*) continue;; esac
+            t=$(cat "$z/temp" 2>/dev/null)
+            [ -n "$t" ] && [ "$t" -gt 30000 ] && [ "$t" -lt 100000 ] && echo "$t"
+        done | sort -n -r | head -1)
+        [ -z "$hottest" ] && break
+        if [ "$hottest" -le "$threshold_mc" ]; then
+            echo "[cooldown] hottest=$((hottest/1000))C  ok (<=${COOLDOWN_TEMP_C}C)" >&2
+            break
+        fi
+        elapsed=$(( $(date +%s) - wait_start ))
+        if [ "$elapsed" -ge "$max_wait" ]; then
+            echo "[cooldown] timed out at $((hottest/1000))C after ${max_wait}s — proceeding" >&2
+            break
+        fi
+        sleep 5
+    done
+fi
+
 # ---- 1. start sampler ----
 SAMP_LOG="$OUT_DIR/${PROMPT_ID}.sampler.stderr"
 "$SAMPLER" --out "$SEN_CSV" --hz "$SENSORS_HZ" 2>"$SAMP_LOG" &
@@ -99,6 +130,21 @@ THERMAL_AT_START=$(for z in /sys/class/thermal/thermal_zone*; do
     t=$(cat "$z/temp" 2>/dev/null)
     printf '"%s":%s,' "$name" "$t"
 done | sed 's/,$//')
+
+# ---- 2b. Snapshot system-wide UFS write totals via dumpsys storaged ----
+# Heavier than sysfs reads (binder ~50-100ms) so we capture only at start and
+# end of each prompt instead of every sample. Output is one line per UID with
+# foreground/background read/write bytes. We sum bytes_written across all
+# UIDs and emit a single scalar. This is the closest non-root ground-truth
+# we have for "bytes written to UFS during this prompt" — strictly tighter
+# than pswpout x 4 KB because storaged tracks all writes, not just swap-out.
+storaged_total_bytes_written() {
+    dumpsys storaged 2>/dev/null | awk '
+        /^[0-9]+ / { fg_w += $7; bg_w += $9 }
+        END { print fg_w + bg_w }
+    '
+}
+STORAGED_W_AT_START=$(storaged_total_bytes_written)
 
 # ---- 3. run the probe ----
 "$PROBE" \
@@ -120,6 +166,7 @@ THERMAL_AT_END=$(for z in /sys/class/thermal/thermal_zone*; do
     t=$(cat "$z/temp" 2>/dev/null)
     printf '"%s":%s,' "$name" "$t"
 done | sed 's/,$//')
+STORAGED_W_AT_END=$(storaged_total_bytes_written)
 
 # ---- 4. stop the sampler cleanly ----
 kill -TERM "$SAMP_PID" 2>/dev/null
@@ -147,6 +194,8 @@ kill -KILL "$SAMP_PID" 2>/dev/null
     printf '  "end_monotonic_s": %s,\n' "$END_MONO"
     printf '  "thermal_at_start_mc": {%s},\n' "$THERMAL_AT_START"
     printf '  "thermal_at_end_mc": {%s},\n' "$THERMAL_AT_END"
+    printf '  "storaged_bytes_written_at_start": %s,\n' "${STORAGED_W_AT_START:-0}"
+    printf '  "storaged_bytes_written_at_end": %s,\n' "${STORAGED_W_AT_END:-0}"
     printf '  "probe_exit_code": %s\n' "$PROBE_RC"
     printf '}\n'
 } > "$RUN_META"

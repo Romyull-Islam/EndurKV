@@ -1,0 +1,281 @@
+{
+  "benchmark": "NIAH Tier-1 (8 stimuli, depth 0/12/25/37/50/62/75/87%)",
+  "model": "Phi-3-mini-128k Q4_K_M",
+  "ctx": 4096,
+  "K": 512,
+  "max_decode_tokens": 64,
+  "needle": "eat a sandwich at Dolores Park on a sunny day",
+  "judge": "strict substring match in gen.txt",
+  "policies": {
+    "vanilla": {
+      "cells": [
+        {
+          "stim": 0,
+          "tps": 3.163,
+          "prefill_ms": 443344.876,
+          "peak_rss_kb": 3934708,
+          "peak_kv_cells": 3772,
+          "evicted_prefill": 0,
+          "evicted_decode": 0,
+          "ok": true
+        },
+        {
+          "stim": 1,
+          "tps": 3.025,
+          "prefill_ms": 442216.376,
+          "peak_rss_kb": 3934220,
+          "peak_kv_cells": 3772,
+          "evicted_prefill": 0,
+          "evicted_decode": 0,
+          "ok": true
+        },
+        {
+          "stim": 2,
+          "tps": 2.698,
+          "prefill_ms": 469062.956,
+          "peak_rss_kb": 3934424,
+          "peak_kv_cells": 3771,
+          "evicted_prefill": 0,
+          "evicted_decode": 0,
+          "ok": false
+        },
+        {
+          "stim": 3,
+          "tps": 2.714,
+          "prefill_ms": 523130.104,
+          "peak_rss_kb": 3934508,
+          "peak_kv_cells": 3772,
+          "evicted_prefill": 0,
+          "evicted_decode": 0,
+          "ok": true
+        },
+        {
+          "stim": 4,
+          "tps": 2.716,
+          "prefill_ms": 523380.804,
+          "peak_rss_kb": 3934384,
+          "peak_kv_cells": 3772,
+          "evicted_prefill": 0,
+          "evicted_decode": 0,
+          "ok": true
+        },
+        {
+          "stim": 5,
+          "tps": 2.718,
+          "prefill_ms": 526938.451,
+          "peak_rss_kb": 3934300,
+          "peak_kv_cells": 3772,
+          "evicted_prefill": 0,
+          "evicted_decode": 0,
+          "ok": true
+        },
+        {
+          "stim": 6,
+          "tps": 2.699,
+          "prefill_ms": 523019.891,
+          "peak_rss_kb": 3934576,
+          "peak_kv_cells": 3772,
+          "evicted_prefill": 0,
+          "evicted_decode": 0,
+          "ok": true
+        },
+        {
+          "stim": 7,
+          "tps": 2.674,
+          "prefill_ms": 523684.732,
+          "peak_rss_kb": 3934548,
+          "peak_kv_cells": 3772,
+          "evicted_prefill": 0,
+          "evicted_decode": 0,
+          "ok": true
+        }
+      ],
+      "accuracy": "7/8",
+      "mean_tps": 2.8,
+      "mean_prefill_s": 496.8,
+      "peak_rss_mb": 3842.5,
+      "mean_kv_cells": 3772.0,
+      "total_evicted_decode": 0
+    },
+    "adakv": {
+      "cells": [
+        {
+          "stim": 0,
+          "tps": 2.022,
+          "prefill_ms": 568483.425,
+          "peak_rss_kb": 4051492,
+          "peak_kv_cells": 3772,
+          "evicted_prefill": 1470,
+          "evicted_decode": 0,
+          "ok": true
+        },
+        {
+          "stim": 1,
+          "tps": 1.872,
+          "prefill_ms": 585994.885,
+          "peak_rss_kb": 4051536,
+          "peak_kv_cells": 3772,
+          "evicted_prefill": 1445,
+          "evicted_decode": 0,
+          "ok": true
+        },
+        {
+          "stim": 2,
+          "tps": 1.798,
+          "prefill_ms": 670185.16,
+          "peak_rss_kb": 4051396,
+          "peak_kv_cells": 3771,
+          "evicted_prefill": 1487,
+          "evicted_decode": 0,
+          "ok": false
+        },
+        {
+          "stim": 3,
+          "tps": 1.713,
+          "prefill_ms": 670645.287,
+          "peak_rss_kb": 4051712,
+          "peak_kv_cells": 3772,
+          "evicted_prefill": 1486,
+          "evicted_decode": 0,
+          "ok": true
+        },
+        {
+          "stim": 4,
+          "tps": 1.761,
+          "prefill_ms": 670233.488,
+          "peak_rss_kb": 4051908,
+          "peak_kv_cells": 3772,
+          "evicted_prefill": 1564,
+          "evicted_decode": 0,
+          "ok": true
+        },
+        {
+          "stim": 5,
+          "tps": 1.796,
+          "prefill_ms": 669600.0,
+          "peak_rss_kb": 4051388,
+          "peak_kv_cells": 3771,
+          "evicted_prefill": 1555,
+          "evicted_decode": 0,
+          "ok": true
+        },
+        {
+          "stim": 6,
+          "tps": 1.744,
+          "prefill_ms": 670064.344,
+          "peak_rss_kb": 4051604,
+          "peak_kv_cells": 3772,
+          "evicted_prefill": 1591,
+          "evicted_decode": 0,
+          "ok": true
+        },
+        {
+          "stim": 7,
+          "tps": 1.753,
+          "prefill_ms": 669957.987,
+          "peak_rss_kb": 4051848,
+          "peak_kv_cells": 3772,
+          "evicted_prefill": 1577,
+          "evicted_decode": 0,
+          "ok": true
+        }
+      ],
+      "accuracy": "7/8",
+      "mean_tps": 1.81,
+      "mean_prefill_s": 646.9,
+      "peak_rss_mb": 3956.9,
+      "mean_kv_cells": 3772.0,
+      "total_evicted_decode": 0
+    },
+    "v1_fa2_stack": {
+      "cells": [
+        {
+          "stim": 0,
+          "tps": 7.705,
+          "prefill_ms": 553291.371,
+          "peak_rss_kb": 3671352,
+          "peak_kv_cells": 3763,
+          "evicted_prefill": 3940,
+          "evicted_decode": 0,
+          "ok": false
+        },
+        {
+          "stim": 1,
+          "tps": 7.033,
+          "prefill_ms": 564055.613,
+          "peak_rss_kb": 3671668,
+          "peak_kv_cells": 3759,
+          "evicted_prefill": 3942,
+          "evicted_decode": 0,
+          "ok": false
+        },
+        {
+          "stim": 2,
+          "tps": 6.51,
+          "prefill_ms": 590677.834,
+          "peak_rss_kb": 3671412,
+          "peak_kv_cells": 3763,
+          "evicted_prefill": 3941,
+          "evicted_decode": 0,
+          "ok": false
+        },
+        {
+          "stim": 3,
+          "tps": 6.477,
+          "prefill_ms": 652525.15,
+          "peak_rss_kb": 3671428,
+          "peak_kv_cells": 3763,
+          "evicted_prefill": 3944,
+          "evicted_decode": 0,
+          "ok": false
+        },
+        {
+          "stim": 4,
+          "tps": 6.543,
+          "prefill_ms": 651966.393,
+          "peak_rss_kb": 3671736,
+          "peak_kv_cells": 3763,
+          "evicted_prefill": 3945,
+          "evicted_decode": 0,
+          "ok": false
+        },
+        {
+          "stim": 5,
+          "tps": 6.559,
+          "prefill_ms": 653829.659,
+          "peak_rss_kb": 3671624,
+          "peak_kv_cells": 3759,
+          "evicted_prefill": 3942,
+          "evicted_decode": 0,
+          "ok": false
+        },
+        {
+          "stim": 6,
+          "tps": 6.535,
+          "prefill_ms": 652473.368,
+          "peak_rss_kb": 3671296,
+          "peak_kv_cells": 3763,
+          "evicted_prefill": 3944,
+          "evicted_decode": 0,
+          "ok": false
+        },
+        {
+          "stim": 7,
+          "tps": 6.485,
+          "prefill_ms": 652545.622,
+          "peak_rss_kb": 3671720,
+          "peak_kv_cells": 3763,
+          "evicted_prefill": 3944,
+          "evicted_decode": 0,
+          "ok": false
+        }
+      ],
+      "accuracy": "0/8",
+      "mean_tps": 6.73,
+      "mean_prefill_s": 621.4,
+      "peak_rss_mb": 3585.7,
+      "mean_kv_cells": 3762.0,
+      "total_evicted_decode": 0
+    }
+  }
+}

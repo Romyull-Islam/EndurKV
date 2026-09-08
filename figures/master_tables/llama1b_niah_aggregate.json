@@ -1,0 +1,229 @@
+{
+  "benchmark": "NIAH Tier-1 (8 stimuli, depth sweep)",
+  "model": "Llama-3.2-1B-Instruct Q4_K_M",
+  "ctx": 4096,
+  "K": 512,
+  "max_decode": 64,
+  "judge": "FULL = both 'dolores park' AND 'sandwich' in gen",
+  "policies": {
+    "vanilla": {
+      "cells": [
+        {
+          "stim": 0,
+          "ok": true,
+          "tps": 11.582,
+          "prefill_ms": 101934.057,
+          "peak_rss_kb": 975984,
+          "evicted_prefill": 0
+        },
+        {
+          "stim": 1,
+          "ok": true,
+          "tps": 11.772,
+          "prefill_ms": 101771.887,
+          "peak_rss_kb": 976112,
+          "evicted_prefill": 0
+        },
+        {
+          "stim": 2,
+          "ok": true,
+          "tps": 11.651,
+          "prefill_ms": 101939.09,
+          "peak_rss_kb": 975920,
+          "evicted_prefill": 0
+        },
+        {
+          "stim": 3,
+          "ok": true,
+          "tps": 11.622,
+          "prefill_ms": 101810.062,
+          "peak_rss_kb": 976208,
+          "evicted_prefill": 0
+        },
+        {
+          "stim": 4,
+          "ok": true,
+          "tps": 11.743,
+          "prefill_ms": 101771.14,
+          "peak_rss_kb": 975860,
+          "evicted_prefill": 0
+        },
+        {
+          "stim": 5,
+          "ok": true,
+          "tps": 11.827,
+          "prefill_ms": 101961.938,
+          "peak_rss_kb": 976176,
+          "evicted_prefill": 0
+        },
+        {
+          "stim": 6,
+          "ok": true,
+          "tps": 11.781,
+          "prefill_ms": 101858.869,
+          "peak_rss_kb": 975872,
+          "evicted_prefill": 0
+        },
+        {
+          "stim": 7,
+          "ok": true,
+          "tps": 11.672,
+          "prefill_ms": 101812.067,
+          "peak_rss_kb": 975904,
+          "evicted_prefill": 0
+        }
+      ],
+      "accuracy": "8/8",
+      "mean_tps": 11.71,
+      "mean_prefill_s": 101.9,
+      "peak_rss_mb": 953.3,
+      "mean_evicted_prefill": 0.0
+    },
+    "adakv": {
+      "cells": [
+        {
+          "stim": 0,
+          "ok": true,
+          "tps": 6.232,
+          "prefill_ms": 140524.583,
+          "peak_rss_kb": 1031064,
+          "evicted_prefill": 895
+        },
+        {
+          "stim": 1,
+          "ok": true,
+          "tps": 6.285,
+          "prefill_ms": 140449.676,
+          "peak_rss_kb": 1030972,
+          "evicted_prefill": 870
+        },
+        {
+          "stim": 2,
+          "ok": true,
+          "tps": 6.198,
+          "prefill_ms": 140579.283,
+          "peak_rss_kb": 1031204,
+          "evicted_prefill": 846
+        },
+        {
+          "stim": 3,
+          "ok": true,
+          "tps": 5.973,
+          "prefill_ms": 140867.204,
+          "peak_rss_kb": 1030988,
+          "evicted_prefill": 845
+        },
+        {
+          "stim": 4,
+          "ok": true,
+          "tps": 6.11,
+          "prefill_ms": 140788.267,
+          "peak_rss_kb": 1031116,
+          "evicted_prefill": 869
+        },
+        {
+          "stim": 5,
+          "ok": true,
+          "tps": 6.061,
+          "prefill_ms": 140572.753,
+          "peak_rss_kb": 1030832,
+          "evicted_prefill": 861
+        },
+        {
+          "stim": 6,
+          "ok": true,
+          "tps": 6.194,
+          "prefill_ms": 140435.347,
+          "peak_rss_kb": 1030776,
+          "evicted_prefill": 886
+        },
+        {
+          "stim": 7,
+          "ok": true,
+          "tps": 5.907,
+          "prefill_ms": 145562.97,
+          "peak_rss_kb": 1030980,
+          "evicted_prefill": 876
+        }
+      ],
+      "accuracy": "8/8",
+      "mean_tps": 6.12,
+      "mean_prefill_s": 141.2,
+      "peak_rss_mb": 1007.0,
+      "mean_evicted_prefill": 868.0
+    },
+    "v1_fa2_stack": {
+      "cells": [
+        {
+          "stim": 0,
+          "ok": false,
+          "tps": 20.814,
+          "prefill_ms": 135521.414,
+          "peak_rss_kb": 997864,
+          "evicted_prefill": 3302
+        },
+        {
+          "stim": 1,
+          "ok": false,
+          "tps": 20.612,
+          "prefill_ms": 136015.556,
+          "peak_rss_kb": 997808,
+          "evicted_prefill": 3303
+        },
+        {
+          "stim": 2,
+          "ok": false,
+          "tps": 20.61,
+          "prefill_ms": 135883.416,
+          "peak_rss_kb": 997896,
+          "evicted_prefill": 3302
+        },
+        {
+          "stim": 3,
+          "ok": false,
+          "tps": 20.854,
+          "prefill_ms": 135867.702,
+          "peak_rss_kb": 997980,
+          "evicted_prefill": 3302
+        },
+        {
+          "stim": 4,
+          "ok": false,
+          "tps": 20.756,
+          "prefill_ms": 135818.21,
+          "peak_rss_kb": 997872,
+          "evicted_prefill": 3302
+        },
+        {
+          "stim": 5,
+          "ok": false,
+          "tps": 20.643,
+          "prefill_ms": 135706.872,
+          "peak_rss_kb": 997932,
+          "evicted_prefill": 3304
+        },
+        {
+          "stim": 6,
+          "ok": false,
+          "tps": 20.674,
+          "prefill_ms": 135950.786,
+          "peak_rss_kb": 997540,
+          "evicted_prefill": 3304
+        },
+        {
+          "stim": 7,
+          "ok": false,
+          "tps": 19.918,
+          "prefill_ms": 138449.029,
+          "peak_rss_kb": 997840,
+          "evicted_prefill": 3302
+        }
+      ],
+      "accuracy": "0/8",
+      "mean_tps": 20.61,
+      "mean_prefill_s": 136.2,
+      "peak_rss_mb": 974.6,
+      "mean_evicted_prefill": 3303.0
+    }
+  }
+}

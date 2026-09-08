@@ -45,7 +45,9 @@ if _VENV_PY.exists():
         os.execv(str(_VENV_PY), [str(_VENV_PY), __file__, *sys.argv[1:]])
 
 ROOT     = Path(__file__).resolve().parents[1]
-OUT_PATH = ROOT / "data" / "prompts_longctx.jsonl"
+# Allow the on-phone port to redirect output to a workspace-relative location.
+_OUT_OVERRIDE = os.environ.get("PROMPTS_OUT")
+OUT_PATH = Path(_OUT_OVERRIDE) if _OUT_OVERRIDE else (ROOT / "data" / "prompts_longctx.jsonl")
 
 # ----- per-task prompt templates ---------------------------------------------
 LONGBENCH_TASKS = [
