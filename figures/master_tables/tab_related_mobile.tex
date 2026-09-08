@@ -1,0 +1,51 @@
+% ============================================================================
+% tab_related_mobile.tex -- what mobile KV-cache work has ACTUALLY measured.
+%                           (2026-08-03)
+%
+% Every row was verified from the paper's own evaluation section, not its
+% abstract or title -- because the titles are systematically misleading here.
+% Two papers branded "mobile" (KVSwap, MobiLoRA -- the latter co-authored with a
+% phone vendor) evaluate on Jetson boards; MobiLoRA calls the AGX Orin "the
+% widely used mobile development platform". KeyDiff's only phone result is a
+% normalized scoring-kernel microbenchmark in Appendix H.4. DynaKV's four
+% OnePlus devices are real, but it is CPU-only and lists GPU as future work.
+%
+% The table exists to support one narrow, checkable claim: KV-cache EVICTION has
+% never been deployed end-to-end on a smartphone GPU. It is not a quality
+% ranking -- several of these systems are excellent at what they do.
+% ============================================================================
+\begin{table*}[tb]
+\caption{Mobile KV-cache work: what each paper \emph{measured}, verified from its evaluation section rather than its title. The field splits cleanly: policies that \emph{evict} run on servers or Jetson-class boards; systems that run on \emph{phones} keep every token (offload, reuse, or quantize); and studies that do use a phone \emph{GPU} apply no cache management at all. $\mu$KV occupies the empty cell.}
+\label{tab:related-mobile}
+\centering\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l l l c l l}
+\toprule
+\textbf{System} & \textbf{Venue/yr} & \textbf{Hardware evaluated on} & \textbf{Phone} & \textbf{Compute used} & \textbf{KV mechanism} \\
+\midrule
+\multicolumn{6}{l}{\emph{KV eviction, but never on a phone}} \\
+SnapKV, Ada-KV, H2O, TOVA, PyramidKV & '23--'24 & A100-class servers & \no & server GPU & eviction \\
+KVSwap & MobiSys'25 & Jetson Orin AGX 64\,GB $+$ NVMe & \no & board GPU & offload to disk \\
+MobiLoRA & ACL'25\rlap{$^{\dagger}$} & NVIDIA AGX Orin & \no & board GPU & cache reuse \\
+KeyDiff & NeurIPS'25\rlap{$^{\ddagger}$} & A100 80GB; unnamed Samsung phone (App.~H.4) & \yes\rlap{$^{\S}$} & \textbf{not stated} & eviction \\
+\midrule
+\multicolumn{6}{l}{\emph{On a real phone, but never eviction --- and never the GPU}} \\
+DynaKV & 2025\rlap{$^{\dagger}$} & OnePlus Ace5\,Pro / 12 / Ace3 / Ace2 & \yes & \textbf{CPU only}\rlap{$^{\P}$} & offload to UFS \\
+ActiveFlow & 2025 & OnePlus 12, Pixel 6, Infinix ZERO 30 & \yes & \textbf{CPU only} & weights, not KV \\
+PowerInfer-2 & MobiSys'25 & OnePlus 12, OnePlus Ace 2 & \yes & CPU $+$ NPU & neurons, not KV \\
+PerCache & 2026 & Pixel 7, Redmi K60 Pro, S22 Ultra, Ace 6 & \yes & not stated & QKV reuse (RAG) \\
+Persistent Q4 KV & 2026 & MacBook Pro M4 Pro & \no & Metal & quantize $+$ persist \\
+\midrule
+\multicolumn{6}{l}{\emph{On a phone GPU, but no cache management at all}} \\
+LLMs in Your Pockets & 2026 & 7 devices: Adreno 750/730, Mali-G720/G78 & \yes & CPU, GPU, NPU & \textbf{none} \\
+LLM Inference at the Edge & 2026 & S24 Ultra (Adreno 750), iPhone 16 Pro & \yes & \textbf{GPU} & \textbf{none} \\
+\midrule
+\textbf{$\mu$KV (this work)} & --- & \textbf{OnePlus 15, Adreno 840} & \yes & \textbf{CPU and GPU} & \textbf{eviction $+$ compaction} \\
+\bottomrule
+\end{tabular}
+
+\vspace{2pt}
+{\footnotesize $^{\dagger}$co-authored with Honor Device Co. \quad $^{\ddagger}$Qualcomm AI Research. \quad
+$^{\S}$every model result (LongBench, NIAH, and the headline 30\% end-to-end TTFT gain) is measured on A100; the phone appears only in App.~H.4, which reports five \emph{normalized} ratios for the eviction-\emph{scoring kernel} --- no model is run on the device, and no absolute latency, throughput, footprint or energy is given. \quad
+$^{\P}$``we adopt the CPU as the primary backend''; CPU--GPU is Discussion~2, future work.}
+\end{table*}

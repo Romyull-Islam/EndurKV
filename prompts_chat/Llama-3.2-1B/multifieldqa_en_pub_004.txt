@@ -1,0 +1,128 @@
+<|begin_of_text|><|start_header_id|>user<|end_header_id|>
+
+Read the following document and answer the question.
+
+Document:
+The 1951 Ohio State Buckeyes baseball team represented the Ohio State University in the 1951 NCAA baseball season. The head coach was Marty Karow, serving his 1st year.
+
+The Buckeyes lost in the College World Series, defeated by the Texas A&M Aggies.
+
+Roster
+
+Schedule 
+
+! style="" | Regular Season
+|- valign="top" 
+
+|- align="center" bgcolor="#ccffcc"
+| 1 || March 16 || at  || Unknown • San Antonio, Texas || 15–3 || 1–0 || 0–0
+|- align="center" bgcolor="#ffcccc"
+| 2 || March 17 || at B. A. M. C. || Unknown • San Antonio, Texas || 7–8 || 1–1 || 0–0
+|- align="center" bgcolor="#ffcccc"
+| 3 || March 19 || at  || Clark Field • Austin, Texas || 0–8 || 1–2 || 0–0
+|- align="center" bgcolor="#ffcccc"
+| 4 || March 20 || at Texas || Clark Field • Austin, Texas || 3–4 || 1–3 || 0–0
+|- align="center" bgcolor="#ccffcc"
+| 5 || March 21 || at  || Unknown • Houston, Texas || 14–6 || 2–3 || 0–0
+|- align="center" bgcolor="#ffcccc"
+| 6 || March 22 || at Rice || Unknown • Houston, Texas || 2–3 || 2–4 || 0–0
+|- align="center" bgcolor="#ccffcc"
+| 7 || March 23 || at  || Unknown • Fort Worth, Texas || 4–2 || 3–4 || 0–0
+|- align="center" bgcolor="#ccffcc"
+| 8 || March 24 || at TCU || Unknown • Fort Worth, Texas || 7–3 || 4–4 || 0–0
+|- align="center" bgcolor="#ccffcc"
+| 9 || March 24 || at  || Unknown • St. Louis, Missouri || 10–4 || 5–4 || 0–0
+|-
+
+|- align="center" bgcolor="#ccffcc"
+| 10 || April 6 ||  || Varsity Diamond • Columbus, Ohio || 2–0 || 6–4 || 0–0
+|- align="center" bgcolor="#ccffcc"
+| 11 || April 7 ||  || Varsity Diamond • Columbus, Ohio || 15–1 || 7–4 || 0–0
+|- align="center" bgcolor="#ffcccc"
+| 12 || April 14 ||  || Varsity Diamond • Columbus, Ohio || 0–1 || 7–5 || 0–0
+|- align="center" bgcolor="#ccffcc"
+| 13 || April 20 ||  || Varsity Diamond • Columbus, Ohio || 10–9 || 8–5 || 1–0
+|- align="center" bgcolor="#ccffcc"
+| 14 || April 21 || Minnesota || Varsity Diamond • Columbus, Ohio || 7–0 || 9–5 || 2–0
+|- align="center" bgcolor="#ffcccc"
+| 15 || April 24 || at  || Unknown • Oxford, Ohio || 3–4 || 9–6 || 2–0
+|- align="center" bgcolor="#ffcccc"
+| 16 || April 27 || at  || Hyames Field • Kalamazoo, Michigan || 2–3 || 9–7 || 2–0
+|- align="center" bgcolor="#ffcccc"
+| 17 || April 28 || at Western Michigan || Hyames Field • Kalamazoo, Michigan || 5–7 || 9–8 || 2–0
+|-
+
+|- align="center" bgcolor="#ccffcc"
+| 18 || May 1 || at  || Unknown • Athens, Ohio || 7–6 || 10–8 || 2–0
+|- align="center" bgcolor="#ccffcc"
+| 19 || May 4 ||  || Varsity Diamond • Columbus, Ohio || 12–6 || 11–8 || 3–0
+|- align="center" bgcolor="#ccffcc"
+| 20 || May 5 || Purdue || Varsity Diamond • Columbus, Ohio || 14–4 || 12–8 || 4–0
+|- align="center" bgcolor="#ffcccc"
+| 21 || May 8 ||  || Varsity Diamond • Columbus, Ohio || 6–8 || 12–9 || 4–0
+|- align="center" bgcolor="#ccffcc"
+| 22 || May 9 || at Dayton || Unknown • Dayton, Ohio || 11–2 || 13–9 || 4–0
+|- align="center" bgcolor="#ccffcc"
+| 23 || May 12 ||  || Varsity Diamond • Columbus, Ohio || 6–5 || 14–9 || 5–0
+|- align="center" bgcolor="#ccffcc"
+| 24 || May 12 || Indiana || Varsity Diamond • Columbus, Ohio || 5–2 || 15–9 || 6–0
+|- align="center" bgcolor="#ccffcc"
+| 25 || May 15 || Ohio || Varsity Diamond • Columbus, Ohio || 6–0 || 16–9 || 6–0
+|- align="center" bgcolor="#ffcccc"
+| 26 || May 18 || at  || Northwestern Park • Evanston, Illinois || 1–3 || 16–10 || 6–1
+|- align="center" bgcolor="#ccffcc"
+| 27 || May 19 || at Northwestern || Northwestern Park • Evanston, Illinois || 10–3 || 17–10 || 7–1
+|- align="center" bgcolor="#ccffcc"
+| 28 || May 22 || at Cincinnati || Carson Field • Cincinnati, Ohio || 8–4 || 18–10 || 7–1
+|- align="center" bgcolor="#ccffcc"
+| 29 || May 25 ||  || Varsity Diamond • Columbus, Ohio || 4–1 || 19–10 || 8–1
+|- align="center" bgcolor="#ffcccc"
+| 30 || May 25 || Michigan || Varsity Diamond • Columbus, Ohio || 3–6 || 19–11 || 8–2
+|- align="center" bgcolor="#ffcccc"
+| 31 || May 30 || Miami (OH) || Varsity Diamond • Columbus, Ohio || 3–4 || 19–12 || 8–2
+|-
+
+|- align="center" bgcolor="#ccffcc"
+| 32 || June 1 || at  || Old College Field • East Lansing, Michigan || 8–0 || 20–12 || 9–2
+|- align="center" bgcolor="#ccffcc"
+| 33 || June 2 || at Michigan State || Old College Field • East Lansing, Michigan || 9–8 || 21–12 || 10–2
+|-
+
+|-
+|-
+! style="" | Postseason
+|- valign="top"
+
+|- align="center" bgcolor="#ccffcc"
+| 34 || June 8 || Western Michigan || Varsity Diamond • Columbus, Ohio || 1–0 || 22–12 || 10–2
+|- align="center" bgcolor="#ffcccc"
+| 35 || June 8 || Western Michigan || Varsity Diamond • Columbus, Ohio || 2–4 || 22–13 || 10–2
+|- align="center" bgcolor="#ccffcc"
+| 36 || June 9 || Western Michigan || Varsity Diamond • Columbus, Ohio || 3–2 || 23–13 || 10–2
+|-
+
+|- align="center" bgcolor="#ffcccc"
+| 37 || June 13 || Oklahoma || Omaha Municipal Stadium • Omaha, Nebraska || 8–9 || 23–14 || 10–2
+|- align="center" bgcolor="#ffcccc"
+| 38 || June 13 || Texas A&M || Omaha Municipal Stadium • Omaha, Nebraska || 2–3 || 23–15 || 10–2
+|-
+
+Awards and honors 
+Dick Hauck
+ First Team All-Big Ten
+
+Stewart Hein
+ First Team All-Big Ten
+
+References 
+
+Ohio State Buckeyes baseball seasons
+Ohio State Buckeyes baseball
+Big Ten Conference baseball champion seasons
+Ohio State
+College World Series seasons
+
+Question: What was the Buckeyes' record in their first game of the season?
+Answer:
+<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+

@@ -12,6 +12,14 @@
 #include <limits>
 #include <map>
 #include <stdexcept>
+#include <vector>
+
+// EndurKV (2026-08-31): madvise-based tail reclaim needs the POSIX memory API.
+#if defined(__linux__) || defined(__ANDROID__)
+#  include <sys/mman.h>
+#  include <unistd.h>
+#  define ENDURKV_HAVE_MADVISE 1
+#endif
 
 static bool ggml_is_power_of_2(int n) {
     return (n & (n - 1)) == 0;
@@ -325,6 +333,406 @@ void llama_kv_cache::clear(bool data) {
             ggml_backend_buffer_clear(buf.get(), 0);
         }
     }
+}
+
+// EndurKV (2026-07-25): cell-index-level eviction. See header for why this is
+// required for M-RoPE / vision caches (all tokens of an image share one dim-0
+// position, so position-based seq_rm cannot express a per-token keep mask).
+// Kept cells retain their pos and 2D ext (x,y), so M-RoPE attention over the
+// compacted cache stays spatially correct.
+uint32_t llama_kv_cache::endurkv_rm_cells(llama_seq_id seq_id, const int8_t * keep, uint32_t n) {
+    GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
+    if (!keep) {
+        return 0;
+    }
+
+    auto & cells = v_cells[seq_to_stream[seq_id]];
+    auto & head  = v_heads[seq_to_stream[seq_id]];
+
+    uint32_t new_head = cells.size();
+    uint32_t removed  = 0;
+
+    const uint32_t n_max = std::min<uint32_t>(n, cells.size());
+
+    for (uint32_t i = 0; i < n_max; ++i) {
+        if (keep[i]) {
+            continue;
+        }
+        if (cells.is_empty(i) || !cells.seq_has(i, seq_id)) {
+            continue;
+        }
+        if (cells.seq_rm(i, seq_id)) {
+            if (new_head == cells.size()) {
+                new_head = i;
+            }
+        }
+        ++removed;
+    }
+
+    // If we freed up a slot, set head to it so searching can start there.
+    if (new_head != cells.size() && new_head < head) {
+        head = new_head;
+    }
+
+    return removed;
+}
+
+
+// ============================================================================
+// endurkv_compact_seq -- IN-PLACE, CHUNKED cache compaction.  (added 2026-08-07)
+//
+// WHY THIS EXISTS. muKV's original compaction round-trips the cache through
+// llama_state_seq_get_data / llama_state_seq_set_data into a SECOND context. That
+// is correct and provably quality-neutral, but its peak memory is 2x the cache
+// plus the serialized blob. That 2x is what blocks Phi-3 at ctx 16384 on the phone
+// (2 x 6.44 GB of f16 KV + 2.4 GB of weights = 15.28 GB against 15.1 GB of RAM)
+// and what bounds compaction at 64K on the RTX. This routine does the same job by
+// sliding the survivors down into a dense prefix INSIDE the tensors that prefill
+// already allocated, so no second context is ever created and peak memory never
+// rises above what prefill used. The only extra allocation is a staging buffer of
+// chunk_cells rows (~256 KB at the default chunk), which is why the caller can ask
+// for this mode when the round-trip does not fit.
+//
+// CORRECTNESS. Survivors are visited in ASCENDING cell order and the destination
+// index of the j-th survivor is j, so dst <= src always: a destination row is only
+// written after its own source row has been read, and no not-yet-moved survivor is
+// ever clobbered. The runs must therefore not be reordered or parallelised.
+// Positions and 2D/M-RoPE extents travel with the cell via cells.cp()/cells.set(),
+// so RoPE stays correct -- the cells move, the positions they carry do not change.
+//
+// DECLINES (returns 0) when the cache holds cells belonging to sequences other than
+// seq_id: this routine rewrites the whole cell array into a dense prefix and would
+// discard them. Returning 0 lets the caller fall back to the round-trip path rather
+// than silently corrupting a multi-sequence cache.
+// ============================================================================
+uint32_t llama_kv_cache::endurkv_compact_seq(llama_seq_id seq_id, uint32_t chunk_cells) {
+    GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
+
+    const uint32_t strm = seq_to_stream[seq_id];
+
+    auto & cells = v_cells[strm];
+    auto & head  = v_heads[strm];
+
+    std::vector<uint32_t> src;
+    src.reserve(cells.get_used());
+    for (uint32_t i = 0; i < cells.size(); ++i) {
+        if (!cells.is_empty(i) && cells.seq_has(i, seq_id)) {
+            src.push_back(i);
+        }
+    }
+
+    const uint32_t n = (uint32_t) src.size();
+
+    if (n != cells.get_used()) {
+        // some live cells belong to another sequence -- see DECLINES above
+        LLAMA_LOG_WARN("%s: %u of %u live cells are not in seq %d; declining in-place compaction\n",
+                       __func__, cells.get_used() - n, cells.get_used(), seq_id);
+        return 0;
+    }
+
+    if (n == 0) {
+        head = 0;
+        return 0;
+    }
+
+    uint32_t first_moved = n;
+    for (uint32_t j = 0; j < n; ++j) {
+        if (src[j] != j) { first_moved = j; break; }
+    }
+    if (first_moved == n) {
+        head = n;   // already dense; nothing to move, but the head must still point past it
+        return n;
+    }
+
+    if (chunk_cells == 0) {
+        chunk_cells = 512;
+    }
+
+    std::vector<uint8_t> stage;
+
+    for (const auto & layer : layers) {
+        const uint32_t il = layer.il;
+
+        const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
+        const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
+
+        ggml_tensor * k = layer.k_stream[strm];
+        ggml_tensor * v = layer.v_stream[strm];
+
+        const size_t k_row = ggml_row_size(k->type, n_embd_k_gqa);
+        const size_t v_row = v ? ggml_row_size(v->type, n_embd_v_gqa) : 0;
+
+        for (uint32_t j = first_moved; j < n; ) {
+            // longest run that is contiguous at the SOURCE (the destination is
+            // contiguous by construction) and no longer than one chunk
+            uint32_t len = 1;
+            while (len < chunk_cells && j + len < n && src[j + len] == src[j] + len) {
+                ++len;
+            }
+
+            const uint32_t s = src[j];
+            const uint32_t d = j;
+
+            stage.resize(std::max(k_row, v_row) * len);
+
+            ggml_backend_tensor_get(k, stage.data(), (size_t) s * k_row, (size_t) len * k_row);
+            ggml_backend_tensor_set(k, stage.data(), (size_t) d * k_row, (size_t) len * k_row);
+
+            if (v && !v_trans) {
+                ggml_backend_tensor_get(v, stage.data(), (size_t) s * v_row, (size_t) len * v_row);
+                ggml_backend_tensor_set(v, stage.data(), (size_t) d * v_row, (size_t) len * v_row);
+            } else if (v) {
+                // Transposed V (FA-off layout): a cell is a COLUMN of the [kv_size,
+                // n_embd_v_gqa] tensor, not a row, so it has to move one embedding
+                // dimension at a time. muKV decodes FA-on and never takes this path;
+                // it exists so FA-off policies can use in-place compaction too.
+                const size_t v_el = ggml_type_size(v->type);
+                const size_t kvsz = cells.size();
+
+                stage.resize(v_el * len);
+                for (uint32_t e = 0; e < n_embd_v_gqa; ++e) {
+                    const size_t base = (size_t) e * kvsz * v_el;
+                    ggml_backend_tensor_get(v, stage.data(), base + (size_t) s * v_el, (size_t) len * v_el);
+                    ggml_backend_tensor_set(v, stage.data(), base + (size_t) d * v_el, (size_t) len * v_el);
+                }
+            }
+
+            j += len;
+        }
+    }
+
+    // Metadata last, and as a single gather->scatter: cp() snapshots pos/ext/seq for
+    // the survivors before anything is cleared, so a survivor that lives inside the
+    // destination prefix cannot be lost. set(0, ...) maintains the used-set and the
+    // per-seq position index for us.
+    llama_kv_cells kept = cells.cp(src);
+
+    for (uint32_t j = 0; j < n; ++j) {
+        if (src[j] >= n) {
+            cells.rm(src[j]);         // outside the prefix -- set() below will not overwrite it
+        }
+    }
+
+    cells.set(0, kept);
+
+    head = n;
+
+    return n;
+}
+
+// endurkv_reclaim_tail -- return the dead tail of the KV buffer to the OS.
+// (added 2026-08-31)
+//
+// WHY THIS EXISTS. The cache is one backend buffer sized for the FULL context at
+// init, and llama_kv_cache() ends with ggml_backend_buffer_clear(buf, 0), which
+// memsets every page. Residency is therefore decided at allocation time: on a
+// OnePlus 15, ctx=16384 on Llama-3.2-1B is 512 MiB resident before a single token
+// exists, and no eviction policy can lower it. Eviction buys BANDWIDTH (bytes read
+// per token), not FOOTPRINT.
+//
+// What compaction adds is the precondition for buying footprint too. Once
+// endurkv_compact_seq has slid the survivors down, cells [n, kv_size) are dead AND
+// contiguous, so their pages can be handed back with MADV_DONTNEED while the
+// mapping stays intact. The pages re-fault as zero if the region is ever written
+// again, which is safe because those cells are empty and masked out of attention.
+//
+// ALIGNMENT. The start is rounded UP and the end rounded DOWN to a page, so this
+// can never clobber a live cell nor spill into the tensor that follows in the same
+// buffer. Whole pages only; the rounding loss is under 8 KiB per region.
+//
+// TRANSPOSED V. With v_trans (the FA-off layout) a cell is a column, so the dead
+// region is one run per embedding dimension rather than one run per tensor. That
+// is n_embd_v_gqa smaller madvise calls and more rounding loss, but it still works
+// -- FA-on is faster here, not uniquely capable.
+//
+// Returns bytes actually released. Host buffers only: device-local memory (Vulkan,
+// CUDA) is skipped, as madvise has no meaning there.
+size_t llama_kv_cache::endurkv_reclaim_tail(llama_seq_id seq_id) {
+#ifndef ENDURKV_HAVE_MADVISE
+    GGML_UNUSED(seq_id);
+    return 0;
+#else
+    GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
+
+    const uint32_t strm = seq_to_stream[seq_id];
+
+    auto & cells = v_cells[strm];
+
+    const uint32_t kvsz = cells.size();
+
+    // Highest live cell index + 1. After endurkv_compact_seq the live set is the
+    // dense prefix, but do not assume it: a stray live cell above the prefix must
+    // hold the floor or we would zero real data.
+    uint32_t live_end = 0;
+    for (uint32_t i = 0; i < kvsz; ++i) {
+        if (!cells.is_empty(i)) {
+            live_end = i + 1;
+        }
+    }
+
+    if (live_end >= kvsz) {
+        return 0;
+    }
+
+    const long ps_l = sysconf(_SC_PAGESIZE);
+    if (ps_l <= 0) {
+        return 0;
+    }
+    const size_t ps = (size_t) ps_l;
+
+    size_t freed = 0;
+
+    // release [lo, hi) of one tensor, clipped inward to whole pages
+    auto release = [&](ggml_tensor * t, size_t lo, size_t hi) {
+        if (!t || !t->data || hi <= lo) {
+            return;
+        }
+        if (!ggml_backend_buffer_is_host(t->buffer)) {
+            return;   // device-local memory: not ours to hand back
+        }
+        uintptr_t a = (uintptr_t) t->data + lo;
+        uintptr_t b = (uintptr_t) t->data + hi;
+        a = (a + ps - 1) & ~(uintptr_t) (ps - 1);   // up:   never touch a live cell
+        b =  b          & ~(uintptr_t) (ps - 1);    // down: never touch the next tensor
+        if (b > a && madvise((void *) a, (size_t) (b - a), MADV_DONTNEED) == 0) {
+            freed += (size_t) (b - a);
+        }
+    };
+
+    for (const auto & layer : layers) {
+        const uint32_t il = layer.il;
+
+        const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
+        const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
+
+        ggml_tensor * k = layer.k_stream[strm];
+        ggml_tensor * v = layer.v_stream[strm];
+
+        if (k) {
+            const size_t k_row = ggml_row_size(k->type, n_embd_k_gqa);
+            release(k, (size_t) live_end * k_row, (size_t) kvsz * k_row);
+        }
+
+        if (v && !v_trans) {
+            const size_t v_row = ggml_row_size(v->type, n_embd_v_gqa);
+            release(v, (size_t) live_end * v_row, (size_t) kvsz * v_row);
+        } else if (v) {
+            // transposed: one dead run per embedding dimension
+            const size_t v_el = ggml_type_size(v->type);
+            for (uint32_t e = 0; e < n_embd_v_gqa; ++e) {
+                const size_t base = (size_t) e * kvsz * v_el;
+                release(v, base + (size_t) live_end * v_el, base + (size_t) kvsz * v_el);
+            }
+        }
+    }
+
+    return freed;
+#endif
+}
+
+// endurkv_keydiff_scores -- per-cell key-diversity scores for the KeyDiff baseline.
+// (added 2026-08-16)
+//
+// WHY THIS LIVES IN libllama. KeyDiff (Park et al., NeurIPS 2025, arXiv:2504.15364)
+// evicts by KEY GEOMETRY alone: score_i = -CosSim(mu(K), k_i), keep the N most
+// distinctive keys. It never reads an attention value, so unlike every other
+// score-reading baseline it needs no eval-callback, no FA-off path, and no side
+// node -- but it does need the K cache tensors, which only this class can reach
+// (layer.k_stream + ggml_backend_tensor_get, the same access endurkv_compact_seq
+// uses). One small exported function is cleaner than parsing a serialized state
+// blob host-side.
+//
+// SCORING, faithful to their efficient variant: per layer, the anchor is the mean
+// of the (unnormalized) keys -- their App. notes mu(K-hat) can be replaced by
+// mu(K) "without losing accuracy", and mu(K) is what their implementation uses.
+// The per-layer key of a cell is the concatenated-head row llama.cpp stores
+// (n_embd_k_gqa floats). Scores are -cos(mu_l, k_i) accumulated over layers and
+// divided by n_layers: the paper treats K as one matrix per cache and does not
+// specify a cross-layer rule, so the MEAN across layers is our sequence-level
+// realization -- the same adaptation every per-head baseline gets on this engine,
+// and it must be documented wherever these numbers are reported. Their block-wise
+// eviction cadence (evict every B=128 tokens DURING prefill) is likewise realized
+// as end-of-prefill selection by the harness; that changes PEAK cache, not the
+// final keep-set rule, and the peak-memory column must say so.
+//
+// DECLINES (returns 0) when cells [0, n) are not a dense single-sequence prefix
+// (scores are indexed by cell, and the harness equates cell index with position,
+// which holds exactly in the pre-eviction state this is meant to run in), or when
+// K is stored quantized -- reading it as raw bytes would score garbage, the exact
+// failure mode the 2026-08-13 capture hardening exists to prevent.
+uint32_t llama_kv_cache::endurkv_keydiff_scores(llama_seq_id seq_id, float * out, uint32_t n_max) {
+    GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
+    GGML_ASSERT(out != nullptr);
+
+    const uint32_t strm = seq_to_stream[seq_id];
+    auto & cells = v_cells[strm];
+
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < cells.size(); ++i) {
+        if (cells.is_empty(i) || !cells.seq_has(i, seq_id)) break;
+        ++n;
+    }
+    if (n == 0 || n != cells.get_used() || n > n_max) {
+        LLAMA_LOG_WARN("%s: cache is not a dense seq-%d prefix (n=%u used=%u max=%u); declining\n",
+                       __func__, seq_id, n, cells.get_used(), n_max);
+        return 0;
+    }
+
+    std::fill(out, out + n, 0.0f);
+    uint32_t n_layers_scored = 0;
+
+    std::vector<uint8_t> raw;
+    std::vector<float>   row;
+    std::vector<float>   mu;
+
+    for (const auto & layer : layers) {
+        ggml_tensor * k = layer.k_stream[strm];
+        if (k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_F32) {
+            LLAMA_LOG_WARN("%s: K is %s (quantized); declining rather than scoring garbage\n",
+                           __func__, ggml_type_name(k->type));
+            return 0;
+        }
+        const uint32_t d     = hparams.n_embd_k_gqa(layer.il);
+        const size_t   k_row = ggml_row_size(k->type, d);
+
+        raw.resize(k_row);
+        row.resize(d);
+        mu.assign(d, 0.0f);
+
+        auto read_row = [&](uint32_t i) {
+            ggml_backend_tensor_get(k, raw.data(), (size_t) i * k_row, k_row);
+            if (k->type == GGML_TYPE_F32) {
+                std::memcpy(row.data(), raw.data(), d * sizeof(float));
+            } else {
+                ggml_fp16_to_fp32_row((const ggml_fp16_t *) raw.data(), row.data(), d);
+            }
+        };
+
+        // pass 1: mu_l = mean over cells of k_i   (their mu(K) simplification)
+        for (uint32_t i = 0; i < n; ++i) {
+            read_row(i);
+            for (uint32_t e = 0; e < d; ++e) mu[e] += row[e];
+        }
+        float mu_norm = 0.0f;
+        for (uint32_t e = 0; e < d; ++e) { mu[e] /= (float) n; mu_norm += mu[e] * mu[e]; }
+        mu_norm = std::sqrt(mu_norm);
+        if (mu_norm < 1e-12f) continue;   // degenerate layer: no signal, skip
+
+        // pass 2: out_i += -cos(mu_l, k_i)
+        for (uint32_t i = 0; i < n; ++i) {
+            read_row(i);
+            float dot = 0.0f, nrm = 0.0f;
+            for (uint32_t e = 0; e < d; ++e) { dot += mu[e] * row[e]; nrm += row[e] * row[e]; }
+            nrm = std::sqrt(nrm);
+            out[i] += (nrm < 1e-12f) ? 0.0f : -dot / (mu_norm * nrm);
+        }
+        ++n_layers_scored;
+    }
+
+    if (n_layers_scored == 0) return 0;
+    const float inv = 1.0f / (float) n_layers_scored;
+    for (uint32_t i = 0; i < n; ++i) out[i] *= inv;
+    return n;
 }
 
 bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -2190,9 +2598,17 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
         return false;
     }
 
-    if (this->v_trans != (bool) v_trans) {
-        LLAMA_LOG_ERROR("%s: incompatible V transposition\n", __func__);
+    // EndurKV v1_FA support: allow cross-v_trans state load by transposing V on read.
+    // Only the FA-off (src v_trans=true) -> FA-on (dst v_trans=false) direction is
+    // implemented (this is what eviction_bench's --snapkv-decode needs to swap
+    // contexts after prefill+evict). The reverse direction is rejected.
+    const bool cross_v_trans = (this->v_trans != (bool) v_trans);
+    if (cross_v_trans && (this->v_trans || !(bool) v_trans)) {
+        LLAMA_LOG_ERROR("%s: incompatible V transposition (only src=trans -> dst=untrans supported)\n", __func__);
         return false;
+    }
+    if (cross_v_trans) {
+        LLAMA_LOG_WARN("%s: cross-v_trans load (src=transposed, dst=untransposed); transposing V on read\n", __func__);
     }
 
     // For each layer, read the keys for each cell, one row is one cell, read as one contiguous block
@@ -2236,7 +2652,67 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
         }
     }
 
-    if (!this->v_trans) {
+    if (cross_v_trans) {
+        // EndurKV v1_FA: src is transposed (FA-off layout), dst is untransposed (FA-on layout).
+        // Read header in TRANSPOSED format (element-size + n_embd_v_gqa), then transpose
+        // element-by-element into a host buffer, then push to the untransposed V tensor.
+        for (const auto & layer : layers) {
+            const uint32_t il = layer.il;
+
+            const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
+
+            auto * v = layer.v_stream[strm];
+            if (!v) {
+                continue;
+            }
+
+            int32_t v_type_i_ref;
+            io.read_to(&v_type_i_ref, sizeof(v_type_i_ref));
+            const int32_t v_type_i = (int32_t) v->type;
+            if (v_type_i != v_type_i_ref) {
+                LLAMA_LOG_ERROR("%s: mismatched value type (%d != %d, layer %d)\n", __func__, v_type_i, v_type_i_ref, il);
+                return false;
+            }
+
+            uint32_t v_size_el_ref;
+            io.read_to(&v_size_el_ref, sizeof(v_size_el_ref));
+            const size_t v_size_el = ggml_type_size(v->type);
+            if (v_size_el != v_size_el_ref) {
+                LLAMA_LOG_ERROR("%s: mismatched value element size (%zu != %zu, layer %d)\n", __func__, v_size_el, (size_t) v_size_el_ref, il);
+                return false;
+            }
+
+            uint32_t n_embd_v_gqa_ref;
+            io.read_to(&n_embd_v_gqa_ref, sizeof(n_embd_v_gqa_ref));
+            if (n_embd_v_gqa != n_embd_v_gqa_ref) {
+                LLAMA_LOG_ERROR("%s: mismatched GQA embedding size (%u != %u, layer %d)\n", __func__, n_embd_v_gqa, n_embd_v_gqa_ref, il);
+                return false;
+            }
+
+            if (cell_count) {
+                // Output (untransposed dest) row size
+                const size_t v_size_row = ggml_row_size(v->type, n_embd_v_gqa);
+                // Assemble dst buffer in untransposed layout: cell-major rows of n_embd_v_gqa elements.
+                std::vector<uint8_t> dst_buf((size_t) cell_count * v_size_row);
+                for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
+                    const uint8_t * src_col = (const uint8_t *) io.read((size_t) cell_count * v_size_el);
+                    for (uint32_t i = 0; i < cell_count; ++i) {
+                        std::memcpy(dst_buf.data() + ((size_t) i * n_embd_v_gqa + j) * v_size_el,
+                                    src_col + (size_t) i * v_size_el,
+                                    v_size_el);
+                    }
+                }
+                if (sinfo.is_contiguous()) {
+                    ggml_backend_tensor_set(v, dst_buf.data(), sinfo.head() * v_size_row, cell_count * v_size_row);
+                } else {
+                    for (uint32_t i = 0; i < cell_count; ++i) {
+                        const size_t dst_offset = sinfo.idxs[0][i] * v_size_row;
+                        ggml_backend_tensor_set(v, dst_buf.data() + (size_t) i * v_size_row, dst_offset, v_size_row);
+                    }
+                }
+            }
+        }
+    } else if (!this->v_trans) {
         for (const auto & layer : layers) {
             const uint32_t il = layer.il;
 

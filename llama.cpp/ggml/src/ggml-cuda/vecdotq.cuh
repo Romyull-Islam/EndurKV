@@ -106,6 +106,13 @@ static __device__ __forceinline__ uint32_t unpack_ksigns(const uint8_t v) {
 // VDR = vec dot ratio, how many contiguous integers each thread processes when the vec dot kernel is called
 // MMVQ = mul_mat_vec_q, MMQ = mul_mat_q
 
+// --- EndurKV 2026-07-26: Q1_0 (PrismML 1-bit) CUDA support, ported verbatim
+// from PrismML-Eng/llama.cpp (github.com/PrismML-Eng/llama.cpp). Our fork's CUDA
+// backend had ZERO q1_0 support, so Bonsai-8B's 254 one-bit tensors fell back to
+// CPU even at -ngl 99 (prefill 346 s CPU-bound). All q1_0 constants (QK1_0/QR1_0/
+// QI1_0/block_q1_0) already existed in ggml-common.h; only the CUDA kernels were missing.
+#define VDR_Q1_0_Q8_1_MMVQ 1  // one 32-element chunk at a time
+
 #define VDR_Q4_0_Q8_1_MMVQ 2
 #define VDR_Q4_0_Q8_1_MMQ  4
 
@@ -667,6 +674,51 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1_impl_mmq(
     }
 
     return d6 * sumf_d;
+}
+
+static __device__ __forceinline__ float vec_dot_q1_0_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_q1_0 * bq1_0 = (const block_q1_0 *) vbq + kbx;
+
+    // Q1_0: 128 elements with ONE scale
+    // Q8_1: 32 elements per block with individual scales
+    // iqs selects which of the 4 chunks of 32 elements to process (0-3)
+
+    const float d1 = bq1_0->d;
+
+    // Process only the chunk specified by iqs
+    const block_q8_1 * bq8_1_chunk = bq8_1 + iqs;
+
+    // Load 32 bits (4 bytes) for this chunk from Q1_0
+    const int offset = iqs * 4;
+    const int v = bq1_0->qs[offset + 0] | (bq1_0->qs[offset + 1] << 8) |
+                  (bq1_0->qs[offset + 2] << 16) | (bq1_0->qs[offset + 3] << 24);
+
+    // Unpack 32 bits into 32 signed values (-1 or +1)
+    int vi_bytes[8];
+#pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        const int shift = j * 4;
+        const int bits4 = (v >> shift) & 0x0F;
+        const int b0 = (bits4 & 0x01) ? 1 : -1;
+        const int b1 = (bits4 & 0x02) ? 1 : -1;
+        const int b2 = (bits4 & 0x04) ? 1 : -1;
+        const int b3 = (bits4 & 0x08) ? 1 : -1;
+        vi_bytes[j] = (b0 & 0xFF) | ((b1 & 0xFF) << 8) | ((b2 & 0xFF) << 16) | ((b3 & 0xFF) << 24);
+    }
+
+    // Compute dot product for this 32-element chunk
+    int sumi = 0;
+#pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        const int u = get_int_b4(bq8_1_chunk->qs, j);
+        sumi = ggml_cuda_dp4a(vi_bytes[j], u, sumi);
+    }
+
+    // Apply Q1_0's single scale and this chunk's Q8_1 scale
+    const float d8 = __low2float(bq8_1_chunk->ds);
+    return d1 * d8 * sumi;
 }
 
 static __device__ __forceinline__ float vec_dot_q4_0_q8_1(

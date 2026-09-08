@@ -1,0 +1,48 @@
+{
+  "figure_id": "24_throttle_event_cpu",
+  "title": "CPU big-core temperature at throttle events",
+  "x_axis": "wall time since cell start (minutes)",
+  "y_axis": "CPU big-core temperature (C)",
+  "cpu_sensor": "cpu-1-0-0_temp_mc",
+  "ddr_sensor": "ddr_temp_mc",
+  "cpu_throttle_reference_c": 67.0,
+  "cells": [
+    {
+      "cell": "wave4_vanilla",
+      "label": "Wave-4 vanilla (Phi-3 long-decode)",
+      "sensor": "cpu-1-0-0_temp_mc",
+      "iter_event": 6,
+      "cpu_peak_c": 67.1,
+      "ddr_at_event_c": 62.9,
+      "throttled": true,
+      "observed_peak_cpu_c": 67.1,
+      "observed_peak_ddr_c": 62.9,
+      "n_samples": 13829
+    },
+    {
+      "cell": "wave8_v1fa2_selective",
+      "label": "Wave-8 v1_fa2_selective",
+      "sensor": "cpu-1-0-0_temp_mc",
+      "iter_event": 10,
+      "cpu_peak_c": 77.9,
+      "ddr_at_event_c": 72.9,
+      "throttled": true,
+      "observed_peak_cpu_c": 77.9,
+      "observed_peak_ddr_c": 72.9,
+      "n_samples": 12552
+    },
+    {
+      "cell": "wave9_v1fa2_stack",
+      "label": "Wave-9 v1_fa2_stack (watchdog-on)",
+      "sensor": "cpu-1-0-0_temp_mc",
+      "iter_event": null,
+      "cpu_peak_c": 66.8,
+      "ddr_at_event_c": null,
+      "throttled": false,
+      "observed_peak_cpu_c": 67.8,
+      "observed_peak_ddr_c": 64.1,
+      "n_samples": 12607
+    }
+  ],
+  "key_insight": "CPU big-core temperature crossed the same ~67 C envelope on BOTH throttling runs (wave-4 vanilla iter6 @ 67.1 C and wave-8 v1_fa2_selective iter10 @ 77.9 C) while DDR sat 5-10 C lower at the same instant. The non-throttling watchdog run (wave-9 v1_fa2_stack) held CPU big-core <= 66.8 C the whole time. CPU big-core temp may be the better single predictor of throttle than DDR alone."
+}

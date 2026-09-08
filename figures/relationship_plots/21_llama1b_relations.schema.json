@@ -1,0 +1,323 @@
+{
+  "kind": "RES_SCHEMA",
+  "version": 1,
+  "generator": "host_plot_llama1b_relations.py",
+  "figure": "/home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/21_llama1b_relations.png",
+  "title": "Llama-1B at K=2048 sustains 2400 cells, K=512 caps at 700 \u2014 thermal slope ~0.5\u00b0C per 1000 cells",
+  "role_in_paper": "Supervisor relationship scatter \u2014 Llama-1B Wave-3 cache budget vs SoC/memory/CPU/RSS",
+  "x_axis": "cache_size_cells (K_nominal + n_sink + n_decode_steps; vanilla = peak_kv_cells)",
+  "panels": [
+    {
+      "panel": "top",
+      "y_axis": "DDR temperature (C)",
+      "y_source_column": "ddr_temp_mc",
+      "agg": "mean over iter wall-time window",
+      "fit": {
+        "model": "ddr_C = intercept + slope * cache_size_cells",
+        "slope_C_per_cell": -2.330437706203377e-06,
+        "intercept_C": 47.17959329050524,
+        "r_squared": 5.8459122361798066e-05,
+        "slope_C_per_1000_cells": -0.0023304377062033773,
+        "n_points": 17
+      }
+    },
+    {
+      "panel": "middle",
+      "y_axis": "CPU big-core max temperature (C)",
+      "y_source_columns": [
+        "cpu-1-0-0_temp_mc",
+        "cpu-1-0-1_temp_mc",
+        "cpu-1-1-0_temp_mc",
+        "cpu-1-1-1_temp_mc",
+        "cpullc-1-0_temp_mc",
+        "cpullc-1-1_temp_mc"
+      ],
+      "agg": "per-row max across big cluster, then mean over iter window",
+      "fit": {
+        "model": "cpu_C = intercept + slope * cache_size_cells",
+        "slope_C_per_cell": 7.657867797619423e-05,
+        "intercept_C": 49.937802001215694,
+        "r_squared": 0.10982125261908016,
+        "slope_C_per_1000_cells": 0.07657867797619422,
+        "n_points": 17
+      }
+    },
+    {
+      "panel": "bottom",
+      "y_axis": "Peak RSS (GB)",
+      "y_source_field": "meta.json:peak_rss_kb",
+      "agg": "per-iter peak (KB) converted to GB",
+      "fit": {
+        "model": "rss_GB = intercept + slope * cache_size_cells",
+        "slope_GB_per_cell": -1.4892085660087399e-05,
+        "intercept_GB": 1.3045463030336222,
+        "r_squared": 0.96538727516878,
+        "slope_GB_per_1000_cells": -0.014892085660087399,
+        "n_points": 17
+      }
+    }
+  ],
+  "wave_source": "/home/mislam22/EndurKV_workspace/phone-logs/wave3_real_1780680903",
+  "cells": [
+    {
+      "cell": "vanilla",
+      "label": "vanilla (K=ctx, no evict)",
+      "n_iter": 5,
+      "cache_size_cells": 8028.0,
+      "ddr_C_mean": 47.1418208610625,
+      "cpu_C_mean": 50.56457143095749,
+      "rss_GB_mean": 1.1823516845703126
+    },
+    {
+      "cell": "v1_K2048",
+      "label": "v1  K=2048",
+      "n_iter": 4,
+      "cache_size_cells": 2055.0,
+      "ddr_C_mean": 47.290956784223454,
+      "cpu_C_mean": 50.020050394442954,
+      "rss_GB_mean": 1.2901611328125
+    },
+    {
+      "cell": "v1_K512",
+      "label": "v1  K=512",
+      "n_iter": 4,
+      "cache_size_cells": 519.0,
+      "ddr_C_mean": 47.05837041556428,
+      "cpu_C_mean": 49.89083405392048,
+      "rss_GB_mean": 1.2903366088867188
+    },
+    {
+      "cell": "v1_fa_K512",
+      "label": "v1_FA  K=512",
+      "n_iter": 4,
+      "cache_size_cells": 538.0,
+      "ddr_C_mean": 47.20602994400801,
+      "cpu_C_mean": 50.125839647459514,
+      "rss_GB_mean": 1.2900981903076172
+    }
+  ],
+  "n_total_iter_rows": 17,
+  "rows": [
+    {
+      "cell": "vanilla",
+      "iter": 1,
+      "policy": "vanilla",
+      "k_nominal": 0,
+      "n_sink": 4,
+      "n_decode_steps": 22,
+      "peak_kv_cells": 8028,
+      "cache_size_cells": 8028.0,
+      "ddr_C": 45.41704980842911,
+      "cpu_C": 51.29990421455939,
+      "rss_GB": 1.1823234558105469
+    },
+    {
+      "cell": "vanilla",
+      "iter": 2,
+      "policy": "vanilla",
+      "k_nominal": 0,
+      "n_sink": 4,
+      "n_decode_steps": 22,
+      "peak_kv_cells": 8028,
+      "cache_size_cells": 8028.0,
+      "ddr_C": 46.52685025817556,
+      "cpu_C": 49.61127366609295,
+      "rss_GB": 1.182373046875
+    },
+    {
+      "cell": "vanilla",
+      "iter": 3,
+      "policy": "vanilla",
+      "k_nominal": 0,
+      "n_sink": 4,
+      "n_decode_steps": 22,
+      "peak_kv_cells": 8028,
+      "cache_size_cells": 8028.0,
+      "ddr_C": 47.72019867549669,
+      "cpu_C": 50.59304635761589,
+      "rss_GB": 1.182342529296875
+    },
+    {
+      "cell": "vanilla",
+      "iter": 4,
+      "policy": "vanilla",
+      "k_nominal": 0,
+      "n_sink": 4,
+      "n_decode_steps": 22,
+      "peak_kv_cells": 8028,
+      "cache_size_cells": 8028.0,
+      "ddr_C": 48.06962905718702,
+      "cpu_C": 50.754250386398766,
+      "rss_GB": 1.1824417114257812
+    },
+    {
+      "cell": "vanilla",
+      "iter": 5,
+      "policy": "vanilla",
+      "k_nominal": 0,
+      "n_sink": 4,
+      "n_decode_steps": 22,
+      "peak_kv_cells": 8028,
+      "cache_size_cells": 8028.0,
+      "ddr_C": 47.9753765060241,
+      "cpu_C": 50.56438253012048,
+      "rss_GB": 1.1822776794433594
+    },
+    {
+      "cell": "v1_K2048",
+      "iter": 1,
+      "policy": "v1",
+      "k_nominal": 2048,
+      "n_sink": 4,
+      "n_decode_steps": 3,
+      "peak_kv_cells": 8007,
+      "cache_size_cells": 2055.0,
+      "ddr_C": 45.713921433494136,
+      "cpu_C": 48.9314955203308,
+      "rss_GB": 1.2900581359863281
+    },
+    {
+      "cell": "v1_K2048",
+      "iter": 2,
+      "policy": "v1",
+      "k_nominal": 2048,
+      "n_sink": 4,
+      "n_decode_steps": 3,
+      "peak_kv_cells": 8007,
+      "cache_size_cells": 2055.0,
+      "ddr_C": 47.660714285714285,
+      "cpu_C": 50.59179894179894,
+      "rss_GB": 1.2902488708496094
+    },
+    {
+      "cell": "v1_K2048",
+      "iter": 3,
+      "policy": "v1",
+      "k_nominal": 2048,
+      "n_sink": 4,
+      "n_decode_steps": 3,
+      "peak_kv_cells": 8007,
+      "cache_size_cells": 2055.0,
+      "ddr_C": 47.85262515262516,
+      "cpu_C": 50.25299145299145,
+      "rss_GB": 1.2900848388671875
+    },
+    {
+      "cell": "v1_K2048",
+      "iter": 4,
+      "policy": "v1",
+      "k_nominal": 2048,
+      "n_sink": 4,
+      "n_decode_steps": 3,
+      "peak_kv_cells": 8007,
+      "cache_size_cells": 2055.0,
+      "ddr_C": 47.93656626506025,
+      "cpu_C": 50.3039156626506,
+      "rss_GB": 1.290252685546875
+    },
+    {
+      "cell": "v1_K512",
+      "iter": 1,
+      "policy": "v1",
+      "k_nominal": 512,
+      "n_sink": 4,
+      "n_decode_steps": 3,
+      "peak_kv_cells": 8007,
+      "cache_size_cells": 519.0,
+      "ddr_C": 45.674099722991684,
+      "cpu_C": 48.89265927977839,
+      "rss_GB": 1.2903060913085938
+    },
+    {
+      "cell": "v1_K512",
+      "iter": 2,
+      "policy": "v1",
+      "k_nominal": 512,
+      "n_sink": 4,
+      "n_decode_steps": 3,
+      "peak_kv_cells": 8007,
+      "cache_size_cells": 519.0,
+      "ddr_C": 47.076548967355095,
+      "cpu_C": 50.052831445702864,
+      "rss_GB": 1.2904319763183594
+    },
+    {
+      "cell": "v1_K512",
+      "iter": 3,
+      "policy": "v1",
+      "k_nominal": 512,
+      "n_sink": 4,
+      "n_decode_steps": 3,
+      "peak_kv_cells": 8007,
+      "cache_size_cells": 519.0,
+      "ddr_C": 47.96453074433658,
+      "cpu_C": 50.790873786407765,
+      "rss_GB": 1.290435791015625
+    },
+    {
+      "cell": "v1_K512",
+      "iter": 4,
+      "policy": "v1",
+      "k_nominal": 512,
+      "n_sink": 4,
+      "n_decode_steps": 3,
+      "peak_kv_cells": 8007,
+      "cache_size_cells": 519.0,
+      "ddr_C": 47.518302227573756,
+      "cpu_C": 49.8269717037929,
+      "rss_GB": 1.2901725769042969
+    },
+    {
+      "cell": "v1_fa_K512",
+      "iter": 1,
+      "policy": "v1_fa",
+      "k_nominal": 512,
+      "n_sink": 4,
+      "n_decode_steps": 22,
+      "peak_kv_cells": 8028,
+      "cache_size_cells": 538.0,
+      "ddr_C": 45.39615912208505,
+      "cpu_C": 48.651851851851845,
+      "rss_GB": 1.2902374267578125
+    },
+    {
+      "cell": "v1_fa_K512",
+      "iter": 2,
+      "policy": "v1_fa",
+      "k_nominal": 512,
+      "n_sink": 4,
+      "n_decode_steps": 22,
+      "peak_kv_cells": 8028,
+      "cache_size_cells": 538.0,
+      "ddr_C": 47.19426121372032,
+      "cpu_C": 50.073153034300795,
+      "rss_GB": 1.2902946472167969
+    },
+    {
+      "cell": "v1_fa_K512",
+      "iter": 3,
+      "policy": "v1_fa",
+      "k_nominal": 512,
+      "n_sink": 4,
+      "n_decode_steps": 22,
+      "peak_kv_cells": 8028,
+      "cache_size_cells": 538.0,
+      "ddr_C": 48.126915520628685,
+      "cpu_C": 51.03752455795678,
+      "rss_GB": 1.2899131774902344
+    },
+    {
+      "cell": "v1_fa_K512",
+      "iter": 4,
+      "policy": "v1_fa",
+      "k_nominal": 512,
+      "n_sink": 4,
+      "n_decode_steps": 22,
+      "peak_kv_cells": 8028,
+      "cache_size_cells": 538.0,
+      "ddr_C": 48.10678391959799,
+      "cpu_C": 50.74082914572864,
+      "rss_GB": 1.289947509765625
+    }
+  ]
+}

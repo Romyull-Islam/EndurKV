@@ -1,0 +1,1 @@
+cold_gate: GPUSS=37 DDR=37 shell=33 battery=31

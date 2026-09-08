@@ -48,20 +48,40 @@ def parse_attn_bin(path: Path) -> list[float]:
     try:
         with open(path, "rb") as f:
             magic = f.read(4)
-            if magic != b"ATTN":
+            if magic == b"ATTN":
+                n_heads_per_block = 1   # v1 = head-averaged single vector per (s,l)
+            elif magic == b"ATNH":
+                n_heads_per_block = None  # filled from header
+            else:
                 return []
-            n_steps, n_layers, _n_head = struct.unpack("<III", f.read(12))
+            n_steps, n_layers, n_head_hdr = struct.unpack("<III", f.read(12))
+            if magic == b"ATNH":
+                n_heads_per_block = max(1, n_head_hdr)
             out: list[float] = []
             for _s in range(n_steps):
                 top1_per_layer = []
                 for _l in range(n_layers):
                     (n_kv,) = struct.unpack("<I", f.read(4))
                     if n_kv == 0:
-                        # layer not captured this step
                         continue
-                    vals = struct.unpack(f"<{n_kv}f", f.read(4 * n_kv))
-                    if vals:
+                    count = n_kv * n_heads_per_block
+                    vals = struct.unpack(f"<{count}f", f.read(4 * count))
+                    if not vals:
+                        continue
+                    if n_heads_per_block == 1:
                         top1_per_layer.append(max(vals))
+                    else:
+                        # per-head: average to a single distribution, then max
+                        # (matches the layer-averaged top1 semantics of v1)
+                        avg = [0.0] * n_kv
+                        for h in range(n_heads_per_block):
+                            base = h * n_kv
+                            for i in range(n_kv):
+                                avg[i] += vals[base + i]
+                        inv = 1.0 / n_heads_per_block
+                        for i in range(n_kv):
+                            avg[i] *= inv
+                        top1_per_layer.append(max(avg))
                 if top1_per_layer:
                     out.append(sum(top1_per_layer) / len(top1_per_layer))
                 else:

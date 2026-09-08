@@ -1,0 +1,63 @@
+{
+  "figure_name": "11_kv_cache_vs_soc_temp.png",
+  "file_path": "/home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/11_kv_cache_vs_soc_temp.png",
+  "panels": [
+    {
+      "panel": "top",
+      "kind": "time_series_dual_axis",
+      "x": "wall_time_s_since_cell_start",
+      "y_left": "kv_cache_size_cells_log",
+      "y_right": "soc_temp_C",
+      "series": [
+        {
+          "cell": "vanilla",
+          "label": "vanilla (W4)",
+          "color": "#d62728",
+          "wave": "wave4",
+          "soc_column": "shell_front_temp_mc (fallback; socd_temp_mc dead)"
+        },
+        {
+          "cell": "v1_K512",
+          "label": "v1 K=512 (W4)",
+          "color": "#1f77b4",
+          "wave": "wave4",
+          "soc_column": "shell_front_temp_mc (fallback; socd_temp_mc dead)"
+        },
+        {
+          "cell": "v1_fa_K512",
+          "label": "v1_fa K=512 (W4)",
+          "color": "#2ca02c",
+          "wave": "wave4",
+          "soc_column": "shell_front_temp_mc (fallback; socd_temp_mc dead)"
+        },
+        {
+          "cell": "v1_fa2_stack",
+          "label": "v1_fa2_stack (W9)",
+          "color": "#ff7f0e",
+          "wave": "wave9",
+          "soc_column": "shell_front_temp_mc (fallback; socd_temp_mc dead)"
+        }
+      ]
+    },
+    {
+      "panel": "bottom",
+      "kind": "scatter_with_linear_fit",
+      "x": "kv_cache_size_cells",
+      "y": "soc_temp_C",
+      "n_samples": 53113,
+      "fit": {
+        "model": "soc_C = intercept + slope * cache_cells",
+        "intercept_C": 44.39795898564107,
+        "slope_C_per_cell": 0.0013251892178945818,
+        "r_squared": 0.09429766475657209
+      }
+    }
+  ],
+  "sources": {
+    "wave4_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave4_longdecode_1780750084",
+    "wave9_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave9_v1fa2_stack_1780796320",
+    "soc_primary_column": "socd_temp_mc",
+    "soc_fallback_column": "shell_front_temp_mc"
+  },
+  "relationship": "KV cache size (cells) -> SoC surface temperature (\u00b0C). Aggregate linear regression across Wave-4 long-decode (vanilla, v1_K512, v1_fa_K512) and Wave-9 (v1_fa2_stack) cells yields R\u00b2 = 0.094."
+}

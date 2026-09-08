@@ -1,0 +1,10 @@
+\documentclass[tikz,border=2pt]{standalone}
+\usepackage[scaled=0.92]{helvet}\renewcommand{\familydefault}{\sfdefault}
+\usetikzlibrary{arrows.meta,positioning,calc,fit,backgrounds}
+\begin{document}
+\begin{tikzpicture}[font=\footnotesize,box/.style={draw,rounded corners=2pt,minimum width=2.2cm,minimum height=0.8cm,align=center}]
+\node[box] (a) {Prefill\\\scriptsize FA on};
+\node[box,right=0.5cm of a,fill=orange!12,draw=orange!80!black] (b) {Score\\\scriptsize kq\_evict};
+\draw[-{Stealth[length=4pt]}] (a) -- (b);
+\end{tikzpicture}
+\end{document}

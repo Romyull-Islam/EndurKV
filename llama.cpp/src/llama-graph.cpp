@@ -1830,6 +1830,16 @@ ggml_tensor * llm_graph_context::build_pos_bias(ggml_tensor * pos_bucket, ggml_t
     return pos_bias;
 }
 
+// ── EndurKV Solution 2 ──────────────────────────────────────────────────────
+// When > 0, build_attn_mha's FA-on branch emits an extra "kq_evict-{il}" node
+// computing softmax(kq_scale * Kᵀ * Q_lastW) for the last W query rows, so a
+// KV-eviction harness can rank prompt positions from the SAME attention the
+// FA-off path would produce — while the main attention stays FlashAttention-ON.
+// This removes the need for the FA-off prefill + FA-off->FA-on state-swap, which
+// is prohibitively slow on mobile Vulkan (Adreno). Set via the public API
+// llama_endurkv_set_evict_obs_window(); 0 disables (default). Prefill only.
+int g_endurkv_evict_obs_window = 0;
+
 ggml_tensor * llm_graph_context::build_attn_mha(
          ggml_tensor * q,
          ggml_tensor * k,
@@ -1877,6 +1887,36 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
 
+        // ── EndurKV Solution 2: FA-on eviction-score side node ──────────────
+        // Compute softmax(kq_scale * Kᵀ * Q_lastW) for the last W query rows and
+        // force it into the graph as "kq_evict-{il}". Mirrors the FA-off
+        // kq/kq_soft_max math (below) but only for the observation window, so
+        // the cost is O(W*n_kv*n_head) — negligible vs prefill — and the main
+        // attention above stays FA-on. Prefill only (n_tokens > 1).
+        if (g_endurkv_evict_obs_window > 0 && kq_mask != nullptr && q->ne[1] > 1) {
+            const int64_t nt = q->ne[1];
+            const int64_t W  = nt < g_endurkv_evict_obs_window ? nt : (int64_t) g_endurkv_evict_obs_window;
+            ggml_tensor * q_w = ggml_view_4d(ctx0, q, q->ne[0], W, q->ne[2], q->ne[3],
+                                             q->nb[1], q->nb[2], q->nb[3], (nt - W)*q->nb[1]);
+            q_w = ggml_cont(ctx0, q_w);
+            ggml_tensor * kq_e = ggml_mul_mat(ctx0, k, q_w);            // [n_kv, W, n_head, ns]
+            ggml_mul_mat_set_prec(kq_e, GGML_PREC_F32);
+            ggml_tensor * mask_w = ggml_view_4d(ctx0, kq_mask,
+                                                kq_mask->ne[0], W, kq_mask->ne[2], kq_mask->ne[3],
+                                                kq_mask->nb[1], kq_mask->nb[2], kq_mask->nb[3],
+                                                (nt - W)*kq_mask->nb[1]);
+            kq_e = ggml_soft_max_ext(ctx0, kq_e, mask_w, kq_scale, hparams.f_max_alibi_bias); // [n_kv, W, n_head, ns]
+            // EndurKV readback reduction: average over the W observation-window queries
+            // ON-DEVICE so the host reads [n_kv, 1, n_head] instead of [n_kv, W, n_head]
+            // — W-x smaller device->host transfer, identical per-position scores (same
+            // mean the eval_callback used to compute on-host). Cuts the FA-on prefill tax.
+            ggml_tensor * kq_t = ggml_cont(ctx0, ggml_transpose(ctx0, kq_e));  // [W, n_kv, n_head, ns]
+            ggml_tensor * kq_m = ggml_sum_rows(ctx0, kq_t);                    // [1, n_kv, n_head, ns]
+            kq_m = ggml_scale(ctx0, kq_m, 1.0f / (float) W);                   // mean over W
+            cb(kq_m, "kq_evict", il);
+            ggml_build_forward_expand(gf, kq_m);
+        }
+
         if (v_mla) {
 #if 0
             // v_mla can be applied as a matrix-vector multiplication with broadcasting across dimension 3 == n_tokens.
@@ -1896,6 +1936,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
     } else {
+        // EndurKV-Evict probe hook (local fork modification, 2026-05-24, revised):
+        // Name K and V so an external cb_eval callback can capture them per layer
+        // for re-implementing K-vector and K+V baselines (KeyDiff, LaProx, R-KV,
+        // KeyDiff-style) in our offline simulator.
+        //
+        // ggml_cont() copies the view to a fresh contiguous tensor so that
+        //   (a) ggml_nbytes() and ggml_nelements() report the view's logical size,
+        //       not the underlying KV-cache backing buffer (which is sized to
+        //       max-ctx, e.g. 4096 cells, not current n_kv);
+        //   (b) the V transposed-view layout is normalized into contiguous form,
+        //       so the host can reshape without per-model stride decoding.
+        // The original k, v continue downstream unchanged.
+        // Route downstream ops through the contiguous copies — otherwise the
+        // capture tensors become orphan nodes and the graph scheduler skips them.
+        // ggml_cont produces bit-identical data, just contiguous in memory.
+        k = ggml_cont(ctx0, k);
+        v = ggml_cont(ctx0, v);
+        cb(k, "K_capture", il);
+        cb(v, "V_capture", il);
+
         ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
         cb(kq, "kq", il);
 
@@ -1933,6 +1993,47 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
         ggml_soft_max_add_sinks(kq, sinks);
         cb(kq, "kq_soft_max", il);
+
+        // ── EndurKV: kq_evict on the FA-OFF branch too ──────────────────────
+        // ADDED 2026-08-15 to fix a defect that made every FA-off policy's OUTPUT
+        // numerically invalid on the Adreno/Vulkan backend.
+        //
+        // The defect. A score-reading evictor used to obtain its scores by having the
+        // harness' ggml_backend_sched eval-callback return true for "kq_soft_max" above.
+        // Returning true from the ask phase makes the scheduler END A SPLIT at that node
+        // and materialise it, and on this Vulkan backend a split there corrupts the rest
+        // of the attention. Isolated on 2026-08-14 with three vanilla FA-off runs that
+        // differed only in what the callback did:
+        //     no callback ............ 0/978 degenerate '!' tokens    0.0%
+        //     callback: split + read . 76/609                        12.5%
+        //     callback: split, NO read 68/679                        10.0%
+        // The third arm is decisive: reading the tensor is innocent, merely requesting it
+        // is not. Five baselines were published with corrupt output for this reason, and
+        // vanilla looked clean only because it is the one policy that never installs the
+        // callback.
+        //
+        // The fix, and why it is the same shape as the FA-on path. kq_evict is not an
+        // interception -- it is a LEAF the graph produces and the scheduler materialises
+        // normally, with no dependents to split away from. That is why muKV has always
+        // been clean here. The FA-off branch now emits the same leaf, so a score-reading
+        // policy reads kq_evict and never asks for kq_soft_max.
+        //
+        // Cheaper than the FA-on version, too: that branch has to RECOMPUTE
+        // softmax(scale * K^T Q_lastW) because FlashAttention never materialises it. Here
+        // kq is already the softmaxed tensor, so the side node is a view + reduction over
+        // the last W query rows. Same [1, n_kv, n_head] layout the host capture already
+        // handles, so no harness change is needed beyond preferring this node.
+        if (g_endurkv_evict_obs_window > 0 && q->ne[1] > 1) {
+            const int64_t nt = kq->ne[1];
+            const int64_t W  = nt < g_endurkv_evict_obs_window ? nt : (int64_t) g_endurkv_evict_obs_window;
+            ggml_tensor * kq_w = ggml_view_4d(ctx0, kq, kq->ne[0], W, kq->ne[2], kq->ne[3],
+                                              kq->nb[1], kq->nb[2], kq->nb[3], (nt - W)*kq->nb[1]);
+            ggml_tensor * kq_t = ggml_cont(ctx0, ggml_transpose(ctx0, kq_w)); // [W, n_kv, n_head, ns]
+            ggml_tensor * kq_m = ggml_sum_rows(ctx0, kq_t);                   // [1, n_kv, n_head, ns]
+            kq_m = ggml_scale(ctx0, kq_m, 1.0f / (float) W);                  // mean over W
+            cb(kq_m, "kq_evict", il);
+            ggml_build_forward_expand(gf, kq_m);
+        }
 
         if (!v_trans) {
             // note: avoid this branch

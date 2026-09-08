@@ -124,8 +124,45 @@ while [ "$i" -lt "$N_CPUS" ]; do
 done
 HEADER="$HEADER,gpu_busy_us,gpu_total_us"
 HEADER="$HEADER,bat_current_ma,bat_voltage_mv,bat_phone_temp_dc"
+# v4 additions: USB rail + PMIC direct reads (root-readable on rooted device).
+# USB current/voltage gives instantaneous SoC power draw when plugged in:
+#   P_soc = (usb_current_ua / 1e6) * (usb_voltage_uv / 1e6)  watts
+# Battery PMIC charge_counter enables precise coulomb-counter integration:
+#   dE = (charge_dt * voltage_avg) Joules between samples
+HEADER="$HEADER,usb_online,usb_current_ua,usb_voltage_uv,bat_charge_uah,bat_power_now_uw"
+# v5 additions: richer PMIC sources (root-required on most devices).
+#   bat_power_now_uw   — direct microwatts (BEST source for energy integration)
+#   bat_current_now_ua — battery current in microamps (signed: + charge / - discharge)
+#   bat_voltage_now_uv — battery voltage in microvolts
+#   bat_status         — Charging / Discharging / Full / Not charging
+# When direct read fails (perm denied), we fall back to a single `su -c cat`
+# batch read per tick (1 fork) so we don't pay 4x fork cost per sample.
+HEADER="$HEADER,bat_current_now_ua,bat_voltage_now_uv,bat_status"
+# v6 additions (2026-09-02): the DVFS state that decides GPU decode throughput.
+#   gpu_clk_hz            current Adreno clock (kgsl gpuclk)
+#   gpu_thermal_pwrlevel  thermal cap level in force (0 = none; 5 = 726 MHz on this device)
+#   ddr_freq_khz          current DDR clock (bus_dcvs); bandwidth-bound decode follows this
+#   llcc_freq_khz         current system-cache clock
+# Appended last so every earlier column keeps its position.
+HEADER="$HEADER,gpu_clk_hz,gpu_thermal_pwrlevel,ddr_freq_khz,llcc_freq_khz"
 
 echo "$HEADER" > "$OUT"
+
+# ---- v5: detect whether PMIC files need `su -c` to read ----
+# Probe by attempting a direct read; if it returns empty, switch to `su -c`.
+# Cache the read mode for the entire run: "direct" or "su" or "none".
+BAT_READ_MODE="direct"
+_probe=""
+read _probe < /sys/class/power_supply/battery/power_now 2>/dev/null
+if [ -z "$_probe" ]; then
+    # Try su batch read
+    _probe=$(su -c 'cat /sys/class/power_supply/battery/power_now' 2>/dev/null | head -1)
+    if [ -n "$_probe" ]; then
+        BAT_READ_MODE="su"
+    else
+        BAT_READ_MODE="none"
+    fi
+fi
 
 # Cached values, refreshed every 10 ticks (~1 Hz at HZ=10)
 BAT_TICK=99
@@ -301,6 +338,60 @@ while [ $TRAP_FLAG -eq 0 ]; do
         BAT_TICK=0
     fi
     ROW="$ROW,$CACHED_BAT_I,$CACHED_BAT_V,$CACHED_BAT_T"
+
+    # ---- v4 + v5: USB rail + PMIC direct reads (root-readable, every tick) ----
+    # Cheap: single read of small sysfs files, no fork.
+    USB_ON=""; USB_I=""; USB_V=""; BAT_Q=""; BAT_P=""
+    BAT_I_NOW=""; BAT_V_NOW=""; BAT_STATUS=""
+    [ -r /sys/class/power_supply/usb/online ]      && read USB_ON < /sys/class/power_supply/usb/online
+    [ -r /sys/class/power_supply/usb/current_now ] && read USB_I  < /sys/class/power_supply/usb/current_now
+    [ -r /sys/class/power_supply/usb/voltage_now ] && read USB_V  < /sys/class/power_supply/usb/voltage_now
+    [ -r /sys/class/power_supply/battery/charge_counter ] && read BAT_Q < /sys/class/power_supply/battery/charge_counter
+
+    # v5: richer PMIC sources (power_now, current_now, voltage_now, status).
+    # On most Android devices these need root. BAT_READ_MODE was probed at
+    # startup:
+    #   - direct: use `read VAR < /sys/...` (zero forks per value)
+    #   - su:     one `su -c cat ...` batch reads all 4 values in 1 fork
+    #   - none:   leave empty (no root, no direct perms)
+    case "$BAT_READ_MODE" in
+        direct)
+            [ -r /sys/class/power_supply/battery/power_now ]   && read BAT_P      < /sys/class/power_supply/battery/power_now
+            [ -r /sys/class/power_supply/battery/current_now ] && read BAT_I_NOW  < /sys/class/power_supply/battery/current_now
+            [ -r /sys/class/power_supply/battery/voltage_now ] && read BAT_V_NOW  < /sys/class/power_supply/battery/voltage_now
+            [ -r /sys/class/power_supply/battery/status ]      && read BAT_STATUS < /sys/class/power_supply/battery/status
+            ;;
+        su)
+            # One fork → 4 values. Order matters: power_now, current_now,
+            # voltage_now, status (matches the cat arg order below).
+            _bat_batch=$(su -c 'cat /sys/class/power_supply/battery/power_now /sys/class/power_supply/battery/current_now /sys/class/power_supply/battery/voltage_now /sys/class/power_supply/battery/status' 2>/dev/null)
+            if [ -n "$_bat_batch" ]; then
+                _IFS_SAVED=$IFS
+                IFS='
+'
+                set -- $_bat_batch
+                IFS=$_IFS_SAVED
+                BAT_P=$1
+                BAT_I_NOW=$2
+                BAT_V_NOW=$3
+                BAT_STATUS=$4
+            fi
+            ;;
+        none)
+            : ;;
+    esac
+    # Sanitize status: it may contain trailing CR or commas (CSV-unsafe).
+    BAT_STATUS=$(echo "$BAT_STATUS" | tr -d ' \r\n,')
+    ROW="$ROW,$USB_ON,$USB_I,$USB_V,$BAT_Q,$BAT_P"
+    ROW="$ROW,$BAT_I_NOW,$BAT_V_NOW,$BAT_STATUS"
+
+    # ---- v6: GPU clock, thermal cap level, DDR and LLCC clocks (root-readable, no fork) ----
+    GPU_CLK=""; GPU_TPL=""; DDR_F=""; LLCC_F=""
+    [ -r /sys/class/kgsl/kgsl-3d0/gpuclk ]           && read GPU_CLK < /sys/class/kgsl/kgsl-3d0/gpuclk
+    [ -r /sys/class/kgsl/kgsl-3d0/thermal_pwrlevel ] && read GPU_TPL < /sys/class/kgsl/kgsl-3d0/thermal_pwrlevel
+    [ -r /sys/devices/system/cpu/bus_dcvs/DDR/cur_freq ]  && read DDR_F  < /sys/devices/system/cpu/bus_dcvs/DDR/cur_freq
+    [ -r /sys/devices/system/cpu/bus_dcvs/LLCC/cur_freq ] && read LLCC_F < /sys/devices/system/cpu/bus_dcvs/LLCC/cur_freq
+    ROW="$ROW,$GPU_CLK,$GPU_TPL,$DDR_F,$LLCC_F"
 
     echo "$ROW" >> "$OUT"
 

@@ -1,0 +1,44 @@
+{
+  "vanilla": {
+    "acc": "6/8",
+    "tps": 5.85,
+    "prefill_s": 245.07,
+    "rss_MB": 2094.1,
+    "mean_evicted": 0
+  },
+  "h2o": {
+    "acc": "8/8",
+    "tps": 2.91,
+    "prefill_s": 290.58,
+    "rss_MB": 2157.6,
+    "mean_evicted": 50
+  },
+  "tova": {
+    "acc": "7/8",
+    "tps": 2.87,
+    "prefill_s": 290.45,
+    "rss_MB": 2118.2,
+    "mean_evicted": 1640
+  },
+  "streamingllm": {
+    "acc": "0/8",
+    "tps": 3.28,
+    "prefill_s": 289.71,
+    "rss_MB": 2118.0,
+    "mean_evicted": 3072
+  },
+  "adakv": {
+    "acc": "7/8",
+    "tps": 3.14,
+    "prefill_s": 289.55,
+    "rss_MB": 2118.2,
+    "mean_evicted": 1088
+  },
+  "v1_fa2_stack": {
+    "acc": "0/8",
+    "tps": 10.0,
+    "prefill_s": 283.89,
+    "rss_MB": 2017.5,
+    "mean_evicted": 3829
+  }
+}

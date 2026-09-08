@@ -1,0 +1,256 @@
+{
+  "kind": "RES_SCHEMA",
+  "version": 1,
+  "generator": "host_plot_intro_thermal_cliff.py",
+  "figure": "/home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/19_intro_thermal_cliff.png",
+  "title": "On-device LLM inference hits thermal cliff at iter 6-10 without closed-loop control",
+  "role_in_paper": "FIGURE 1 (intro motivator)",
+  "x_axis": "iteration index (1..N)",
+  "y_axes": {
+    "top": "decode tokens / s",
+    "bottom": "DDR memory temperature (C)"
+  },
+  "thresholds": {
+    "kernel_freq_cliff_c": 65.0,
+    "cliff_mechanism": "SD8-Gen5 kernel thermal governor caps big-core to ~1267 MHz when ddr_temp >= 65 C"
+  },
+  "waves_used": [
+    "wave4",
+    "wave8",
+    "wave9"
+  ],
+  "waves_excluded": [
+    "wave11"
+  ],
+  "wave_sources": {
+    "wave4": "/home/mislam22/EndurKV_workspace/phone-logs/wave4_longdecode_1780750084/vanilla",
+    "wave8": "/home/mislam22/EndurKV_workspace/phone-logs/wave8_v1fa2_sel_1780788550/v1_fa2_selective",
+    "wave9": "/home/mislam22/EndurKV_workspace/phone-logs/wave9_v1fa2_stack_1780796320/v1_fa2_stack"
+  },
+  "story": {
+    "vanilla_collapse_pct": 32.540076020492485,
+    "wave8_cliff_iter": 10,
+    "wave8_cliff_tps_drop_pct": 15.27737012034048,
+    "wave9_min_tps": 4.569,
+    "wave9_max_tps": 7.382,
+    "wave9_holds_tps_floor": 4.569
+  },
+  "cells": [
+    {
+      "wave": "wave4",
+      "policy": "vanilla",
+      "label": "W4 vanilla (no control, no FA)",
+      "src_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave4_longdecode_1780750084/vanilla",
+      "n_iter": 9,
+      "iters": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "decode_tps_per_iter": [
+        6.051,
+        5.961,
+        5.279,
+        5.175,
+        5.16,
+        4.11,
+        4.686,
+        4.541,
+        4.082
+      ],
+      "ddr_med_c_per_iter": [
+        50.9,
+        57.1,
+        58.3,
+        59.8,
+        61.4,
+        57.1,
+        61.4,
+        60.2,
+        56.7
+      ],
+      "ddr_peak_c_per_iter": [
+        55.2,
+        59.0,
+        60.2,
+        61.0,
+        62.5,
+        62.9,
+        62.5,
+        62.9,
+        62.5
+      ],
+      "ddr_end_c_per_iter": [
+        54.0,
+        57.9,
+        58.7,
+        60.6,
+        61.7,
+        61.0,
+        56.7,
+        61.4,
+        54.4
+      ],
+      "mean_tps": 5.005,
+      "tps_first": 6.051,
+      "tps_last": 4.082,
+      "tps_drop_pct": 32.540076020492485,
+      "peak_ddr_c": 62.9
+    },
+    {
+      "wave": "wave8",
+      "policy": "v1_fa2_selective",
+      "label": "W8 v1_fa2 selective (no watchdog)",
+      "src_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave8_v1fa2_sel_1780788550/v1_fa2_selective",
+      "n_iter": 11,
+      "iters": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "decode_tps_per_iter": [
+        7.211,
+        6.794,
+        6.785,
+        6.817,
+        6.821,
+        6.79,
+        6.801,
+        6.82,
+        6.814,
+        5.773,
+        6.785
+      ],
+      "ddr_med_c_per_iter": [
+        52.1,
+        55.6,
+        59.0,
+        61.7,
+        64.1,
+        65.2,
+        66.8,
+        67.9,
+        68.7,
+        67.9,
+        68.3
+      ],
+      "ddr_peak_c_per_iter": [
+        55.6,
+        58.3,
+        61.4,
+        63.7,
+        66.0,
+        67.9,
+        68.7,
+        69.1,
+        69.9,
+        72.9,
+        70.6
+      ],
+      "ddr_end_c_per_iter": [
+        54.8,
+        57.1,
+        60.6,
+        62.9,
+        64.8,
+        66.4,
+        67.5,
+        68.3,
+        69.1,
+        67.9,
+        68.1
+      ],
+      "mean_tps": 6.7464545454545455,
+      "tps_first": 7.211,
+      "tps_last": 6.785,
+      "tps_drop_pct": 5.907641103869091,
+      "peak_ddr_c": 72.9
+    },
+    {
+      "wave": "wave9",
+      "policy": "v1_fa2_stack",
+      "label": "W9 v1_fa2 stack (closed-loop watchdog)",
+      "src_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave9_v1fa2_stack_1780796320/v1_fa2_stack",
+      "n_iter": 10,
+      "iters": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "decode_tps_per_iter": [
+        7.382,
+        6.723,
+        6.418,
+        6.113,
+        6.399,
+        6.347,
+        6.17,
+        4.569,
+        6.168,
+        4.601
+      ],
+      "ddr_med_c_per_iter": [
+        56.0,
+        59.0,
+        60.2,
+        61.7,
+        59.8,
+        61.0,
+        61.4,
+        56.7,
+        61.7,
+        56.7
+      ],
+      "ddr_peak_c_per_iter": [
+        58.3,
+        60.6,
+        61.7,
+        64.1,
+        61.7,
+        62.5,
+        62.5,
+        62.9,
+        62.9,
+        62.5
+      ],
+      "ddr_end_c_per_iter": [
+        57.1,
+        59.0,
+        61.0,
+        61.7,
+        60.6,
+        61.0,
+        61.7,
+        56.3,
+        62.1,
+        60.6
+      ],
+      "mean_tps": 6.089,
+      "tps_first": 7.382,
+      "tps_last": 4.601,
+      "tps_drop_pct": 37.67271742075318,
+      "peak_ddr_c": 64.1
+    }
+  ]
+}

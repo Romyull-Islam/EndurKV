@@ -1,0 +1,79 @@
+<|user|>
+Read the following document and answer the question.
+
+Document:
+KSTP (1500 AM; SKOR North) is a commercial AM radio station licensed to Saint Paul, Minnesota. It is the flagship AM radio station of Hubbard Broadcasting, which also owns several other television and radio stations across the United States.  KSTP has a sports radio format and is the ESPN Radio Network affiliate for Minneapolis-St. Paul.  The radio studios are  on University Avenue in Minneapolis, shared with sister stations KSTP-FM, KSTP-TV, KTMY, and KSTC-TV. On weekdays, KSTP airs local sports shows from 9 a.m. to 9 p.m. and carries ESPN programming weekday mornings, late nights and weekends. Some KSTP shows are simulcast on other sports radio stations in the region.
+
+KSTP runs the maximum power for AM stations, 50,000 watts.  It shares clear-channel, Class A status on 1500 AM with WFED in Washington, D.C.  KSTP broadcasts a directional signal at night, using a three-tower array, with its transmitter on U.S. Route 61 at Beam Avenue in Maplewood.  Programming is also heard on 250 watt FM translator K235BP at 94.9 MHz in Bemidji.
+
+History
+
+WAMD and KFOY
+KSTP's start in 1928 was the product of a merger between two pioneering Twin Cities stations: WAMD ("Where All Minneapolis Dances") in Minneapolis, first licensed on February 16, 1925 to Stanley E. Hubbard, and KFOY in St. Paul, first licensed on March 12, 1924 to the Beacon Radio Service in St. Paul.
+
+Following a few test transmissions, WAMD made its formal debut broadcast on February 22, 1925. (In later interviews Stanley Hubbard traced WAMD's start to April 1924.) It was located at the Marigold Dance Garden, and featured nightly "Midnight Frolics" broadcasts by the ballroom's orchestra. It is claimed that WAMD was the first radio station to be completely supported by running paid advertisements. Effective June 15, 1927, WAMD was assigned to 1330 kHz.
+
+On November 11, 1927 WAMD's transmitter site at Oxboro Heath on Lyndale Avenue South burned down, two weeks after the station had been sold to the National Battery Company. An initial arrangement was made to carry WAMD's programs over WRHM (now WWTC), transmitting on WAMD's 1330 kHz frequency. Beginning on November 24, 1927 the WAMD broadcasts, still on 1330 kHz, were shifted to KFOY's facility in St. Paul. (At this time KFOY was assigned to 1050 kHz). The next day it was announced that National Battery had purchased KFOY, and as of December 1, 1927 both KFOY and WAMD were reassigned to 1350 kHz. WAMD continued making regular broadcasts until the end of March 1928, while KFOY, although it continued to be licensed for a few more months on a time-sharing basis with WAMD, ceased operations at this point.
+
+National Battery Company
+In mid-December 1927, the National Battery Company announced it had received permission from the Federal Radio Commission (FRC) to build a new station, with the call letters KSTP, operating from a transmitter site to be constructed three miles south of Wescott. The next month it was reported that the new station, still under construction, had been assigned to 1360 kHz. KSTP made its debut broadcast on March 29, 1928. Although technically it was a separate station from WAMD and KFOY, both of which were formally deleted on April 30, 1928, overall KSTP was treated as the direct successor to a consolidated WAMD and KFOY.
+
+Hubbard became the merged station's general manager, acquiring controlling interest in 1941. A month after the merger, KSTP became an affiliate for the NBC Red Network.  It remained with NBC for 46 years. On November 11, 1928, under the provisions of the FRC's General Order 40, KSTP was assigned to a "high-powered regional" frequency of 1460 kHz. The only other station assigned to this frequency was WTFF in Mount Vernon Hills, Virginia (later WJSV, now WFED, Washington, D.C.). On February 7, 1933, the FRC authorized KSTP to increase its daytime power to 25 KW. In 1938 and 1939 KSTP also operated a high-fidelity AM "experimental audio broadcasting station" Apex station, W9XUP, originally on 25,950 kHz and later on 26,150 kHz. In 1941, as part of the implementation of the North American Regional Broadcasting Agreement, KSTP was assigned to its current "clear channel" frequency of 1500 kHz, with the provision that it and WJSV, as "Class I-B" stations, had to maintain directional antennas at night in order to mutually protect each other from interference. An FM station, KSTP-FM, was founded in 1946 but shut down in 1952.
+
+Hubbard reportedly acquired an RCA TV camera in 1939, and started experimenting with television broadcasts.  But World War II put a hold on the development of television.  In 1948, with the war over, KSTP-TV became the first television station in Minnesota.  With KSTP 1500 already associated with NBC Radio, KSTP-TV became an NBC Television Network affiliate.  From 1946 to 1952, KSTP also had an FM counterpart.  KSTP-FM 102.1 was only on the air four years.  There were few radios equipped to receive FM signals in that era, and management decided to discontinue FM broadcasts.
+
+MOR and Top 40
+As network programming moved from radio to television, KSTP programmed a full service Middle of the Road (MOR) radio format, in the shadow of its chief competitor, CBS Radio affiliate 830 WCCO. In 1965, a new FM station, reviving the KSTP-FM call sign, was put on the air, largely simulcasting the AM station.  But by the late 1960s, KSTP-FM began a separate format of beautiful music.  KSTP was the radio home of the Minnesota Vikings football team from 1970 to 1975. 
+
+In 1973, KSTP broke away from its longtime adult MOR sound and became one of four area stations at the time to program a Top 40 format. "15 KSTP, The Music Station" competed with Top 40 AM rivals WDGY, KDWB and later, WYOO. The competition would eventually shake itself out, with outrageous rocker WYOO dropping out after being sold in 1976, and then the staid WDGY switching to country music the following year.  As for uptempo hits station 15 KSTP, it went from a tight Top 40 format to leaning adult rock in 1978, to leaning adult contemporary in 1979, to evolving into adult contemporary/talk by 1980.  In 1982, it officially shifted to talk.  Most Top 40 rock music, by this time, had moved to the FM band.
+
+Past Personalities
+
+Notable hosts who have been on KSTP include John Hines, Jesse Ventura, Larry Carolla, Tom Barnard, Big Al Davis, Don Vogel, John MacDougall, Griff, Mike Edwards, Geoff Charles, Joe Soucheray, James Lileks, Leigh Kamman, Barbara Carlson, Peter Thiele, Tom Mischke, Jason Lewis, Chuck Knapp, Machine Gun Kelly, Charle Bush, Mark O'Connell and Paul Brand. These broadcasters were supported by producers such as Bruce Huff, Rob Pendleton, Alison Brown, Jean Bjorgen, David Elvin (who Vogel dubbed the "Steven Spielberg of Talk Radio"), Mitch Berg and others.
+
+The station has, for the most part, emphasized local hosts over the years.  But in 1988, KSTP was one of Rush Limbaugh's first affiliates when his conservative talk show was rolled out for national syndication.  (Clear Channel-owned KTLK-FM took over rights to Limbaugh's show in January 2006). Other syndicated hosts previously heard on KSTP include Sean Hannity, Bruce Williams, Larry King, and Owen Spann.
+
+Sports Radio
+KSTP switched to Sports Radio on February 15, 2010.  As the station had to wait for ESPN's contract with rival KFAN and its sister station KFXN to expire, it did not become an ESPN Radio affiliate until April 12, the same day that the Minnesota Twins were scheduled to play the first game in their new ball park, Target Field, against the Boston Red Sox.  As a result Coast to Coast AM and Live on Sunday Night, it's Bill Cunningham were retained during this period.  One ESPN Radio network program, The Herd with Colin Cowherd, was picked up by KSTP immediately following the format change.
+
+In 2018, the station was approved for an FM translator on 94.1 FM, broadcasting from a transmitter atop the IDS Center in downtown Minneapolis. The two-watt signal threw most of its power to the west, preventing interference to low powered FM stations on the same channel including WFNU-LP in St. Paul. With only two watts of power, however, the signal was limited to the immediate downtown area surrounding the IDS Center.  It later acquired a 250 watt translator, K235BP at 94.9 MHz.  The original translator was discontinued.
+
+On January 15, 2019, KSTP rebranded as "SKOR North" (a reference to the Vikings team song/chant, "Skol, Vikings"), with local programming between 12 noon and 7 pm. About a year later, in May of 2020, KSTP suspended most of its local programming and laid off nearly all of its local staff. Station management cited the economic toll of the coronavirus for the changes. Sports broadcasting continues, primarily composed of ESPN radio network broadcasts.
+
+Sports Teams
+
+KSTP-AM served as the radio flagship for the Minnesota Vikings football team from 1970 to 1975.
+
+On August 1, 2006, the station announced that it would be the new flagship station for the Minnesota Twins baseball team, effective with the start of the 2007 season. The Twins had been on rival WCCO since arriving in Minnesota in 1961.  KSTP served as the flagship for the Twins until the end of the 2012 season, when games moved to 96.3 KTWN-FM (now KMWA).  The Twins have since returned to WCCO 830.
+
+The switch to a fairly weak FM station caused dissent among some listeners, particularly in communities that had trouble picking up KSTP 1500.  Although KSTP is the state's second most powerful AM station, it must operate directionally at night, delivering a reduced signal to parts of the market. WCCO, by comparison, offers a signal with a wider coverage area during the day than KSTP does, with WCCO's non-directional 50,000 watt signal. In response, the Twins have expanded the number of affiliates.
+
+On March 9, 2011, KSTP announced it would be the new flagship for the University of Minnesota Golden Gophers men's and women's basketball and men's ice hockey, ending a 68-year run on WCCO. The rights have since moved to KFXN-FM, which already aired Gopher football.
+
+On March 2, 2017, KSTP announced it would be the first radio broadcaster for Minnesota United FC.  The move brings live soccer action to 1500 AM.
+
+Previous logos
+
+References
+
+External links
+KSTP website
+
+FCC History Cards for KSTP (covering 1928-1980)
+Radiotapes.com Historic Minneapolis/St. Paul airchecks dating back to 1924 including KSTP and other Twin Cities radio stations.
+Rick Burnett's TwinCitiesRadioAirchecks.com has additional airchecks of KSTP and other Twin Cities radio stations from the '60s and '70s, including Chuck Knapp's 2nd show on KSTP.
+
+Hubbard Broadcasting
+ESPN Radio stations
+Peabody Award winners
+Radio stations in Minneapolis–Saint Paul
+Radio stations established in 1925
+1925 establishments in Minnesota
+Minnesota Kicks
+Sports radio stations in the United States
+Clear-channel radio stations
+
+Question: When did KSTP switch to a sports radio format?
+Answer:
+<|end|>
+<|assistant|>

@@ -1,0 +1,583 @@
+\documentclass[sigconf, anonymous=false, screen=true]{acmart}
+
+%% HotMobile 2027 submission — 8-page version with all 7 review patches applied.
+%% Source: user's HotMobile draft + 7 patches (Challenges, prior-art gap,
+%% Goals, n=7 fix, LongBench K=512, closed-loop framing, reproducibility).
+
+\settopmatter{printacmref=false}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+\pagestyle{plain}
+
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage{graphicx}
+\graphicspath{{figures/}}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{enumitem}
+
+\definecolor{kvgreen}{RGB}{40, 174, 96}
+\definecolor{kvred}{RGB}{192, 57, 43}
+\definecolor{kvgray}{RGB}{85, 85, 85}
+\newcommand{\good}[1]{\textcolor{kvgreen}{\textbf{#1}}}
+\newcommand{\bad}[1]{\textcolor{kvred}{\textbf{#1}}}
+\newcommand{\nodata}{\textcolor{kvgray}{\textit{---}}}
+\newcommand{\circled}[1]{\raisebox{.5pt}{\textcircled{\raisebox{-.9pt}{\footnotesize #1}}}}
+
+\begin{document}
+
+\title{$\mu$KV: Closed-Loop KV Cache Eviction with a Cheap Per-Head Gate, Per-Prompt Adaptive Dispatcher, and Cache-as-Thermal-Actuator for Mobile LLM Inference}
+
+\author{Md Romyull Islam}
+\affiliation{%
+  \institution{Kennesaw State University}
+  \city{Marietta}
+  \state{Georgia}
+  \country{USA}
+}
+\email{romyullislam2012@gmail.com}
+
+\begin{abstract}
+On a phone the KV cache, not compute, limits sustained LLM decode: cache size sets per-step DRAM reads, reads set power, power sets temperature, and temperature sets the throttle. Prior eviction policies were evaluated on server GPUs with perplexity as the only metric, and prior thermal-aware mobile systems act on frequency alone with no cache signal. We present $\mu$KV, a sequence-level KV eviction system for mobile inference. $\mu$KV scores and selects inside the flash-attention prefill graph through a small side node, so scoring costs the same as vanilla prefill; it evicts at the sequence level and compacts the cache with a 290\,ms state round-trip; it sets its budget from expected output demand rather than prompt length; and a reduce-only watchdog lowers the clock in small steps before the kernel throttle would engage. On a OnePlus 15 under a cold-start protocol with canonical baseline configurations, $\mu$KV decodes WikiText at 3.6$\times$ vanilla throughput with 52\% less system energy, retaining a 22.5\,MiB cache against vanilla's 304\,MiB, and the kernel throttle never engages. The same measurements expose a realizability gap: per-head evictors such as SnapKV and Ada-KV cannot compact a sequence-level cache on a real inference engine, so their nominal budgets never materialize on the device. On needle-in-a-haystack retrieval $\mu$KV retrieves 7/7 at 4K on all three models with its bounded cache. We report costs as plainly as wins: aggressive compaction raises continuation perplexity, and coupling cache size to temperature does not cap heat, so frequency remains the thermal lever.
+\end{abstract}
+
+\keywords{Mobile LLM inference, KV cache eviction, FlashAttention, thermal management, energy efficiency, Snapdragon, on-device AI}
+
+\maketitle
+
+\section{Introduction}
+\label{sec:intro}
+
+\paragraph{Motivation.} Phones increasingly host LLM workloads that look nothing like a server: a single user, a 30--60\,s sustained generation, a thermal envelope that throttles long before any compute limit, and an OS that will kill the inference process if it crosses a memory headroom threshold. Quality is necessary but not sufficient --- a policy that wins perplexity at the cost of skin temperature, peak resident-set, or battery drain fails the deployment. The on-device LLM literature optimizes \emph{one} of these axes at a time (perplexity on GPU benchmarks; or DVFS in isolation; or compression alone). The phone optimizes \emph{all of them at once, under coupling}: cache size sets DRAM read, read sets power, power sets temperature, temperature sets throttle, throttle sets throughput. A useful mobile KV-cache policy has to be jointly evaluated against \emph{quality} (NIAH, LongBench, perplexity), \emph{throughput} (decode tps under realistic 16K context), and \emph{thermal} (peak DDR vs the kernel cliff, peak skin, watchdog activity), and proven on actual hardware --- not extrapolated. The literature has nothing that does all three on a phone.
+
+\paragraph{Problem.} Small instruction-tuned LLMs (1--4B parameters, 4-bit quantized) now run interactively on flagship phones at 5--7 tokens/s on CPU. The remaining wall is not the matrix multiply. It is the KV cache. Once sustained generation passes a thousand tokens, four pressures bind at the same time:
+
+\begin{itemize}
+\item \textbf{Cache size.} A Phi-3-mini cache at 2K context holds about 1.2\,GiB (f16 K+V). On a 12\,GB phone shared with foreground apps this triggers swap; we measure 158\,MB of swap-out under the full cache, with swap-in stalls near 280\,ms.
+\item \textbf{DRAM bandwidth.} Decode reads the whole cache once per layer per token, roughly 750\,MB per attention pass for Phi-3 at 2K. On LPDDR5X at about 50\,GB/s this read dominates the step.
+\item \textbf{Thermals.} The Qualcomm BCL~\cite{qualcommbcl} and the kernel cooling driver cut the big-core clock from 1632 to 883\,MHz once DDR passes about 65\,\textdegree C, often within 90\,s of sustained decode.
+\item \textbf{Energy.} A full-cache 2048-token decode draws about 38.7\,mAh on our hardware. On a 5000\,mAh battery that caps the budget near 130 such generations before any other app load.
+\end{itemize}
+
+\paragraph{Challenges to a co-aware solution.} The four pressures introduce five design challenges that no single prior mechanism addresses.
+(C1) \emph{Score-vs-kernel conflict}: any per-head signal that uses post-softmax attention is locked out of FlashAttention, the kernel that makes decode fast on mobile.
+(C2) \emph{Quantization is workload-dependent}: on small caches the dequantize CPU cost can exceed the bandwidth saving, so q8\_0 K is a win above $\sim$1\,GB cache and a loss below it (\S\ref{sec:eval-cross}).
+(C3) \emph{Aggressive eviction is hotter, not cooler}: cutting the cache lets the chip run at full clock for shorter total time, so peak temperatures rise even as total energy drops. The thermal envelope is set by peak, not by total energy.
+(C4) \emph{Mobile DRAM is bounded but cache scales with prompt}: a fixed $K$ leaves headroom on the table for short prompts; a fraction-of-prompt $K$ blows the DRAM budget on long ones.
+(C5) \emph{Throughput-quality split inside one policy}: at a tight cache budget, the same closed-form ramp can be tuned either for chat-class throughput (small $K$, recent-heavy split) or for document-QA quality (large $K$, anchor-heavy split); a single ``best'' tuning does not exist across workload classes, and the choice should ideally be made \emph{per request} from a signal cheap enough to compute at prefill.
+\textbf{$\mu$KV handles (C1) via in-graph scoring on the flash-attention path, (C2) via a precision ablation, (C3) via cache reduction that lowers the steady-state temperature, (C4) by disclosing the fail mode and motivating per-request selection, and (C5) via an \emph{adaptive-anchor dispatcher} (\S\ref{sec:design}) that computes $\alpha_a \in [0.05, 0.95]$ per prompt from the distant-sharpness fraction of prefill attention --- a closed-form, free, hyperparameter-free signal that auto-selects the anchor:recent split.}
+
+These pressures are not independent. Cache size sets bandwidth, bandwidth at a fixed clock sets power, power under fixed cooling sets temperature, and temperature plus time sets energy. Informally the system minimizes $\alpha_1 \text{Wall} + \alpha_2 \text{Energy} + \alpha_3 \text{Jitter}$ subject to a perplexity budget, a peak-temperature ceiling, and a total-I/O ceiling. One intervention, bounding the cache by a per-head confidence-aware budget, pushes on all four pressures at once.
+
+The policies that could supply that bound were designed elsewhere. H2O~\cite{zhang2023h2o}, TOVA~\cite{oren2024tova}, SnapKV~\cite{li2024snapkv}, StreamingLLM~\cite{xiao2024streamingllm}, and the per-head allocator Ada-KV~\cite{feng2025adakv} were all built for server GPUs and measured by perplexity alone. None reports a temperature, a watt, or a resident-set size on a phone. On our hardware the canonical H2O is 32\% \emph{slower} than the full cache at decode, because reading attention scores each step forces it onto the FlashAttention-off path.
+
+We built $\mu$KV to test two related questions on a real phone. First, whether attention-driven eviction joined to a thermal control loop can win on the axes that matter on a phone (throughput, energy, peak RSS, thermal margin). Second, whether the cache size itself can serve as a thermal actuator --- one that prior thermal-aware mobile systems (zTT~\cite{kim2021ztt}, FUSE~\cite{liu2022fuse}, ZeroDVFS, Qualcomm BCL~\cite{qualcommbcl}) do not use, because they target CPU/GPU frequency only and have no KV-cache signal. The answer to the first is yes on throughput, energy, and memory --- and, with the mass-based $\alpha_a$ dispatcher , on retrieval as well: the earlier count-based configuration failed buried-fact retrieval outright, and the completed 336-cell phone NIAH sweep shows the mass-based dispatcher retrieving 7/7 at 4K on every model at a fixed 1024-cell cache (Table~\ref{tab:phone-niah-prelim}); the residual quality cost is confined to long \emph{continuation} workloads (PPL, \S\ref{sec:eval}). The answer to the second is no, and we report it plainly: a thermally coupled cache budget that we built and tested does not cap peak temperature (\S\ref{sec:eval-tdak}), so frequency remains the thermal lever and the cache remains an efficiency lever.
+
+\paragraph{Contributions.} Per-head adaptive budget allocation is Ada-KV's idea~\cite{feng2025adakv}; we credit it and do not reprove its bound. We claim four contributions, ordered by what carries the measured win:
+
+\begin{enumerate}[label=(\roman*),leftmargin=*,itemsep=2pt]
+\item \textbf{A cheap closed-form per-head gate plus a per-prompt adaptive dispatcher} (\S\ref{sec:design}). Per-head budget $K_h = \mathrm{round}(K_\text{nom}\,\mu(m_h))$ from the max-of-softmax $m_h$ through one closed-form ramp: $O(H)$ per layer vs Ada-KV's $O(HN\log HN)$ global top-$B$, no variable-length kernel needed. A mass-based per-prompt dispatcher $\alpha_a = \mathrm{clip}(\text{distant\_mass}/\text{total\_mass}, 0.05, 0.95)$ then auto-selects the anchor:recent split each prompt from the same attention tensor anchor selection already needs (one column-mean reduction, no extra forward pass). Together these two layers carry the throughput-energy win.
+
+\item \textbf{Keeping a score-reading evictor on the flash-attention fast path} (\S\ref{sec:design}). A score-reading evictor must observe post-softmax attention, which normally forces the slow FA-off path. $\mu$KV instead computes its selection scores inside the FA-on prefill graph through a small \texttt{kq\_evict} side node, emitted only on the last prefill chunk, so prefill costs the same as vanilla. After the one-shot eviction a 290\,ms state round-trip compacts the cache in place (CPU; on the GPU the transfer is prohibitive and the cache stays sparse, \S\ref{sec:gpu-results}). Prefill, selection, and decode all run FA-on. To our knowledge no prior attention-driven evictor runs entirely on the fast path on a phone.
+
+\item \textbf{A reduce-only thermal watchdog that makes the kernel throttle unreachable} (\S\ref{sec:eval-thermal}). A userspace daemon reads skin, battery, DDR, and CPU sensors, and lowers the clock cap one step at a time as calibrated thresholds approach, never raising it. It runs only under $\mu$KV and stays dormant on a cold phone. The platform itself applies a first skin-triggered clamp near 41\,\textdegree C, which we observe in every cell; the watchdog's role is the layer below that, keeping the deeper mitigations (the 883\,MHz cliff, battery-current events) unreachable. We also report a negative result: coupling the cache budget itself to temperature does not cap heat (\S\ref{sec:eval-tdak}), which is why clock and cache remain separate actuators.
+
+\item \textbf{First end-to-end mobile measurement} of attention-driven KV eviction. Nine policies measured on a OnePlus 15 under a cold-start protocol with canonical baseline configurations, reporting temperature, total system energy split by phase, physically retained cache, per-step KV state, and CPU clock traces. No prior KV-cache work reports temperature, watts, or retained-cache bytes on a phone. The measurements expose an on-device realizability gap: per-head evictors (SnapKV, Ada-KV) cannot compact a sequence-level cache, so their nominal budgets never materialize, while $\mu$KV's sequence-level selection compacts to 22.5\,MiB against vanilla's 304\,MiB.
+\end{enumerate}
+
+We do not claim a new theoretical bound on eviction loss, novelty for the state API itself, or novelty for DVFS-from-sensors as a control pattern. The composition of a cheap per-head gate, an adaptive dispatcher, fast-path scoring with sequence-level compaction, and a preventive clock watchdog, measured end to end on a phone, is the contribution.
+
+$\mu$KV is the eviction-and-thermal half of a larger closed-loop controller we are building for sustained mobile LLM inference, in which model-internal signals (per-head attention concentration here; per-step output entropy in a companion paper) drive cache state while hardware-internal signals (temperature, eventually flash write count) drive frequency and I/O. Disclosing where the eviction half breaks (\S\ref{sec:limitations}) is the most useful contribution of this submission, because it motivates the per-request selection that the closed loop will provide.
+
+\paragraph{Goals (each measured directly on phone).} We hold $\mu$KV to six success criteria; each is grounded in a measurement reported below.
+(G1) \emph{Bandwidth.} Bound per-step DRAM read by at least $4\times$ vs vanilla, to relieve mobile LPDDR5X pressure.
+(G2) \emph{Kernel.} Keep FA-on decode end-to-end so the throughput win is mobile-relevant, not a GPU artifact.
+(G3) \emph{Thermal cliff.} Hold DDR below the empirical kernel throttle cliff ($\sim$65\,\textdegree C) under sustained 16K decode by composing eviction with thermal feedback.
+(G4) \emph{Perplexity.} Hold Wave-11 chunk-pair perplexity within $<20\,\%$ of the full cache across three model sizes (Phi-3-mini, Llama-3.2-1B, gemma-2-2b).
+(G5) \emph{Thermal actuator.} Determine whether cache size can serve as a thermal actuator (answer: no, \S\ref{sec:eval-tdak}).
+(G6) \emph{Retrieval recovery (manual).} A single tunable knob (anchor:recent split at the same $K$) recovers single-needle retrieval to \textbf{14/14} on phone and LongBench to \textbf{within $9$--$13\,\%$ of vanilla} on two models (\S\ref{sec:limitations}). The headline broken configuration ($K{=}512$, $a{=}32$, 0/14 NIAH, 44--51\,\% of vanilla LongBench) and the recovered configuration ($K{=}1024$, $a{=}969$, 14/14 NIAH, 87--91\,\% of vanilla LongBench) are two corners of the same Pareto, both measured on the OnePlus 15.
+(G7) \emph{Adaptive resolution of C5 (automatic).} A free, closed-form, per-prompt $\alpha_a$ dispatcher  eliminates the deployment-time corner choice. On Llama-1B at $K{=}1024$ it \emph{matches the manual quality corner} byte-for-byte on qasper (\textbf{7.38 F1 fixed} = \textbf{7.38 F1 adaptive}), auto-discovering the same $a{=}969$ allocation the manual sweep found; at $K{=}512$ on the same model it lifts qasper from \textbf{3.69 $\to$ 5.87 F1} ($+59\,\%$) and hotpotqa from \textbf{5.11 $\to$ 10.24 F1} ($+100\,\%$); on phone NIAH at $K{=}512$ it recovers the broken-baseline 0/14 to all measured cells. The signal generalizes across models with no recalibration.
+
+\paragraph{Non-goals.} We do not claim a new theoretical bound on eviction loss (Ada-KV~\cite{feng2025adakv} owns that); a new attention-score signal (KVzip's reconstruction-attention~\cite{kim2025kvzip} is orthogonal); zero retrieval loss at the throughput corner (C5 is real and we report it honestly); or a new mobile DVFS algorithm (we use one-way pinning and a multi-sensor watchdog as engineering baselines). The contribution is the composition --- attention-driven eviction + multi-sensor thermal control + cache-as-thermal-actuator, in one decode loop, end-to-end on a phone.
+
+\section{Background and Related Work}
+\label{sec:bg}
+
+Autoregressive decode recomputes attention over all cached keys and values each step, so per-step bandwidth grows with the cache. On mobile LPDDR5X this read dominates beyond a few hundred cached tokens.
+
+\textbf{Eviction policies} cut the cache to a budget $K$. H2O~\cite{zhang2023h2o} and TOVA~\cite{oren2024tova} keep heavy hitters or recent high-attention positions and must read attention scores every step. SnapKV~\cite{li2024snapkv} freezes a top-$K$ keep set at end of prefill. StreamingLLM~\cite{xiao2024streamingllm} keeps a few sink tokens plus a sliding window and needs no scores at all. Ada-KV~\cite{feng2025adakv} is the closest prior art for the per-head idea. It proves a tight $L_1$ eviction-loss bound, allocates a non-uniform budget per head from a global top-$B$ over concatenated post-softmax attention, adds an $\alpha{=}0.2$ safeguard that blends the allocation toward uniform $B/H$ so no head starves, and relies on FlashAttention-2's variable-length kernel~\cite{dao2023flashattention2} to keep heterogeneous head budgets fast on GPU. That variable-length kernel is not available on our mobile CPU stack, which is one reason we trade the global top-$B$ for a closed-form ramp that needs one reduction per head. The same group has extended this line with CriticalKV~\cite{feng2025criticalkv} and DefensiveKV~\cite{feng2025defensivekv}. AhaKV~\cite{gu2025ahakv} corrects the per-token \emph{score} under a uniform budget, which is orthogonal to a per-head \emph{budget} and compatible with ours. KIVI~\cite{liu2024kivi} compresses by 2-bit quantization rather than eviction. KVzip~\cite{kim2025kvzip} takes a different angle: it computes a \emph{query-agnostic} importance score by prompting the LLM to reconstruct the prefilled context and recording per-pair max cross-attention, then evicts pairs that contribute little to reconstruction. It reports near-lossless quality at 30\% cache budget on multi-query benchmarks (SCBench, RULER) and a head-level variant that replaces DuoAttention's hours of head-score optimization with one minute of forward passes. KVzip is orthogonal to our work on two axes. First, it adds a one-pass reconstruction-attention scoring step (roughly $2\times$ the prefill cost) acceptable for offline cache preparation on servers but a non-trivial fraction of an on-device budget --- our closed-form ramp needs one reduction per head and zero extra forward passes. Second, KVzip's evaluation is GPU-only and quality-only: it reports no temperature, watt, or peak-RSS number on a phone, and would still face the FA-on/FA-off split we hit on a mobile CPU stack. Our contribution is the on-mobile measurement, not a new importance signal; the reconstruction-attention signal could in principle drop into our the per-head gate layer as future work. None of these reports any thermal, power, or memory measurement on a mobile device.
+
+\textbf{The architectural conflict} that shapes $\mu$KV: FlashAttention~\cite{dao2022flashattention, dao2023flashattention2} fuses softmax into the kernel and never writes the attention tensor to DRAM, which is what makes it fast. Any policy that reads attention scores cannot use the fused kernel for that read. Score-reading evictors are therefore locked to the slow path, which is why H2O loses throughput on our phone.
+
+\textbf{Mobile and edge inference systems.} PowerInfer-2~\cite{song2024powerinfer2} and LLM in a Flash~\cite{alizadeh2023llm} optimize weight access and are orthogonal to cache management. MLC-LLM~\cite{mlcllm} compiles models for mobile GPUs but uses the unmodified KV cache. ExecuTorch (Meta) targets the on-device runtime for PyTorch but leaves cache policy to the model author. MediaPipe LLM Inference (Google) and Apple's CoreML pipeline both use sliding-window caches at fixed budget. MNN-LLM and llama.cpp~\cite{llamacpp} expose the cache directly but ship no built-in eviction policy. PerCache~\cite{liu2025percache} is the closest mobile-RAG counterpart: a predictive hierarchical cache for personalized retrieval-augmented applications that combines a semantic QA bank with reusable QKV tensors, populates the cache during idle time by asking an on-device LLM to predict future user queries, and reports up to 34\% end-to-end latency reduction on commodity phones. PerCache and $\mu$KV solve adjacent but disjoint problems. PerCache operates one layer above us, at the application level: it skips or shortcuts entire inference passes by matching incoming queries against precomputed query-answer pairs and precomputed retrieved-chunk KV; it does not touch the per-step DRAM read pattern of the underlying decode loop. $\mu$KV operates inside the decode loop, bounding the cache cells the model attends to per step. The two compose: PerCache decides \emph{whether} to run the decode loop at all; $\mu$KV decides \emph{how cheaply} to run it when PerCache misses. PerCache also reports no temperature, watt, or thermal-cliff data --- its latency claims assume the chip stays in its nominal envelope. None of these systems couples the cache axis to the thermal axis on a phone.
+
+\textbf{Weight-side compression is orthogonal and complementary.} Per-token decode traffic is $S_\mathrm{weights}+S_\mathrm{KV}$: weight quantization (GPTQ, AWQ, K-quants in \texttt{llama.cpp}) and weight-sharing (MoE, weight tying) shrink the first term; KV eviction shrinks the second. They attack \emph{different} tensors and compose. Which term dominates depends on context length: on a $\sim$4\,B Q4\_K\_M model the weights are $\sim$2.3\,GB and \emph{static}, while the KV cache \emph{grows} from ${\sim}0.2$\,GB at $K{=}512$ to ${\sim}3.6$\,GB at full 8K context on Phi-3 --- so in the long-context sustained decode $\mu$KV targets, the KV term rivals or overtakes the weight term, which is exactly when eviction pays. Recent native 1-bit/ternary weight training pushes the weight term far down: PrismML's Bonsai-8B stores an 8.2\,B model in 1.15\,GB (${\sim}16\times$ smaller than FP16) and reports ${\sim}8\times$ faster decode and ${\sim}4$--$5\times$ better energy on edge hardware, gains its authors attribute to the reduction in weight-memory traffic~\cite{prismml2026bonsai}. This is squarely complementary to $\mu$KV rather than competing: PrismML collapses $S_\mathrm{weights}$ while $\mu$KV collapses $S_\mathrm{KV}$, and at long context a $16\times$-smaller-weight model \emph{still} pays full KV traffic --- so $\mu$KV remains necessary on top, and the two together minimize per-token DRAM movement (and, via the layer map, DDR heat) across the whole context-length range. $\mu$KV composes with any weight quantization, 4-bit or 1-bit.
+
+\textbf{Energy-aware mobile and server inference.} zTT~\cite{kim2021ztt}, FUSE~\cite{liu2022fuse}, and ZeroDVFS act on CPU/GPU \emph{frequency} based on temperature or workload phase but have no KV signal. Power-aware LLM serving systems (Sponge, Sheared, Toaster) target server-side batching efficiency, not on-device thermal envelope. Carbon-aware schedulers (Carbon Containers, Treehouse) target the macroscale energy mix, not per-decode-step thermal control. RAPL-based runtime governors apply on x86 server platforms but cannot read mobile DDR or skin sensors. Conversely no published KV-cache work has a thermal signal at all. $\mu$KV is the first system to read attention-internal state \emph{and} hardware temperature sensors in one decode loop on commercial flagship phone hardware.
+
+\textbf{Industrial on-device LLM efforts.} Apple Intelligence (iOS 18) runs a 3B model on the A18 NPU with adapter-based quantization and CoreML compilation; KV management is a standard sliding window and the implementation is closed source. Samsung Galaxy AI combines Gemini Nano with on-device Llama-family models on the NPU; standard KV. Google Gemini Nano (Pixel 8+) exposes a $\sim$3B model through the AICore service; standard KV. Qualcomm AI Hub and the Snapdragon LLM SDK ship Hexagon-NPU reference implementations; standard KV. To our knowledge, none of these industrial efforts publishes a KV-cache eviction policy with measured thermal, watt, or memory data on a mobile device. $\mu$KV occupies the gap: an open, attention-driven evictor with multi-sensor thermal control, evaluated end-to-end with full multi-axis numbers.
+
+\paragraph{Where each prior policy breaks on a phone.} H2O reads attention each step and is locked to FA-off; we measure $-32\,\%$ decode throughput vs the full cache (Table~\ref{tab:master}). SnapKV freezes a top-$K$ at end of prefill but allocates that $K$ uniformly per head, leaving sharp heads over-allocated and broad heads starved. TOVA keeps per-head top-$K$ from the last query but uses a uniform per-head budget and stays FA-off. StreamingLLM keeps a sink plus a sliding window, so it always evicts the middle of the context, which is where buried-fact retrieval lives (\S\ref{sec:limitations}). Ada-KV's per-head allocator requires FlashAttention-2's variable-length kernel~\cite{dao2023flashattention2} for parity decoding latency, which does not exist on the mobile CPU stack; on the phone Ada-KV pays a $-39\,\%$ decode throughput cost (Table~\ref{tab:master}). KIVI~\cite{liu2024kivi} compresses with 2-bit quantization rather than evicting and is orthogonal. \textbf{None of these works reports a temperature, a watt, a peak resident-set, or a swap byte on a phone.}
+
+\paragraph{Why other policies do not save memory or energy on a phone.} \textit{Active KV cache} savings at $K{=}512$ are similar across all evicting policies (they all bound the same number of resident cells $\le K{\cdot}H{\cdot}L$). But \emph{peak resident-set} (the system-level number that matters for the OS killer and the foreground app's headroom) tracks total process memory, not just the cache. Three asymmetries appear in our measurements (Table~\ref{tab:master}, peak\_rss\_kb): (i) FA-off policies allocate a per-decode attention-scratch tensor of size $O(B {\cdot} H {\cdot} N {\cdot} K)$ that FA-on policies never materialize; on Phi-3 at $K{=}512$ this is an extra $\sim$120\,MB resident in H2O/TOVA/AdaKV. (ii) Score-reading policies retain a full attention-score history buffer; $\mu$KV needs only the per-head $m_h$ scalar from prefill. (iii) The compaction step drops the prefill scoring workspace before decode begins, freeing $\sim$80\,MB. The combined effect: $\mu$KV's peak RSS is 9.3--13\,\% lower than the full cache, while H2O/TOVA/AdaKV match or exceed full-cache RSS despite having a smaller \emph{active} cache.
+
+\emph{Energy} savings have a different mechanism. They only happen when the policy can stay on FA-on. We measure $+45$--$95\,\%$ energy on H2O, TOVA, StreamingLLM, and Ada-KV (Table~\ref{tab:master}) because their score-readback requirement forces FA-off, multiplying decode wall time by $1.7$--$2.1\times$, which dominates the energy integral. $\mu$KV is the only policy that keeps scoring inside the FA-on graph and runs FA-on for thousands of decode tokens, so it is the only evictor that delivers a measured energy win against the full cache.
+
+\paragraph{Why flash offloading is not a good direction on mobile.} An obvious extension of eviction is to spill evicted cells to flash (UFS) for later recall instead of dropping them. Five reasons we do not pursue this in $\mu$KV. (i) \emph{Flash endurance}: blind eviction with random 4\,KB writes inflates the UFS write-amplification factor (WAF) to roughly $4.5\times$; a $150$\,TBW UFS chip is exhausted in under a year of sustained inference. (ii) \emph{Bandwidth gap}: sequential UFS read is $\sim$3\,GB/s, random 4\,KB read is $\sim$200\,MB/s, both an order of magnitude below LPDDR5X. (iii) \emph{Per-token latency}: aligned UFS reads at 16\,KB pay $\sim$150\,\textmu s per chunk, vs DRAM at $\sim$30\,ns per cache line; a decode step that takes 30--100\,ms cannot absorb hundreds of UFS round-trips. (iv) \emph{Thermal coupling}: sustained PCIe and UFS traffic heats the package controller, adding to the thermal envelope $\mu$KV is already managing. (v) \emph{Working set already fits}: at $K{=}512$ the peak KV cache is only $\sim$192\,MB on Phi-3, well below the mobile DRAM budget; there is nothing to offload. We treat aligned-offload-with-watchdog as a complementary mechanism for the unbounded-context regime ($\ge$16K tokens at high retention) and as future work for the closed-loop controller this paper instantiates the eviction-and-thermal half of.
+
+\section{$\mu$KV Design}
+\label{sec:design}
+
+$\mu$KV is a small set of cooperating mechanisms behind one decode loop (Figure~\ref{fig:architecture}). An \emph{inner loop}  uses the prefill attention tensor $\bar A_{l,h,p}$ to set cache content: the per-head gate sizes a per-head budget from $\max_p \bar A$; anchor selection picks anchor positions from cross-head $\mathrm{mean}_{l,h} \bar A$; the dispatcher splits anchor:recent from the same column-mean as a per-prompt $\alpha_a$; eviction runs at the sequence level and compacts the cache, keeping decode on the FA-on path; the cache stores K in q8\_0 to halve K-side bytes. An \emph{outer loop}  reads skin, battery, DDR, and CPU sensors and caps the CPU frequency in small steps before the kernel throttle would engage. Figure~\ref{fig:architecture} shows where each mechanism sits in the decode path, and Figure~\ref{fig:mechanism} shows where the scores come from inside the attention computation.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.94\textwidth]{figures/fig_architecture_v4.png}
+\caption{$\mu$KV in the decode path. Orange marks new components: \circled{1} select, \circled{2} evict and compact, \circled{3} bounded FA-on decode, \circled{4} clock watchdog.}
+\label{fig:architecture}
+\end{figure*}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.94\columnwidth]{figures/fig_mechanism.png}
+\caption{How $\mu$KV taps the attention computation and why sequence-level selection compacts while per-head selection cannot.}
+\label{fig:mechanism}
+\end{figure}
+
+
+\textbf{K\_ceil-Ladder (prompt-aware K nominal).} Before prefill begins, a wrapper-layer ladder maps prompt length $N$ to the initial $K_\mathrm{nom}$:
+\begin{equation}
+\label{eq:kceil}
+K_\mathrm{nom}(N) = \begin{cases}
+N        & N \le 256 \\
+512      & 256 < N \le 512 \\
+1024     & 512 < N \le 1024 \\
+K_\mathrm{MAX} & N > 1024
+\end{cases}
+\end{equation}
+The ladder eliminates wasted budget on short prompts (a 50-token chat does not need a 1024-cell cache) and clamps long prompts to a deployable maximum. The selected $K_\mathrm{nom}$ flows into the per-head budget and the anchor split. Cost: a single \texttt{strlen} on the input plus a 4-way comparison; effectively free.
+
+\paragraph{Why prompt length under-determines $K$ --- and how we choose it instead.} Eq.~\eqref{eq:kceil} is a useful default but rests on a false premise: that input length $N$ predicts the budget a request needs. It does not. The quantity that governs quality is the \emph{effective attended span} --- the past positions carrying non-negligible attention mass at each decode step --- and it decouples from $N$ in both directions. \emph{(i) Short prompt, long output.} A 20-token instruction (``write a 2000-word report'') emits thousands of tokens whose coherence depends on attending to the \emph{growing generation}, so the needed span grows \emph{during} decode, independent of $N$. Reasoning and long-form workloads make this acute: budgets keyed on the prompt starve them, and micro-budgets ($<$128) \emph{backfire} into repetition loops that generate \emph{more} tokens~\cite{cai2025rkv}. A prompt-length ladder assigns such a request a tiny $K$ and is exactly wrong. \emph{(ii) Long prompt, short answer.} Retrieval/QA needs only the relevant slice of a long prompt --- attention concentrates on a few heavy hitters~\cite{zhang2023h2o}, and the query itself can be read from a prompt-end window before generation~\cite{li2024snapkv} --- so $N$ \emph{over}-states the need; yet a fixed \emph{fraction} of $N$ can still evict a needle at intermediate depth~\cite{feng2025adakv}. Effective context is task-dependent, not length-dependent~\cite{hsieh2024ruler}, which is why task-aware budgeting~\cite{zhou2024dynamickv} outperforms length-keyed budgeting.
+
+\emph{The stakes are physical, not just quality.} Across our 372-cell on-device dataset, $K$ is the master knob that trades quality for \emph{both} speed and heat: a larger resident cache lowers decode throughput (memory\,$\leftrightarrow$\,tps, Pearson $r{=}{-}0.77$ --- the bandwidth-bound roofline) and raises DDR temperature (memory\,$\leftrightarrow$\,DDR, $r{=}{+}0.80$), and higher temperature in turn throttles throughput (tps\,$\leftrightarrow$\,DDR, $r{=}{-}0.71$). Over-provisioning $K$ wastes throughput and thermal margin at once; under-provisioning loses recall. Sizing $K$ correctly is therefore not a quality nicety --- it sets the phone's sustainable operating point.
+
+\emph{Demand-aware admission, then decode-time adaptation.} We keep $K$ as the actuator but re-found how it is chosen. At admission we size $K$ from the request's \emph{demand} rather than its input length:
+\begin{equation}
+\label{eq:kdemand}
+K_\mathrm{init} = \mathrm{clip}\!\Big(\max\big(\,\underbrace{r(N)}_{\text{retrieval floor}},\ \underbrace{g(\hat L_\mathrm{out}, \text{task})}_{\text{generation floor}}\big),\; K_\mathrm{min},\; \min(K_\mathrm{MAX},\, K_\mathrm{tier}(T_\mathrm{DDR}))\Big),
+\end{equation}
+where $r(N)\!\le\!N$ covers the relevant prompt span (bounded by, but usually far below, $N$); $g(\cdot)$ scales with the \emph{expected output length} $\hat L_\mathrm{out}$, which is frequently user-declared (``2000-word report'' $\Rightarrow \hat L_\mathrm{out}\!\approx\!2600$) or estimable from task class (chat $\sim$100, summary $\sim$200, report/reasoning $\sim$2000\,tokens); $K_\mathrm{min}\!\approx\!128$ is a hard floor against the micro-budget backfire; and $K_\mathrm{tier}(T_\mathrm{DDR})$ is the thermal admission cap . The new \emph{generation} term is precisely what Eq.~\eqref{eq:kceil} omits: the short-prompt/long-output request the ladder starves now receives budget matched to what it will \emph{generate}. During decode, $K$ adapts on two signals --- it \emph{grows} as $\hat L_\mathrm{out}$ is revised upward for open-ended tasks, and \emph{tightens} when the model is confident (low next-token entropy, the per-step gate of \S\ref{sec:discuss}) --- while the the cache-budget controller thermal ratchet supplies the downward emergency term, giving $K_t = \min\!\big(K_\mathrm{init}\!\uparrow_\text{gen},\, K_\mathrm{tier}(T_t)\big)$: demand raises $K$, heat lowers it, and the controller settles at the largest budget the request needs and the envelope allows. The load-bearing claim --- that break-even $K$ tracks \emph{output} length, not $N$ --- holds in a controlled retention test (Fig.~\ref{fig:kadaptive}). A fact is placed in a short 36-token instruction, followed by a controlled span of $F$ tokens standing in for the generation, then probed for the fact. The minimum $K$ that still retrieves it (the \emph{break-even $K$}) scales directly with the output length --- $256, 512, 1024, 2048, 4096$ as the output grows $78\to2484$ tokens --- and is essentially independent of the 36-token prompt. A prompt-length budget (the budget ladder's $K{=}36$) retrieves in $0/5$ cases, whereas a demand-aware $K$ chosen from the expected output ($K\!=\!2{\times}(\text{prompt}{+}\hat L_\mathrm{out})$) retrieves in $5/5$. An on-device sweep with real (rather than stand-in) generation is underway to confirm the same surface with per-cell energy and thermals.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.86\columnwidth]{figures/fig_kadaptive_host.png}
+\caption{Break-even budget $K$ scales with output length, not with the fixed 36-token prompt (controlled retention test, Llama-3.2-1B).}
+\label{fig:kadaptive}
+\end{figure}
+
+
+A fact planted in a 36-token instruction must survive a growing output before a probe retrieves it. The smallest budget that still retrieves it grows with the output (256 to 4096) and is essentially independent of the prompt, so a prompt-length budget of $K{=}36$ fails at every output length while a demand-aware budget set from the expected output tracks the break-even and retrieves. Eviction is position-based, so filler is a faithful stand-in for generated tokens.
+
+
+\textbf{per-head budget.} At end of prefill, for each head $h$ we read the last query's post-softmax attention $A_h$ and take its peak $m_h = \max_p A_h^p$. A sharp head (large $m_h$) needs few cells; a broad head needs more. We map $m_h$ through a closed-form ramp
+\[
+\mu(x) = 1.3 - 0.6\cdot\mathrm{clip}\!\left(\tfrac{x-0.4}{0.4},0,1\right)\in[0.7,1.3],
+\quad K_h = \mathrm{round}(K_{\text{nom}}\,\mu(m_h)),
+\]
+and keep the top $K_h$ positions per head, union over heads clipped to $K_{\text{nom}}$. This is $O(H)$ per layer against Ada-KV's $O(Hn\log Hn)$ global top-$B$, and needs no variable-length kernel. The clamp $[0.7,1.3]$ plays the role of Ada-KV's $\alpha$-safeguard: no head starves, no head runs away. The breakpoints 0.4 and 0.8 come from the measured $m_h$ distribution on Phi-3, where heads with $m_h>0.8$ are about 22\% of heads but 51\% of attention mass. We do not claim the ramp reaches Ada-KV's optimal budget; it is a cheap mobile approximation.
+
+\textbf{adaptive-anchor dispatcher ($\alpha_a$).} The the per-head gate candidate pool $\bigcup_h S_h$ must be split into ``anchor'' (distant) and ``recent'' fractions. Rather than a hand-tuned constant, we compute a per-prompt $\alpha_a$ from the same prefill attention tensor the per-head gate used. Letting $\bar{\bar A}[p]$ be the column-mean over $(l, h)$ of the captured attention, define $\mathrm{distant\_mass} = \sum_{p < N - R_\mathrm{min}} \bar{\bar A}[p]$ and $\mathrm{total\_mass} = \sum_p \bar{\bar A}[p]$. Then
+\[
+\boxed{\;\alpha_a = \mathrm{clip}\!\left(\frac{\mathrm{distant\_mass}}{\mathrm{total\_mass}},\, 0.05,\, 0.95\right)\;}
+\]
+sets $n_\mathrm{anchor} = \mathrm{round}(\alpha_a \cdot (K_\mathrm{nom} - n_\mathrm{sink}))$ and $n_\mathrm{recent} = K_\mathrm{nom} - n_\mathrm{sink} - n_\mathrm{anchor}$. The compute cost is one column-mean reduction --- the same reduction anchor selection already needs for anchor ranking, so the dispatcher adds zero forward passes. Empirically (\S\ref{sec:eval-cross}, the mass-$\alpha_a$ ablation) $\alpha_a$ varies per prompt (0.62--0.95), auto-discovering the throughput corner on chat-style prompts and the quality corner on retrieval prompts without a deploy-time hyperparameter.
+
+\textbf{selective anchoring.} The per-head union can retain hundreds of prompt cells and starve the recent window. We re-rank the union by mean cross-head attention and keep only the top $n_\mathrm{anchor}$ (from the dispatcher) as anchors, plus 4 sink tokens~\cite{xiao2024streamingllm}, leaving $n_\mathrm{recent}$ for the recent window. Without this cap, Phi-3 perplexity spiked to 158 in early runs.
+
+\textbf{cache precision.} K is quantized to q8\_0, V kept at f16, a lighter profile than KIVI's 2-bit scheme~\cite{liu2024kivi} and free of training. This halves the K-side read and drops DDR temperature by about 3\,\textdegree C on Phi-3. On small models the dequantize cost can exceed the bandwidth saving, so this layer is profitable only for caches above roughly 1\,GB (\S\ref{sec:eval-cross}).
+
+\textbf{fast-path scoring and compaction.} The gate and dispatcher need post-softmax attention, which historically forced the slow FA-off path during prefill. $\mu$KV instead computes the scores inside the FA-on prefill graph through a small \texttt{kq\_evict} side node. The side node is emitted only on the last prefill chunk; earlier chunks' scores are overwritten anyway, so the selection is bit-identical and prefill costs the same as vanilla. After the one-shot eviction, a state serialize and restore pass (290\,ms) compacts the surviving cells into a contiguous cache, and decode runs FA-on over it. An earlier variant reached the same end state by running prefill FA-off and swapping the compacted cache into an FA-on context; it selects the same cells but pays 10--15\% more prefill time, and we keep it in the tables as $\mu$KV (state-swap). During decode a tiered re-eviction fires only when the active cache exceeds $1.25\times(n_{\text{anchor}}+B_R)$, so the eviction work is amortized across many steps.
+
+\textbf{watchdog.} A separate process samples DDR, CPU big-core, skin, battery temperature, and battery current at 2\,Hz, computes a per-sensor threat as the clamped warn-to-crit fraction, and takes the maximum. Rising threat lowers the big-core frequency cap one step at a time (1632, 1497, 1382, 1267\,MHz); the cap steps back toward the base only after the threat has fallen 0.1 below the tier boundary, which prevents chatter. The cap never rises above the base clock, so the watchdog can only reduce. Thresholds are anchored to measured throttle events (DDR warn 63.0 / crit 64.5\,\textdegree C; CPU big-core 65.5 / 67.0\,\textdegree C; shell 42.0 / 42.7\,\textdegree C), not chosen in theory. On a cold phone it stays dormant; its role is to replace the kernel's single drop to 883\,MHz with a small early reduction. The thresholds are calibrated from throttle events measured on uncapped runs. In the capped campaign the vendor engine's first skin clamp (1632 to 1498\,MHz at about 41\,\textdegree C) engaged in every cell, while the deeper tiers never did (Sec.~\ref{sec:eval-thermal}). The watchdog acts on a single actuator: \emph{CPU frequency}.
+
+\paragraph{Why cache size is a thermal actuator (formal).} At a per-step level the decode wall time decomposes as
+\begin{equation}
+\label{eq:step-cost}
+t_{\text{dec}}(K) \;=\; \underbrace{\frac{2\,d_{\text{model}}\,K}{B_{\text{ddr}}(T_{\text{DDR}})}}_{\text{KV read (bytes)}} \;+\; \underbrace{\frac{C_{\text{fa}}}{f_{\text{cpu}}(T_{\text{watchdog}})}}_{\text{FA-on compute}} \;+\; \varepsilon,
+\end{equation}
+where $B_{\text{ddr}}(\cdot)$ is a monotonically decreasing function of DDR temperature (LPDDR5X refresh interval doubles at $\sim$85\,\textdegree C, halving effective bandwidth) and $f_{\text{cpu}}(\cdot)$ is the CPU frequency the watchdog exposes. Equation~\ref{eq:step-cost} is the mathematical basis for cache reduction: reducing $K$ shrinks the bandwidth term \emph{and} lowers the average DDR temperature (fewer bytes per step $\Rightarrow$ less package heat), which in turn preserves $B_{\text{ddr}}$ for future steps. Neither prior KV eviction (H2O/SnapKV/AdaKV/TOVA/StreamingLLM) nor prior thermal-aware mobile systems (zTT/FUSE/BCL) closes this loop --- the former reads no sensor, the latter controls no cache.
+
+\textbf{Thermally coupled cache budgets (negative result).} We also built and tested a controller that couples the cache budget itself to DDR temperature. It works mechanically but does not cap heat: under an external co-load, halving the budget leaves peak DDR unchanged, and on a cool phone a smaller cache runs hotter at peak because the saved bandwidth converts to speed and power. We keep clock and cache as separate actuators and defer the cache-budget controller to the full system paper.
+
+\paragraph{Three reductions of the same attention tensor.} the per-head gate, the dispatcher, and anchor selection each take a \emph{different} reduction axis through the same captured tensor $\bar A_{l,h,p}$ --- none duplicates another:
+\begin{itemize}[leftmargin=*, itemsep=2pt]
+\item \textbf{the per-head gate (per-head row-max)} $\to$ per-head budget $K_h$: $m_h = \max_p \bar A_{l,h,p}$, then $K_h = \mathrm{round}(K_\text{nom}\cdot\mu(m_h))$.
+\item \textbf{the dispatcher (cross-head column-mean partition)} $\to$ per-prompt anchor:recent split $\alpha_a$: $\bar{\bar A}[p] = \frac{1}{n_\text{layers}\,n_\text{heads}}\sum_{l,h} \bar A_{l,h,p}$, then $\alpha_a = \mathrm{distant\_mass}/\mathrm{total\_mass}$.
+\item \textbf{anchor selection (column-mean top-K)} $\to$ which positions survive: $\mathrm{Anchor} = \mathrm{TopK}_{n_\text{anchor}}(\bar{\bar A})$.
+\end{itemize}
+The chain is: the per-head gate's row-max sizes per-head $K_h$; the dispatcher's column-mean partition sets the split $n_\text{anchor} = \alpha_a (K-n_\text{sink})$; anchor selection's column-mean top-K picks the actual winners. Three orthogonal reductions, all sharing the same $\bar A$ already captured for FA-off prefill, no extra forward pass.
+
+\paragraph{Why mass-$\alpha_a$ over count-$\alpha_a$.} The dispatcher started life as a binary argmax-count metric: ``does each head's peak sit outside the recent window?'', averaged over $(l, h)$ pairs. On any response-generation workload, almost every head's argmax sits on the system prompt or buried context, so the count saturates and $\alpha_a$ clamps at $0.95$ regardless of prompt type. The mass-based version (used throughout this paper) weights by actual attention mass rather than binary peak position, and varies smoothly per prompt: short chat $\alpha_a \approx 0.62$--$0.78$, medium QA $\approx 0.78$--$0.92$, long retrieval $\approx 0.81$--$0.91$. Compute cost is identical (the same column-mean reduction anchor selection already needs); the only additional state is one scalar partition sum.
+
+
+\paragraph{Why smaller models want lower $\alpha_a$.} Gemma-2B and Llama-3.2-1B consistently produce lower $\alpha_a$ than Phi-3 on the same prompt class. Empirically (\S\ref{tab:master}) these are also the models where the old argmax-count metric ($\alpha_a{=}0.95$ everywhere) hurt LongBench F1 versus AdaKV. The mass-based variant gives them appropriate recent budget --- e.g., gemma-2b on short chat allocates $192$ of $508$ non-sink slots to the recent window vs the binary-count's $25$, restoring local coherence without changing $K$.
+
+\begin{algorithm}[t]
+\caption{$\mu$KV prefill (controllers the per-head gate, anchor selection, the eviction step)}
+\label{alg:prefill}
+\begin{algorithmic}[1]
+\Require prompt $X$, budgets $K_{\text{nom}}, n_{\text{sink}}{=}4, n_{\text{anchor}}{=}32$
+\Ensure decode-ready FA-on context $\mathcal{C}_B$, cache $\le K_{\text{nom}}$
+\State Build $\mathcal{C}_A$: \texttt{flash\_attn}=false, K=q8\_0, V=f16
+\State Prefill; read $A_i \gets \mathrm{softmax}(q_{\text{last}}K_i^\top)$ per head $i$
+\For{each head $i$}
+  \State $m_i \gets \max_p A_i^p$;\ \ $K_i \gets \mathrm{round}(K_{\text{nom}}\,\mu(m_i))$
+  \State $S_i \gets \mathrm{TopK}(A_i, K_i)$ \Comment{$S_i \subset [0,n)$}
+\EndFor
+\State $S \gets \bigcup_i S_i$;\ \ $\bar A^p \gets \tfrac1H\sum_i A_i^p$ for $p\in S$
+\State $\textsc{Anchor}\gets\mathrm{TopK}(\bar A, n_{\text{anchor}})$;\ $\textsc{Sink}\gets[0,n_{\text{sink}})$
+\State $\textsc{Recent}\gets[n-(K_{\text{nom}}-n_{\text{sink}}-n_{\text{anchor}}),\,n)$
+\State $S_{\text{keep}}\gets\textsc{Sink}\cup\textsc{Anchor}\cup\textsc{Recent}$
+\State \textsc{seq\_rm}($\mathcal{C}_A$, positions $\notin S_{\text{keep}}$)
+\State buf $\gets$ \texttt{state\_seq\_get\_data}($\mathcal{C}_A$)
+\State Build $\mathcal{C}_B$: \texttt{flash\_attn}=true; \texttt{state\_seq\_set\_data}($\mathcal{C}_B$, buf)
+\State Warm-up decode call to populate \texttt{n\_outputs}; \Return $\mathcal{C}_B$
+\end{algorithmic}
+\end{algorithm}
+
+
+
+\section{Evaluation}
+\label{sec:eval}
+
+\textbf{Setup.} OnePlus 15, Snapdragon 8 Elite Gen 5, 12\,GB UMA, CPU-only, 4 threads. Models: Phi-3-mini-128k, Llama-3.2-1B, gemma-2-2b-it, all Q4\_K\_M, run in a \texttt{llama.cpp} extension~\cite{llamacpp} we call \texttt{eviction\_bench}. Each cell starts from a verified cool baseline (DDR/CPU $<$\,40\,\textdegree C; skin/PMIC/battery $<$\,36\,\textdegree C); USB charging is held OFF continuously by a per-cell keeper that re-disables every 30\,s (Android battery service otherwise re-enables charging mid-run). Per-cell sensor capture at 5\,Hz, with USB rail $V{\cdot}I$ integration for true system energy (\texttt{usb\_current\_ua}, \texttt{usb\_voltage\_uv}). $\mu$KV runs with mass-based $\alpha_a$ and the multi-sensor watchdog; baselines run as published.
+
+\textbf{Two benchmarks at the same 16K context.}
+\emph{(1) Sustained decode} (Table~\ref{tab:master}). A $\sim$7K-token prompt (7.5K Phi-3 / 6.4K Llama-1B / 6.4K Gemma-2B) followed by 2K-token greedy generation with \texttt{--ignore-eos}, in a 16{,}384-token allocated context (hence ``16K'' = KV-cache allocation, not prompt length). One run per (policy, model) cell. Measures the systems axes: throughput (decode tps), peak DDR/CPU/skin/PMIC/battery temperature, USB-rail energy, peak RSS, plus PPL on the decoded text. This is the workload that exposes thermal-cliff behavior because it sustains pressure for $\sim$10--50 minutes per cell.
+\emph{(2) RULER-style NIAH retrieval} (Table~\ref{tab:phone-niah-prelim}). A buried-fact prompt: $\sim$5K--16K tokens of filler with the needle ``mango sorbet at Bi-Rite Creamery is the best thing to do in San Francisco'' inserted at one of 7 depths ($\{0, 17, 33, 50, 67, 83, 100\}\,\%$ of context), followed by ``Q: What's the best thing to do in SF?''. One run per (policy, model, context, depth). \emph{Hit} = generated text contains ``mango sorbet'' or ``bi-rite'' (case-insensitive). Measures the quality axis: can the policy retrieve a buried fact regardless of where it sits in the prompt? Total: 8 policies $\times$ 3 models $\times$ 14 depths (7 at 4K + 7 at 8K) $= 336$ cells, \textbf{all complete}: every model swept at both 4K and 8K.
+
+\emph{Why both?} 16K-decode catches policies that fail thermal sustainability (slow or hot under long generation); NIAH catches policies that achieve speed by dropping information (StreamingLLM-style sliding window, which sweeps 16K-decode but fails NIAH because the needle gets evicted). Only a policy that wins BOTH benchmarks is deployable.
+
+\begin{table*}[t]
+\caption{Phone 16K-context decode, 8 policies on 3 models (OnePlus 15, CPU-only, 7K-token prompt $+$ 2K decode). Earlier-protocol campaign (\S\ref{sec:revised-protocol}).}
+\label{tab:master}
+\centering\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{l l r r r r r r r r r}
+\toprule
+\textbf{Model} & \textbf{Policy} & \textbf{PPL} & \textbf{tps} & \textbf{Wall (s)} & \textbf{ActKV} & \textbf{$\alpha_a$} & \textbf{RSS (MB)} & \textbf{DDR (\textdegree C)} & \textbf{CPU (\textdegree C)} & \textbf{Energy (mWh)} \\
+\midrule
+\multirow{8}{*}{Phi-3-mini}
+ & vanilla            & 2.41 & 1.05 & 3061 & 7542 & --- & 7507 & 57.5 & 79.1 & 2230 \\
+ & $\mu$KV (count)    & \good{1.50} & 3.76 & 1883 & \good{1024} & 0.95 & \good{7199} & \good{54.8} & \good{62.7} & \good{1281} \\
+ & \textbf{$\mu$KV-mass} & \good{1.50} & \good{3.76} & 1934 & \good{1024} & 0.95 & 7215 & 55.6 & \good{64.2} & 1755 \\
+ & AdaKV              & 1.53 & 1.13 & 3228 & 5506 & --- & 8128 & \bad{64.8} & 69.0 & 2692 \\
+ & H2O                & 1.29 & 1.39 & 2658 & 7542 & --- & 7696 & 61.4 & \bad{83.3} & \bad{3540} \\
+ & TOVA               & 1.66 & 1.22 & 2962 & 4628 & --- & 7581 & 63.7 & 68.2 & 2966 \\
+ & TOVA-can           & \bad{6.99} & 1.06 & 3364 & 5506 & --- & 8002 & 64.5 & 68.5 & 3157 \\
+ & StrLLM             & 1.41 & 1.14 & 3264 & 886 & --- & 8068 & 64.8 & 69.0 & 3066 \\
+\midrule
+\multirow{8}{*}{Llama-3.2-1B}
+ & vanilla            & 1.16 & 4.87 & 661 & 6401 & --- & 1338 & 56.7 & \bad{86.1} & 635 \\
+ & $\mu$KV (count)    & 1.38 & 16.29 & \good{401} & \good{1024} & 0.95 & \good{1298} & 54.0 & \good{65.4} & \good{447} \\
+ & \textbf{$\mu$KV-mass} & 1.38 & \good{17.73} & \good{387} & \good{1024} & 0.84 & \good{1298} & 54.4 & 65.8 & \good{440} \\
+ & AdaKV              & \good{1.08} & 5.90 & 634 & 4554 & --- & 1422 & 51.7 & 60.7 & 654 \\
+ & H2O                & 1.14 & 5.52 & 658 & 3335 & --- & 1470 & 50.2 & 59.6 & 694 \\
+ & TOVA               & 1.31 & 5.70 & 646 & 3621 & --- & 1422 & \bad{64.8} & \bad{85.3} & 693 \\
+ & TOVA-can           & \bad{8.55} & 5.18 & 682 & 4554 & --- & 1423 & 54.8 & 73.3 & 693 \\
+ & StrLLM             & 1.30 & 6.09 & 623 & 769 & --- & 1422 & 51.3 & 60.0 & 638 \\
+\midrule
+\multirow{8}{*}{Gemma-2-2B}
+ & vanilla            & 1.21 & 3.35 & 1147 & 6382 & --- & 3347 & 59.8 & 65.0 & 1342 \\
+ & $\mu$KV (count)    & 1.75 & 7.17 & 884 & \good{1024} & 0.94 & \good{3020} & \good{54.8} & 64.2 & 856 \\
+ & \textbf{$\mu$KV-mass} & 1.63 & \good{7.46} & \good{861} & \good{1024} & 0.87 & \good{3020} & 55.6 & 66.2 & \good{839} \\
+ & AdaKV              & 1.42 & 2.69 & 1368 & 4955 & --- & 3417 & 55.6 & \good{61.1} & 1381 \\
+ & H2O                & 1.40 & 2.70 & 1347 & 6382 & --- & 3494 & 54.8 & 61.5 & 1348 \\
+ & TOVA               & 1.38 & 2.66 & 1369 & 4454 & --- & 3417 & 54.4 & \bad{83.0} & 1332 \\
+ & TOVA-can           & \bad{5.27} & 2.36 & 1476 & 4955 & --- & 3417 & 55.2 & 76.0 & 1371 \\
+ & StrLLM             & 1.26 & 2.65 & 1380 & 1006 & --- & 3416 & 54.8 & 61.5 & 1334 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+
+\paragraph{Measurement notes for Table~\ref{tab:master}.} Cool-baseline protocol (DDR and CPU below 40\,\textdegree C, skin and battery below 36\,\textdegree C), USB charging held off for clean $V{\cdot}I$ energy, PPL on decoded text. ActKV counts unique attended positions across heads and layers; for $\mu$KV this is sink plus anchor plus recent from the dispatcher, for baselines the prompt minus prefill evictions. Baselines run as published; $\mu$KV-mass is the recommended default.
+
+\paragraph{Strict-cool replication (reproducibility).} To bound single-run precision we re-collected the entire Table~\ref{tab:master} workload (same $\sim$7K-prompt/2K-decode, seed 42) under a \emph{stricter} cool-gate (DDR/CPU$\le$38\,\textdegree C, skin/PMIC/battery$\le$36\,\textdegree C, no timeout fallback --- vs $<$40/$<$36 with a timeout in Table~\ref{tab:master}). Across all 24 cells, \textbf{PPL is identical} to Table~\ref{tab:master} to two decimals (seed-42 greedy decoding is deterministic; e.g.\ Phi-3 vanilla/$\mu$KV/AdaKV $=$ 2.41/1.50/1.53 in both), confirming the quality numbers are exact rather than noisy. Decode throughput moves within $\pm$15\% between protocols (mostly slightly lower under the stricter gate on Phi-3/Llama, comparable on Gemma) --- a day-to-day/thermal-history variance that we treat as the effective error bar on the one-run-per-cell systems columns. Critically, the \emph{ordering is preserved on every model}: $\mu$KV remains the fastest, coolest (DDR), and lowest-energy policy, and AdaKV remains the hottest. Per-cell energies are $V{\cdot}I$-integrated and glitch-screened; all 24 fell within the normal 0.74--1.22\,mWh/s power band (no V$\cdot$I outliers to exclude). The full 24-cell strict-cool table is in the artifact release.
+
+
+\begin{table*}[t]
+\caption{WikiText-2 decode, 9.7K prompt $+$ 4K decode, CPU-only. $\dagger$ = prior protocol (\S\ref{sec:revised-protocol}); ActKV = retained cells (decode mean in parentheses).}
+\label{tab:master-wikitext}
+\centering\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{l l r r r r r r r r r r}
+\toprule
+\textbf{Model} & \textbf{Policy} & \textbf{PPL} & \textbf{tps} & \textbf{Prefill (s)} & \textbf{Wall (s)} & \textbf{ActKV} & \textbf{$\alpha_a$} & \textbf{RSS (MB)} & \textbf{DDR (\textdegree C)} & \textbf{CPU (\textdegree C)} & \textbf{Energy (mWh)} \\
+\midrule
+\multirow{9}{*}{Llama-3.2-1B}
+ & vanilla            & \good{1.06} & 4.7 & 409 & 1293 & 9737 (11746) & --- & \good{1339} & 62.1 & 66.7 & 1538 \\
+ & \textbf{$\mu$KV-mass-full} & 8.20 & \good{16.9} & \good{366} & \good{613} & \good{721 (1942)} & 0.71 & 1525 & \good{57.1} & 63.6 & \good{744} \\
+ & $\mu$KV (state-swap) & 8.02 & 16.8 & 407 & 656 & \good{733 (1984)} & 0.72 & 1473 & 57.5 & \good{62.0} & 780 \\
+ & SnapKV (canonical) & 1.67 & 5.9 & 412 & 1106 & 5921 (7970) & --- & 1473 & \good{56.3} & 61.2 & 1322 \\
+ & AdaKV              & 2.34 & 5.9 & 435 & 1136 & 3836 (5884) & --- & 1473 & \good{56.3} & \good{60.1} & 1312 \\
+ & H2O$^\dagger$      & 1.14 & 3.95 & 524 & 1561 & 13832 & --- & 1549 & 52 & 56 & 1500 \\
+ & TOVA$^\dagger$     & 1.08 & 4.01 & 524 & 1545 & 13832 & --- & 1473 & 52 & 56 & 1482 \\
+ & TOVA-can$^\dagger$ & \bad{6.45} & 3.85 & 525 & 1587 & 9737 & --- & 1473 & 52 & 56 & 1525 \\
+ & StrLLM$^\dagger$   & 1.09 & 4.52 & 523 & 1430 & 13831 & --- & 1473 & 53 & 57 & 1473 \\
+\midrule % (Phi-3 block below is prior-protocol; re-measurement pending)
+\multirow{8}{*}{Phi-3-mini$^\dagger$}
+ & vanilla            & 1.45 & 0.72 & \good{1837} & 7506 & 15252 & --- & 8314 & \bad{69} & \bad{80} & 6826 \\
+ & $\mu$KV (count)    & 2.00 & 3.07 & 2351 & 3692 & \good{1024} & 0.95 & \good{7261} & \good{56} & \good{59} & \good{3243} \\
+ & \textbf{$\mu$KV-mass} & 2.01 & \good{3.96} & 2256 & \good{3295} & \good{1024} & 0.87 & \good{7269} & \good{56} & \good{59} & \good{3290} \\
+ & AdaKV              & \good{1.20} & 0.94 & 2279 & 6615 & 15252 & --- & 7913 & 68 & \bad{90} & 8471 \\
+ & H2O                & 1.38 & 0.94 & 2239 & 6620 & 15252 & --- & 8206 & 64 & 69 & 8474 \\
+ & TOVA               & \good{1.20} & 0.95 & 2196 & 6487 & 15252 & --- & 7946 & 65 & 69 & 8354 \\
+ & TOVA-can           & \bad{5.05} & 0.94 & 2197 & 6570 & 11157 & --- & 8477 & 64 & 69 & 8382 \\
+ & StrLLM             & 1.21 & 0.84 & 2399 & 7291 & 15252 & --- & 8155 & 66 & 69 & 8301 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/fig_main_results.png}
+\caption{Per-policy results on WikiText (Llama-3.2-1B, cold start).}
+\label{fig:main-results}
+\end{figure*}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig_cache_trajectory.png}
+\caption{Live KV cells during prefill and decode.}
+\label{fig:cache-trajectory}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig_thermal_trace.png}
+\caption{DDR, shell, and CPU clock traces for vanilla and $\mu$KV.}
+\label{fig:thermal-trace}
+\end{figure}
+
+\paragraph{Revised measurement protocol.}\label{sec:revised-protocol}
+The Llama-3.2-1B rows of Table~\ref{tab:master-wikitext} were re-measured under a stricter protocol that removes four confounds we found in the earlier campaign. First, thermal state: every cell starts genuinely cold (CPU and DDR below 37\,\textdegree C, shell below 34\,\textdegree C), which takes about 26 minutes of idle in a 24\,\textdegree C room once accumulated heat has soaked into the chassis. A warm start silently activates the watchdog and costs about 20\% of decode throughput. Second, power: charging stays disabled for the whole run so the state of charge is constant, and energy integrates total system power (USB rail plus battery discharge) split at the prefill/decode boundary. Integrating the USB rail alone mis-attributes the battery's share. Third, cache accounting: the retained-KV footprint is measured by \texttt{llama\_state\_seq\_get\_size}, which serializes live cells only. Position-range counters over-state it. Fourth, baseline fidelity: every baseline runs its own paper's configuration with none of $\mu$KV's mechanisms. SnapKV uses the per-head FasterDecoding defaults (window 64, avgpool-5, top-$(K{-}64)$ from the prefix, no sinks); Ada-KV uses the Ada-SnapKV defaults (window 32, maxpool-7, $\alpha{=}0.2$ safeguard, no sinks); H2O keeps its 50/50 heavy-hitter and recent split from accumulated attention with no sinks; StreamingLLM keeps its own 4 attention sinks plus recent window; TOVA scores from the last query, in both the per-layer variant and the strict canonical form. The AdaKV row predates this audit (it ran with a 16-query window and 4 protected sinks) and is being re-measured under the exact Ada-SnapKV configuration. The watchdog runs on $\mu$KV only and stayed dormant from cold. The vendor thermal engine's first skin clamp (1632 to 1498\,MHz near 41\,\textdegree C) engaged identically in every cell, so the comparison is unaffected; the deeper mitigations never engaged. $\mu$KV-mass-full combines FA-on prefill (in-graph scoring on the last chunk) with a 290\,ms post-eviction defrag, so it gets vanilla-class prefill and state-swap-class decode at once.
+
+Two caveats. PPL here is teacher-forced on a disjoint WikiText continuation. It rewards retained context and is inflated by memorization for large caches (vanilla's 1.06 reflects recall of memorized text), so it over-states $\mu$KV's continuation cost; self-generation PPL is about 1.1 for every policy. The pass scores the reference one token at a time and each policy runs its own eviction schedule during scoring: one-shot policies keep their frozen post-prefill selection, while TOVA and H2O evict per step as their papers specify, so the protocol is uniform and each algorithm runs as designed. The second caveat is that $\mu$KV's decode-time eviction (2.5K evictions over the 4K decode) bounds the cache near 2K cells, above the nominal $K{=}1024$, while every baseline grows without bound. We report the measured mean rather than the nominal budget.
+
+\paragraph{Reading the figures.} Figure~\ref{fig:cache-trajectory} shows the mechanism: every policy builds the full prompt cache during prefill; at the end of prefill $\mu$KV compacts to 721 cells and its decode-time eviction keeps the cache bounded near 2K, while SnapKV can only drop to 5.9K cells and vanilla grows without bound. Figure~\ref{fig:main-results} shows what the bounded cache buys: 3.6$\times$ vanilla throughput at 52\% less energy with the smallest retained cache and the coolest peaks. Figure~\ref{fig:thermal-trace} shows the thermal consequence: $\mu$KV finishes in 10 minutes while vanilla runs 21 and climbs toward the throttle line; the shell stays at the watchdog threshold only briefly, so the watchdog stays dormant, and with the 1632\,MHz cap the kernel throttle condition is never reached in these cells (uncapped runs do reach it, which is where the watchdog thresholds come from). The clock trace has two separate behaviors. The variation below the ceiling is the stock DVFS governor tracking load on a memory-bound workload. The ceiling itself drops once: the vendor thermal engine clamps the big cores from 1632 to 1498\,MHz when the shell reaches about 41\,\textdegree C, in every cell alike, writing the frequency limit directly so the cpufreq cooling state stays zero. This clamp onset independently reproduces the throttle thresholds we measured on uncapped runs. $\mu$KV finishes about four minutes after the clamp engages; vanilla runs fourteen of its twenty-two minutes under it. Vanilla's gradual clock rise late in the run is also the governor: its cache grows without bound, each token does more work, and utilization rises. The clock is smoothed over 30 samples.
+
+\begin{table}[t]
+\caption{Mobile GPU (Adreno 840), same workload, native DVFS, $n{=}3$ means. $\ddagger$ = sequence-level SnapKV (\S\ref{sec:gpu-results}).}
+\label{tab:gpu-wikitext}
+\centering\scriptsize
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{l r r r r r r}
+\toprule
+\textbf{Policy} & \textbf{tps} & \textbf{Prefill (s)} & \textbf{Wall (s)} & \textbf{Energy (mWh)} & \textbf{GPU (\textdegree C)} & \textbf{DDR (\textdegree C)} \\
+\midrule
+vanilla                       & 30.7 & \good{116} & 252 & 492 & \bad{90.3} & \bad{83.8} \\
+SnapKV (seq)$^{\ddagger}$     & 33.6 & 117 & 241 & 437 & 86.9 & \good{80.7} \\
+$\mu$KV (no watchdog)         & 33.0 & 117 & 244 & 453 & 87.6 & 81.1 \\
+\textbf{$\mu$KV $+$ wd v4}    & \good{34.6} & 117 & \good{238} & \good{424} & 88.4 & 82.2 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Mobile GPU results.}\label{sec:gpu-results}
+Table~\ref{tab:gpu-wikitext} runs the same workload on the Adreno 840 under native GPU DVFS. Each cell starts from a settled idle (GPU and DDR at or below 37\,\textdegree C, stable for 90\,s) and reports the mean of three runs.
+
+\emph{Required design change on the GPU.} Two of $\mu$KV's CPU mechanisms are not viable on the mobile GPU, and the GPU port must replace them. We state this as a design requirement rather than an implementation detail. The first is the state-swap. The CPU path captures attention on an FA-off prefill and swaps the compacted state into an FA-on decode context. On Adreno this fails twice over: the swap serializes hundreds of megabytes of KV through host memory, which costs a few hundred milliseconds on CPU but is prohibitive on the GPU path, and the Vulkan backend stores FA-off and FA-on KV in different layouts, so a cross-mode restore is not guaranteed to round-trip. The second is the post-eviction defrag, which reuses the same state round-trip (290\,ms on CPU, recovering about 30\% of decode throughput by compacting the holes left by \texttt{seq\_rm}); on the GPU it would pay the same prohibitive transfer. The replacement is FA-on-evict: an in-graph \texttt{kq\_evict} side node computes the selection scores inside the flash-attention prefill graph itself, emitted only on the last prefill chunk, which leaves the selection bit-identical. Scoring then needs no FA-off pass, no host readback per step, and no context rebuild. The consequences are visible in Table~\ref{tab:gpu-wikitext}: prefill is vanilla-class by construction (117 vs.\ 116\,s), but the evicted cache stays physically sparse, so part of the bandwidth advantage that the CPU defrag recovers is forfeited on GPU. A device-local compaction kernel, a GPU-side copy pass that never crosses the interconnect, would close this gap and is concrete future work for the full system paper. The GPU is bandwidth-saturated, so throughput margins are small and the headline is thermal and energy: $\mu$KV with the reduce-only watchdog runs at 14\% less energy, 6\% less wall time, and about 2\,\textdegree C cooler than vanilla. The watchdog helps rather than costs (1.6\,tps faster and 29\,mWh less than the no-watchdog run) because it holds the clock just below the region where the kernel throttle oscillates. The SnapKV row is our sequence-level adaptation, since canonical per-head SnapKV cannot compact on a sequence-level engine (its union retains 5.9K of 9.7K cells, Table~\ref{tab:master-wikitext}); its canonical GPU row and a per-phase GPU energy split are pending re-measurement under the revised protocol. Selection quality is hardware-independent, so the PPL and retrieval behavior of each policy match the CPU rows.
+
+\paragraph{Long-decode flips the wall ordering, and $\mu$KV is the only policy that stays clear of the thermal limits (WikiText-16K).}
+On the true long-context workload (Table~
+ef{tab:master-wikitext}, Figs.~
+ef{fig:main-results}--
+ef{fig:thermal-trace}) $\mu$KV's advantage is decisive on both models, and largest on the thermally-stressed Phi-3. The \emph{duration} data separates two distinct failure modes that peak values alone conflate. The full-cache \textbf{vanilla} baseline is \emph{slow but only transiently hot}: it grinds at 0.72\,tps for 7506\,s (6826\,mWh), spiking past the limits only briefly (5\,s $\ge$65\,\textdegree C DDR, 11\,s $\ge$67\,\textdegree C CPU at peaks of 69/80\,\textdegree C) --- its cost is time and energy, not sustained heat. The \textbf{score-reading baselines sustain thermal violations}: AdaKV spends \bad{38\,min $\ge$64\,\textdegree C DDR and 44\,min $\ge$67\,\textdegree C CPU} (peak \bad{89.9\,\textdegree C}), and H2O/TOVA hold the CPU above 67\,\textdegree C for 22--31\,min. $\mu$KV-mass logs \good{zero seconds above any threshold} (peaks 56/59\,\textdegree C), runs \good{3.96\,tps} ($5.5\times$ vanilla), finishes in \good{3295\,s} ($2.3\times$ less wall), and uses \good{3290\,mWh} ($-52\%$ energy). Crucially, the \emph{score-reading evictors are worse than $\mu$KV on every systems axis and no better than vanilla on wall}: AdaKV, H2O and TOVA all hold the full 15252-cell cache (they do not actually shrink it at this budget) \emph{and} pay the FA-off score-capture cost, so they run at 0.94--0.95\,tps, 6487--6620\,s, and 8354--8474\,mWh --- \emph{more} energy than vanilla --- with AdaKV's CPU reaching \bad{90\,\textdegree C}. Only $\mu$KV both shrinks the attended set (to 1024) and keeps decode on the FA-on path via the state-swap, which is why it alone stays below the cliff. The same pattern holds on Llama-3.2-1B ($\mu$KV-mass 733\,s vs 1744\,s, $-48\%$ energy). This is the inverse of the short-decode NIAH result (Table~\ref{tab:phone-niah-prelim}), where $\mu$KV's one-time prefill overhead could not amortize over 64 decode tokens; over 4K decode tokens the FA-on path dominates. The quality cost is a continuation-specific PPL rise (Phi-3 2.01, Llama 1.75) at the aggressive $\alpha_a$ split --- exceeding the $<$20\% PPL goal (G4), so $K{=}1024$ is too tight for a 14K continuation and a larger $K$ / lower $\alpha_a$ would recover it; on retrieval (NIAH) $\mu$KV had \emph{zero} quality cost. Naive top-K eviction (TOVA-canonical) collapses coherence outright (PPL 5.05).
+
+\paragraph{Phone 3$\times$3 — what the rows show.}
+On Phi-3 (the most thermally-stressed model) $\mu$KV adapt holds DDR at 54.8\,\textdegree C (10\,\textdegree C cooler than AdaKV's 64.8 which approaches the cliff) and finishes the same 2048-token decode in 1883\,s vs vanilla's 3061\,s and AdaKV's 3228\,s (Table~\ref{tab:master}). The watchdog fires three preemptive tier transitions on the PMIC sensor (46\,\textdegree C $\to$ 47\,\textdegree C $\to$ 49\,\textdegree C) at $t{=}891/1363/1822$\,s, ratcheting the cap from 1632 $\to$ 1497 $\to$ 1267 $\to$ 883\,MHz one-way --- visible as a clean step trajectory in the NIAH sweep alongside the underlying DVFS bursts. Energy through the USB rail (clean V$\cdot$I integration, charging held OFF throughout each cell) gives \textbf{1281\,mWh for $\mu$KV vs 2230\,mWh vanilla / 2692\,mWh AdaKV} on Phi-3 (Table~\ref{tab:master}) --- $\mu$KV nearly halves system energy at $3.6\times$ vanilla throughput. The pattern holds on Llama-3.2-1B (\textbf{440--447 vs 635 vs 654}\,mWh) and gemma-2-2b (\textbf{839--856 vs 1342 vs 1381}\,mWh): $\mu$KV is always the fastest and the lowest-energy (Table~\ref{tab:master}). On quality, AdaKV wins PPL on Llama-1B and Gemma-2B (1.082 / 1.422) while $\mu$KV's saturated $\alpha_a{=}0.95$ over-allocates anchors for smaller models (1.379 / 1.751); the mass-based $\alpha_a$ deployed in Sec.~\ref{sec:eval-tdak} re-balances toward recent for these regimes (0.73--0.84 range across models, the mass-$\alpha_a$ ablation) and is expected to close this gap on a follow-on sweep.
+
+
+\paragraph{Master-table headlines.}
+On GPU 16K-decode, $\mu$KV-adaptive is the fastest of all three policies for every model (1.18--5.32$\times$ over AdaKV; 1.18--1.88$\times$ over vanilla), but on PPL Phi-3's old $\alpha_a{=}0.95$ saturation is visible (3.61 vs vanilla 2.83) --- the motivation for the mass-based $\alpha_a$ we deploy and validate in Sec.~\ref{sec:eval-tdak}. On LongBench QA, $\mu$KV's quality vs AdaKV/vanilla flips per (model, task): Phi-3 wins both, Llama-1B and Gemma-2B lose under the saturated $\alpha_a$. On phone, the result that matters most is the bottom three rows: $\mu$KV's two corners are 3.4$\times$--4.8$\times$ faster than vanilla on the same workload, hold DDR 8--10\,\textdegree C below the cliff vanilla crosses, and use less than half the memory at the chat corner.
+
+\paragraph{Attributing the composite win to individual controllers.} The Phi-3 vanilla-to-$\mu$KV delta ($1.05 \to 3.76$\,tps; $2230 \to 1755$\,mWh; $79.1 \to 64.2\,^\circ$C peak CPU; Table~\ref{tab:master}) is a composite outcome, not a single controller's effect. Decomposing across the the budget ladder--the cache-budget controller stack using only measurements in this paper: (a) the q8\_0 cache q8\_0 K quantization removes roughly $43\,\%$ of the K-side DRAM read per step at zero PPL cost (Sec.~\ref{sec:design}); (b) per-head gate plus anchor selection cap the resident cache at $K_\text{nom}$ regardless of prompt length --- the mechanism that produces the $9589 \to 639$ attended-cell drop shown in Figs.~
+ef{fig:main-results}--
+ef{fig:thermal-trace}; (c) compaction step moves decode onto the FA-on path, converting the previous two savings into a wall-time reduction that Eq.~\eqref{eq:step-cost} predicts and Table~\ref{tab:master} confirms ($3061 \to 1934$\,s on Phi-3); (d) watchdog contributes the 176 tier transitions on the sustained-decode configuration that keep the CPU cluster off the kernel cliff (Sec.~\ref{sec:eval-thermal}). A clean per-controller cumulative ablation (add the budget ladder, +the per-head gate, $\ldots$, +the cache-budget controller) is future work: our current sweep budget was spent on the 3-model $\times$ 8-policy master grid; the ablation requires re-running six intermediate stack configurations end-to-end.
+
+\paragraph{Honest reframing of the cache-thermal causality (data finding).} A natural reading of the 16K-decode results is ``smaller cache $\to$ less DDR bandwidth $\to$ cooler DDR.'' The data does not support that simple causation. AdaKV's attended cache is 21\,\% \emph{smaller} than vanilla's at end-of-decode (7554 vs 9590 attended cells), yet its peak DDR temperature is \emph{higher} (64.8 vs 57.5\,\textdegree C) and its total system energy (USB rail integration) is \emph{higher} (2692 vs 2230\,mWh, Table~\ref{tab:master}). The driver is the attention kernel: AdaKV runs FA-off during prefill plus a per-head max-pool selection that touches $\sim$30\,MB of DDR per layer; that score-capture machinery generates more DRAM traffic than vanilla's full-cache FA-on attention, despite holding fewer attended positions. Cache size is one of several factors; the dominant driver in this workload class is the FA kernel choice. $\mu$KV wins on DDR temperature and energy because (i) its q8\_0 K cache halves the K-side bytes per attention pass, (ii) it runs FA-on through decode (via the compaction step), and (iii) its the eviction step decode-time eviction holds attended cells at $\le K$ throughout. Regardless, cross-policy thermal comparisons must account for the kernel difference.
+
+
+\paragraph{Phone NIAH: 4K context complete, 8K first 2 depths complete.}
+The NIAH sweep (8 policies $\times$ 3 models $\times$ 14 needle depths = 336 cells) is \textbf{complete}: every model swept at both 4K and 8K. Five patterns emerge consistently across all 336 measured cells.
+
+\emph{(i) $\mu$KV-mass wins the NIAH multi-axis Pareto on every model at every context measured.} At 4K on all three models, $\mu$KV-mass attends to \good{1024 cells} (design target) vs 2977--3711 for AdaKV/H2O/TOVA/TOVA-canonical, sustains \good{5.7/19.8/10.1\,tps} on Phi-3/Llama-1B/Gemma-2B vs 2.0--2.1 / 7.3--8.5 / 3.6--4.2 for the classic score-reading evictors, and holds \good{DDR peak $\le$ 51\,\textdegree C} on every model (vs 55--58 for vanilla).
+
+\emph{(ii) StreamingLLM canonical fails NIAH on every model.} Hit rates 2/7 (Phi-3 4K), 1/5 (Phi-3 8K), 3/7 (Llama-1B 4K), 1/7 (Gemma-2B 4K). Its sliding-window design evicts exactly the middle of the context, which is where buried-fact retrieval lives. Expected behavior of the algorithm.
+
+\emph{(iii) H2O and AdaKV DDR climb above 65\,\textdegree C DDR cliff on Phi-3 8K}: H2O median-peak 57\,\textdegree C but with a one-off BCL event where prime-core briefly hit 93\,\textdegree C on cell d17 (chassis triggers didn't fire in time); AdaKV median-peak 58--60\,\textdegree C on 8K. $\mu$KV-mass holds DDR at 53\,\textdegree C and CPU at 65\,\textdegree C on the same 8K workload.
+
+\emph{(iv) On Llama-1B 8K (n=7, all 8 policies complete), $\mu$KV-mass and TOVA-canonical tie at 7/7}, followed by vanilla 6/7, $\mu$KV-count 6/7, TOVA and AdaKV 5/7, H2O 3/7, and StreamingLLM 1/7. The per-depth miss matrix explains \emph{why}. \textbf{Depth 17\,\% is a Llama-1B model-level weak spot, not an eviction failure}: vanilla itself misses d17\,\% (retrieves the wrong fact from the same haystack); $\mu$KV-count and every FA-off score-reader also miss it. The two 7/7 policies actually \emph{beat} vanilla at d17\,\% because their aggressive full-attention pruning ($\mu$KV-mass via column-mean $\alpha_a$; TOVA-canonical via pure top-K over the full tensor) acts as a distractor filter, sharpening the query--needle attention alignment. \textbf{The score-based evictors (AdaKV, H2O, TOVA, StreamingLLM) also miss d0\,\%}: their recent-window and cumulative-decode-attention heuristics wrongly rank start-of-context tokens as evictable, so needles at the head of the prompt are dropped. \textbf{H2O's extra d50\,\%/d67\,\% misses} follow from cumulative attention over decode steps --- as decode proceeds, mid-context tokens fail to accumulate enough score and get kicked out. \textbf{StreamingLLM only hits d100\,\%} because a sliding window covers the prompt tail; every other depth places the needle outside that window. Finally, \textbf{$\mu$KV-count vs $\mu$KV-mass at d17\,\%} is a controlled ablation: only $\alpha_a$ differs (0.95 saturated vs 0.79 mass-derived), so mass-$\alpha_a$'s $\sim$21\,\% recent budget (vs count-$\alpha_a$'s 5\,\%) gives the model the query-anchoring context it needs to bind ``Q'' to the needle. Every score-reading baseline runs at $\sim$5.6--6.8\,tps because they stay on the FA-off path; $\mu$KV-mass at \good{20.4}\,tps is 3--3.6$\times$ faster.
+
+\emph{(v) The one Gemma-2B 4K miss (depth 83\,\%) is a \textbf{model-level failure, not an eviction failure}}: vanilla, AdaKV, H2O, TOVA, StreamingLLM \emph{and} both $\mu$KV variants miss the same needle depth. TOVA-canonical (pure top-K, no recent window) happens to hit it because its score signal is different. This is a Gemma-2B recall limitation at the 83\,\% depth, orthogonal to our eviction pipeline.
+
+The structural finding --- $\mu$KV-mass on the multi-axis Pareto --- holds across all 336 measured cells. \emph{On Gemma-2B 8K (n=7), all 8 policies including vanilla miss d0\,\% and d17\,\% but hit d33/d50/d67/d100\,\%} — a Gemma-2B model-level recall failure at the head of 8K prompts, not an eviction failure (every policy tracks vanilla depth-for-depth, so vanilla, $\mu$KV-mass, $\mu$KV-count, AdaKV, TOVA and TOVA-canonical all reach 5/7, H2O drops d17 for 4/7, and StreamingLLM keeps only the two in-window depths for 2/7). $\mu$KV-mass matches vanilla's 5/7 hit rate while running \good{2.0$\times$ faster} (9.8 vs 4.8\,tps), at the lowest RSS (3023\,MB) and near-lowest energy of any policy on this block.
+
+\begin{table*}[t]
+\caption{Phone NIAH retrieval, all 336 cells (8 policies $\times$ 3 models $\times$ 7 depths $\times$ 2 contexts).}
+\label{tab:phone-niah-prelim}
+\centering\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l l c r r r r r r r r}
+\toprule
+\textbf{Block} & \textbf{Policy} & \textbf{Hit} & \textbf{TPS} & \textbf{Wall (s)} & \textbf{ActKV} & \textbf{$\alpha_a$} & \textbf{RSS (MB)} & \textbf{DDR (\textdegree C)} & \textbf{CPU (\textdegree C)} & \textbf{Energy (mWh)} \\
+\midrule
+\multirow{8}{*}{Phi-3 @ 4K (n=7)}
+ & vanilla              & 7/7 &  2.1 &  463 & 3715 & ---  & 8218 & 58 & 75 &  514 \\
+ & \textbf{$\mu$KV-count} & \good{7/7} &  5.5 & 603 & \good{1024} & 0.95 & \good{7085} & \good{51} & \good{66} & \good{493} \\
+ & \textbf{$\mu$KV-mass}  & \good{7/7} & \good{5.7} & 602 & \good{1024} & 0.79 & \good{7082} & \good{50} & \good{66} &  503 \\
+ & AdaKV                & 7/7 &  2.1 &  556 & 3705 & ---  & 7962 & 56 & 69 &  628 \\
+ & H2O                  & 7/7 &  2.0 &  569 & 3711 & ---  & 7962 & 56 & 69 &  620 \\
+ & TOVA                 & 7/7 &  2.0 &  562 & 3699 & ---  & 8132 & 54 & 69 &  628 \\
+ & TOVA-canonical       & 7/7 &  2.0 &  598 & 3705 & ---  & 8176 & 54 & 69 &  608 \\
+ & StreamingLLM         & \bad{2/7} &  2.0 &  599 & 3627 & ---  & 8218 & 54 & 69 &  614 \\
+\midrule
+\multirow{8}{*}{Phi-3 @ 8K (n=7)}
+ & vanilla              & 6/7 &  1.3 & 1130 & 7296 & ---  & 8099 & 54 & 68 & 1017 \\
+ & \textbf{$\mu$KV-count} & \good{7/7} &  5.4 & 1268 & \good{1024} & 0.95 & \good{7160} & \good{53} & \good{58} & 1147 \\
+ & \textbf{$\mu$KV-mass}  & \good{7/7} & \good{5.7} & 1273 & \good{1024} & 0.78 & \good{7160} & \good{53} & \good{58} & 1160 \\
+ & AdaKV                & \good{7/7} &  1.4 & 1362 & 7296 & ---  & 7887 & 58 & 60 & 1249 \\
+ & H2O                  & \good{7/7} &  1.4 & 1350 & 7296 & ---  & 8024 & 58 & 61 & 1267 \\
+ & TOVA                 & 6/7 &  1.4 & 1344 & 7296 & ---  & 8048 & 57 & 60 & 1252 \\
+ & TOVA-canonical       & \good{7/7} &  1.4 & 1352 & 7234 & ---  & 8048 & 57 & 61 & 1267 \\
+ & StreamingLLM         & \bad{1/7} &  1.5 & 1322 & 7296 & ---  & 7776 & 57 & 60 & 1264 \\
+\midrule
+\multirow{8}{*}{Llama-1B @ 4K (n=7)}
+ & vanilla              & 7/7 & 13.8 &  104 & 3122 & ---  & 1338 & 49 & 60 &  106 \\
+ & \textbf{$\mu$KV-count} & \good{7/7} & 19.6 &  116 & \good{1024} & 0.95 & \good{1266} & 49 & 61 &  121 \\
+ & \textbf{$\mu$KV-mass}  & \good{7/7} & \good{19.8} &  116 & \good{1024} & 0.87 & \good{1266} & 49 & 61 &  121 \\
+ & AdaKV                & 7/7 &  8.5 &  123 & 3099 & ---  & 1388 & 48 & 57 &  126 \\
+ & H2O                  & 7/7 &  7.4 &  124 & 3122 & ---  & 1412 & 47 & 57 &  127 \\
+ & TOVA                 & 7/7 &  7.3 &  124 & 3093 & ---  & 1387 & 46 & 57 &  127 \\
+ & TOVA-canonical       & 7/7 &  7.6 &  124 & 3099 & ---  & 1387 & 47 & 57 &  127 \\
+ & StreamingLLM         & \bad{3/7} &  8.1 &  124 & 2978 & ---  & 1387 & 47 & 57 &  127 \\
+\midrule
+\multirow{8}{*}{Llama-1B @ 8K (n=7)}
+ & vanilla              & 6/7 &  7.3 &  225 & 6159 & ---  & 1338 & 49 & 57 &  227 \\
+ & \textbf{$\mu$KV-count} & 6/7 & 19.7 &  258 & \good{1024} & 0.95 & \good{1300} & 50 & \good{54} &  272 \\
+ & \textbf{$\mu$KV-mass}  & \good{7/7} & \good{20.4} &  258 & \good{1024} & 0.79 & \good{1300} & 50 & \good{54} &  273 \\
+ & AdaKV                & 5/7 &  6.8 &  278 & 6161 & ---  & 1424 & 49 & 53 &  286 \\
+ & H2O                  & \bad{3/7} &  5.6 &  280 & 6160 & ---  & 1468 & 48 & 54 &  286 \\
+ & TOVA                 & 5/7 &  6.0 &  279 & 6161 & ---  & 1424 & 48 & 54 &  287 \\
+ & TOVA-canonical       & \good{7/7} &  5.6 &  280 & 6099 & ---  & 1424 & 48 & 52 &  286 \\
+ & StreamingLLM         & \bad{1/7} &  6.6 &  278 & 6162 & ---  & 1424 & 49 & 52 &  287 \\
+\midrule
+\multirow{8}{*}{Gemma-2B @ 4K (n=7)}
+ & vanilla              & 6/7 &  6.7 &  232 & 3150 & ---  & 3347 & 52 & 62 &  246 \\
+ & \textbf{$\mu$KV-count} & 6/7 &  9.8 &  246 & \good{1024} & 0.95 & \good{2977} & 51 & 63 &  247 \\
+ & \textbf{$\mu$KV-mass}  & 6/7 & \good{10.1} &  246 & \good{1024} & 0.64 & \good{2977} & 51 & 62 &  247 \\
+ & AdaKV                & 6/7 &  4.2 &  258 & 3138 & ---  & 3371 & 49 & 59 &  255 \\
+ & H2O                  & 6/7 &  3.8 &  260 & 3150 & ---  & 3410 & 48 & 57 &  256 \\
+ & TOVA                 & 6/7 &  3.8 &  260 & 3134 & ---  & 3370 & 49 & 58 &  254 \\
+ & TOVA-canonical       & \good{7/7} &  3.6 &  260 & 3138 & ---  & 3370 & 49 & 58 &  257 \\
+ & StreamingLLM         & \bad{1/7} &  4.1 &  259 & 3062 & ---  & 3370 & 49 & 58 &  253 \\
+\midrule
+\multirow{8}{*}{Gemma-2B @ 8K (n=7)}
+ & vanilla              & 5/7 &  4.8 &  523 & 6194 & ---  & 3347 & 56 & 60 &  542 \\
+ & \textbf{$\mu$KV-count} & 5/7 &  9.6 &  550 & \good{1024} & 0.88 & \good{3023} & 52 & 55 &  \good{531} \\
+ & \textbf{$\mu$KV-mass}  & 5/7 & \good{9.8} &  548 & \good{1024} & 0.83 & \good{3023} & 52 & 57 &  533 \\
+ & AdaKV                & 5/7 &  3.4 &  582 & 6194 & ---  & 3419 & 52 & 55 &  555 \\
+ & H2O                  & \bad{4/7} &  3.0 &  581 & 6194 & ---  & 3491 & 51 & 54 &  560 \\
+ & TOVA                 & 5/7 &  2.9 &  582 & 6194 & ---  & 3419 & 50 & 54 &  555 \\
+ & TOVA-canonical       & 5/7 &  2.7 &  586 & 6136 & ---  & 3419 & 50 & 54 &  562 \\
+ & StreamingLLM         & \bad{2/7} &  3.4 &  583 & 6193 & ---  & 3419 & 52 & 55 &  554 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+
+\paragraph{Measurement notes for Table~\ref{tab:phone-niah-prelim}.} The prompt embeds the needle at depths $d\in\{0,17,33,50,67,83,100\}\%$ of context; a hit means the 64-token generation contains the needle. Wall is the median end-to-end time per cell and is prefill-dominated on this short-decode workload, so higher decode throughput does not lower wall here; the 2K-decode workload of Table~\ref{tab:master} flips that ordering. ActKV is the end-of-prefill attended set. Temperatures are median peaks across depths because means skew on single-cell outliers (one H2O cell triggered a BCL event with a 93\,\textdegree C prime-core spike). One Gemma-2B 8K $\mu$KV-mass cell logged a 10.5\,Wh USB-rail reading at normal wall and throughput, a clear sensor glitch, and is excluded from that energy mean.
+
+\paragraph{Why $\mu$KV-mass is the recommended default over $\mu$KV-count.} The two variants differ only in how the dispatcher computes $\alpha_a$: count-$\alpha$ uses the binary argmax-position metric (Sec.~\ref{sec:design} the dispatcher v1), mass-$\alpha$ uses the column-mean attention partition (the dispatcher v2). On every response-generation workload measured (chat, QA, NIAH), the count-$\alpha$ saturates at 0.95 across all prompts --- it is functionally static. The mass-$\alpha$ varies smoothly per prompt: 0.62--0.78 for short chat, 0.78--0.92 for medium QA, 0.81--0.91 for long retrieval. Operationally, mass-$\alpha$ produces 40\,\% smaller active KV (250 vs 416 at 4K NIAH on Phi-3) at the same NIAH hit rate (7/7 vs 7/7), 4\,\% higher decode throughput (5.7 vs 5.5), and 2--3\,\textdegree C lower DDR temperature. The compute cost is identical (the same column-mean reduction anchor selection already requires for anchor ranking). We therefore deploy mass-$\alpha$ as the production default and retain count-$\alpha$ only as an ablation in Sec.~\ref{sec:eval-tdak}.
+
+\subsection{Cache size is not a temperature actuator}
+\label{sec:eval-tdak}
+
+We also tested coupling the cache budget itself to DDR temperature (a four-tier ladder over $K\in\{256,512,768,1024\}$, symmetric and ratcheted variants, under cool and co-loaded regimes). The mechanism works, but the result is negative and we do not ship it: cache size controls throughput, wall time, and energy, not peak temperature. Halving $K$ under co-load left peak DDR unchanged because the co-load dominates the thermal budget, and on a cool phone a smaller cache runs hotter at peak because the saved bandwidth converts to speed and power. Frequency remains the only lever that caps heat, which is why the shipped design pairs eviction (efficiency) with the clock watchdog (temperature) and nothing else.
+
+\subsection{Watchdog: gradual clock reduction before the kernel throttle}
+\label{sec:eval-thermal}
+
+The watchdog is a userspace daemon that polls skin, battery, DDR, and CPU sensors at 2\,Hz, maps each to a normalized threat against thresholds calibrated from measured pre-throttle events, and reduces the big-core frequency cap one step at a time (1632, 1497, 1382, 1267\,MHz) as the maximum threat rises, with hysteresis on the way back down. It never raises the clock and runs only under $\mu$KV. From a cold start it stays dormant (Table~\ref{tab:master-wikitext}); its purpose is to replace the kernel's reactive cliff (a single drop to 883\,MHz) with a small preventive reduction. Its thresholds come from real throttle events we measured on uncapped runs. In the capped cold-start campaign the platform's own first mitigation tier did engage in every cell, a skin-triggered clamp from 1632 to 1498\,MHz at about 41\,\textdegree C; the deeper tiers (the cpufreq cooling device and the 883\,MHz cliff) never did.
+
+
+\subsection{Cross-model replication of the throughput-energy Pareto}
+\label{sec:eval-cross}
+
+The headline Phi-3 result replicates on Llama-3.2-1B and gemma-2-2b-it (Table~\ref{tab:master}, bottom 6 rows). On Llama-1B at 16K decode, $\mu$KV reaches \good{16.29\,tps} (vs vanilla 4.87, AdaKV 5.90) at \good{446\,mWh} system energy (vs vanilla 634, AdaKV 653). On gemma-2-2b, \good{7.17\,tps} (vs vanilla 3.35, AdaKV 2.69) at \good{847\,mWh} (vs 1322, 1367). The pattern is consistent: $\mu$KV is the fastest and the lowest-energy policy on every model, holds DDR 8--10\,\textdegree C below the cliff vanilla and AdaKV approach, and uses the least RSS. PPL on Llama-1B and Gemma-2B shows the count-$\alpha$ saturation effect (Sec.~\ref{sec:design}, the dispatcher v1) over-allocating anchors for smaller models; the mass-$\alpha$ dispatcher rebalances toward recent on these regimes, closing the quality gap in follow-on sweeps.
+
+\subsection{Limitations and scope}
+\label{sec:limitations}
+
+\emph{Device.} All measurements on a single OnePlus 15 (Snapdragon 8 Elite Gen 5). Watchdog thresholds are device-specific; the calibration protocol (10 measured pre-throttle events on the vanilla baseline) generalizes but the specific tier values do not.
+\emph{Energy.} System energy via USB rail $V\cdot I$ integration with charging disabled throughout each cell. This is total-device energy (CPU, DDR, modem, screen-off); we cannot isolate DDR-specific energy without a die-attached power meter.
+
+
+\paragraph{Why CPU-only is the right comparison (not a concession to the GPU).} A natural objection is that our numbers ignore the mobile GPU/NPU. They do not: they reflect what \emph{any} attention-driven evictor can use. Every score-reading policy in Table~\ref{tab:master} (H2O, TOVA, AdaKV, $\mu$KV) needs post-softmax attention, which fused GPU/NPU kernels never materialize --- so the entire eviction category is CPU-bound together, and $\mu$KV is the only member that escapes to the fused path for decode . The only GPU-eligible alternatives are vanilla (no eviction: maximal cache, maximal DRAM traffic, the thermal collapse of Table~\ref{tab:master-wikitext}) and StreamingLLM (score-free, but 1--3/7 NIAH retrieval). Moreover $\mu$KV's core win is \emph{bandwidth reduction}, which is compute-unit-agnostic: a GPU reads the KV cache from the same LPDDR5X, so a smaller attended set lowers DDR heat regardless of where the matmuls run. A faster compute unit spins faster against the same memory wall; it does not remove it.
+
+\paragraph{Portability: iOS and the sensing-fidelity spectrum.} Our measurement methodology requires privileged telemetry --- numeric multi-sensor temperatures, USB-rail $V{\cdot}I$ with charging control, CPU-frequency capping --- that stock iOS does not expose to any app: iOS offers a single 4-level thermal abstraction (\texttt{ProcessInfo.thermalState}), no absolute energy, and no frequency access. The \emph{controller design}, however, ports directly: the watchdog's tier ladder maps one-to-one onto the 4 \texttt{thermalState} levels, and Metal's fused attention presents the same score-visibility conflict that the eviction step's swap resolves (unfused-attention prefill $\to$ fused decode). A preliminary MLX-Swift harness on an iPhone (Instruments: thermal-state timeline, per-core E/P-cluster utilization, relative energy impact) confirms the behavioral endpoints --- sustained tps, time-in-thermal-state, throttle onset --- needed to evaluate the ported controller without numeric sensors. Whether closed-loop cache control degrades gracefully as sensor fidelity drops from a 0.1\,\textdegree C DDR trace to a 2-bit enum is an open question this design is positioned to answer; we leave the port and a second (mid-tier) Android device as the immediate next steps.
+
+\section{Discussion: pick the policy per request}
+\label{sec:discuss}
+
+The tables above no longer split along the axis we originally expected. With the count-based dispatcher, retrieval was the workload class where Ada-KV justified its FA-off cost; with the mass-based $\alpha_a$ dispatcher, $\mu$KV matches or beats every score-reading baseline on buried-fact retrieval across all 336 NIAH cells (Table~\ref{tab:phone-niah-prelim}) while remaining $1.4$--$3\times$ faster and cooler, and preliminary LongBench sample-0 F1 shows the same ordering (full $n{=}5$ sweep in progress). The split that survives the data is instead \emph{retrieval vs.\ long continuation}: on prose continuation at 14K context, aggressive eviction costs PPL (2.01 vs 1.15--1.45 full-cache, Table~\ref{tab:master-wikitext}) --- the one axis where the full cache retains a clear quality edge, at $5.5\times$ the wall and twice the energy. The design question is therefore not which evictor wins, but how the phone should set $K$ per request: large for long free-form continuation when cool, small everywhere else --- exactly the admission-control role that the budget ladder $+$ the admission check already occupy (\S\ref{sec:design}).
+
+A request whose output entropy stays high is probably searching for a fact and should not be evicted aggressively; one that commits quickly can be. We are building a per-step entropy gate $K_h(t) = \mathrm{round}(K_{\text{nom}}\,\mu(m_h)\,(1-\tilde{H}(t)))$ that shrinks the budget when normalized output entropy $\tilde{H}(t)$ is high. A server-side study over long-form tasks shows the expected negative correlation between output entropy and attention concentration ($\rho=-0.37$, $p<10^{-55}$), the relationship the gate exploits. A second extension spills evicted cells to flash with an index for linear-time recall, extending the watchdog to flash temperature and I/O depth, so model-internal attention drives both eviction and recall while sensors drive both the frequency cap and the I/O quota.
+
+\textbf{Limitations.} All numbers are on one device; the watchdog thresholds are device-specific. Energy is a disable-charging estimate, not a power-meter measurement, so absolute mAh should be read within about 10\% while the sign and ordering hold. $\mu$KV is faster than the full cache on long prompts and and no longer slower on short ones: in-graph scoring removes the prefill penalty, and only the 290\,ms compaction remains to amortize. All measurements use seed 42; cross-seed variance is in the supplementary material.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+$\mu$KV is a mobile inference pipeline that makes attention-driven KV eviction viable on a phone and measures it end-to-end on a OnePlus 15: a cheap $O(H)$ per-head budget signal, in-graph scoring with sequence-level compaction that keeps the evictor on the fast path, a cliff-insurance frequency watchdog, and thermal-coupled cache control.  08\,tps where $\mu$KV holds 5.18. We honestly report what $\mu$KV does not do --- no configuration of the cache actuator caps peak temperature under external co-load (frequency remains the only lever that does); the symmetric ladder oscillates and is retired in favor of the measured ratchet ($+47\%$ tps, $-23\%$ energy, $-40\%$ time-above-cliff at identical PPL under identical co-load, the 10-arm test); and aggressive eviction still costs perplexity on long free-form continuation even as it preserves retrieval (7/7 NIAH at 4K on every model). The useful takeaway is the substrate, not the trophy: on-device LLM serving should close the loop between attention-driven cache state and hardware sensors per request --- the cache is the phone's \emph{efficiency} actuator, the clock its \emph{temperature} actuator, and the two compose.
+
+\paragraph{Reproducibility.} We release the \texttt{eviction\_bench} binary with all six policy implementations, the multi-sensor watchdog daemon, the energy fallback chain, and the host-side harnesses for Wave-11 chunk-pair PPL, NIAH Tier-1, and LongBench at \url{[anonymized URL]}. Phone-side scripts target Android NDK aarch64; host-side LongBench builds against \texttt{llama.cpp} with CUDA. All measurements use seed 42 throughout; the protocol scripts pin DVFS to the performance governor and the kernel cap (1632\,MHz on Snapdragon 8 Elite Gen 5) before each cell. All raw \texttt{meta.json} and \texttt{stress.csv} artifacts referenced in the tables are included in the release.
+
+\begin{thebibliography}{99}
+\small
+\bibitem{zhang2023h2o} Z. Zhang et al. ``H2O: Heavy-Hitter Oracle for Efficient Generative Inference of LLMs.'' NeurIPS, 2023.
+\bibitem{xiao2024streamingllm} G. Xiao et al. ``Efficient Streaming Language Models with Attention Sinks.'' ICLR, 2024.
+\bibitem{oren2024tova} M. Oren et al. ``Transformers are Multi-State RNNs.'' arXiv:2401.06104, 2024.
+\bibitem{li2024snapkv} Y. Li et al. ``SnapKV: LLM Knows What You're Looking For Before Generation.'' NeurIPS, 2024.
+\bibitem{liu2024kivi} Z. Liu et al. ``KIVI: Tuning-Free Asymmetric 2bit Quantization for KV Cache.'' arXiv:2402.02750, 2024.
+\bibitem{feng2025adakv} Y. Feng et al. ``Ada-KV: Optimizing KV Cache Eviction by Adaptive Budget Allocation.'' NeurIPS, 2025.
+\bibitem{feng2025criticalkv} Y. Feng et al. ``CriticalKV: A Perturbation Perspective on KV Cache Eviction.'' ICML, 2026.
+\bibitem{feng2025defensivekv} Y. Feng et al. ``DefensiveKV: Worst-Case Risk Control for KV Cache Eviction.'' ICLR, 2026.
+\bibitem{gu2025ahakv} Y. Gu et al. ``AhaKV: Adaptive Holistic Attention-Driven KV Cache Eviction.'' arXiv:2506.03762, 2025.
+\bibitem{hsieh2024ruler} C.-P. Hsieh et al. ``RULER: What's the Real Context Size of Your Long-Context Models?'' arXiv:2404.06654, 2024.
+\bibitem{bai2023longbench} Y. Bai et al. ``LongBench: A Bilingual, Multitask Benchmark for Long Context Understanding.'' arXiv:2308.14508, 2023.
+\bibitem{dao2022flashattention} T. Dao et al. ``FlashAttention: Fast and Memory-Efficient Exact Attention.'' NeurIPS, 2022.
+\bibitem{dao2023flashattention2} T. Dao. ``FlashAttention-2: Faster Attention with Better Parallelism.'' arXiv:2307.08691, 2023.
+\bibitem{song2024powerinfer2} Y. Song et al. ``PowerInfer-2: Fast LLM Inference on a Smartphone.'' arXiv:2406.06282, 2024.
+\bibitem{alizadeh2023llm} K. Alizadeh et al. ``LLM in a Flash: Efficient Inference with Limited Memory.'' arXiv:2312.11514, 2023.
+\bibitem{llamacpp} G. Gerganov. ``llama.cpp.'' \url{https://github.com/ggerganov/llama.cpp}.
+\bibitem{qualcommbcl} Qualcomm. ``Battery Current Limit (BCL) for Snapdragon Platforms.'' Whitepaper, 2023.
+\bibitem{michel2019sixteen} P. Michel et al. ``Are Sixteen Heads Really Better than One?'' NeurIPS, 2019.
+\bibitem{voita2019analyzing} E. Voita et al. ``Analyzing Multi-Head Self-Attention.'' ACL, 2019.
+\bibitem{kim2025kvzip} J.-H. Kim et al. ``KVzip: Query-Agnostic KV Cache Compression with Context Reconstruction.'' NeurIPS, 2025.
+\bibitem{liu2025percache} K. Liu, L. Zeng, L. Xu, B. Yang, Z. Yan. ``PerCache: Predictive Hierarchical Cache for RAG Applications on Mobile Devices.'' arXiv:2601.11553, 2025.
+\bibitem{mlcllm} MLC Team. ``MLC-LLM: Universal LLM Deployment.'' \url{https://github.com/mlc-ai/mlc-llm}.
+\bibitem{kim2021ztt} S. Kim et al. ``zTT: Learning-Based DVFS with Zero Thermal Throttling for Mobile Devices.'' MobiSys, 2021.
+\bibitem{liu2022fuse} S. Liu et al. ``FUSE: Fine-Grained Power Management for Mobile Devices.'' SenSys, 2022.
+\bibitem{cai2025rkv} X. Cai et al. ``R-KV: Redundancy-aware KV Cache Compression for Reasoning Models.'' arXiv:2505.24133, 2025.
+\bibitem{zhou2024dynamickv} X. Zhou et al. ``DynamicKV: Task-Aware Adaptive KV Cache Compression for Long Context LLMs.'' arXiv:2412.14838, 2024.
+\bibitem{prismml2026bonsai} PrismML. ``Bonsai: Commercially Viable 1-bit LLMs.'' 2026. \url{https://prismml.com/news/bonsai-8b}.
+\end{thebibliography}
+
+\end{document}

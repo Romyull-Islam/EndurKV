@@ -718,8 +718,57 @@ extern "C" {
 
     // --- ThermoKV Public API ---
     LLAMA_API void llama_memory_thermokv_evict(
-            llama_memory_t mem, 
+            llama_memory_t mem,
                        int drop_count);
+    // EndurKV Solution 2: enable FA-on eviction-score capture (kq_evict side
+    // node in the FlashAttention branch). w>0 sets the observation window (last
+    // W queries scored against the prompt K-cache); 0 disables (default). This
+    // lets content-aware KV eviction run with FlashAttention ON end-to-end (no
+    // FA-off prefill, no state-swap) on every backend incl. Vulkan/Adreno.
+    LLAMA_API void llama_endurkv_set_evict_obs_window(int32_t w);
+
+    // EndurKV (2026-07-25): evict KV cells by CELL INDEX instead of by position.
+    // Position-based llama_memory_seq_rm() cannot express a per-token eviction
+    // mask on M-RoPE (vision) caches, because mtmd gives every token of an image
+    // the same dim-0 position — the value the cache stores — so an image is a
+    // single position covering thousands of cells. This takes a keep-mask over
+    // cell indices (keep[i] != 0 retains cell i) and returns the cells removed.
+    // Kept cells keep their pos/2D-ext, so M-RoPE attention stays correct.
+    LLAMA_API uint32_t llama_endurkv_seq_rm_cells(
+            llama_memory_t mem,
+              llama_seq_id seq_id,
+              const int8_t * keep,
+                  uint32_t n);
+
+    // EndurKV (2026-08-07): compact the cache IN PLACE -- slide the surviving cells
+    // of seq_id down into a dense prefix, in chunks, reusing the tensors prefill
+    // already allocated. This is the memory-neutral alternative to compacting via
+    // llama_state_seq_get_data/_set_data into a second context, whose peak is 2x the
+    // cache. Returns live cells after compaction, or 0 if it declined (cache holds
+    // other sequences) -- fall back to the round-trip in that case.
+    // chunk_cells = 0 selects the default (512).
+    LLAMA_API uint32_t llama_endurkv_compact_seq(
+            llama_memory_t mem,
+              llama_seq_id seq_id,
+                  uint32_t chunk_cells);
+    // EndurKV (2026-08-16): per-cell KeyDiff scores (-cos of each key to the mean
+    // key, averaged over layers) for the KeyDiff eviction baseline
+    // (arXiv:2504.15364). Fills out[0..n) where n = live cells of seq_id; returns
+    // n, or 0 if the cache is not a dense single-sequence prefix or K is
+    // quantized. Needs no attention capture: KeyDiff reads key geometry only,
+    // which is why it is the one score-based baseline that runs FA-on natively.
+    // EndurKV (2026-08-31): release the dead tail of the KV cache to the OS.
+    // Call AFTER llama_endurkv_compact_seq, which makes the dead cells contiguous.
+    // Returns bytes actually returned (0 on non-host/device-local caches).
+    LLAMA_API size_t llama_endurkv_reclaim_tail(
+            llama_memory_t mem,
+              llama_seq_id seq_id);
+
+    LLAMA_API uint32_t llama_endurkv_keydiff_scores(
+            llama_memory_t mem,
+              llama_seq_id seq_id,
+                   float * out,
+                  uint32_t n_max);
     // ---------------------------
 
     // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)

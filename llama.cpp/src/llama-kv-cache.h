@@ -128,6 +128,28 @@ public:
     void clear(bool data) override;
 
     bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
+
+    // EndurKV (2026-07-25): remove cells by CELL INDEX rather than by position.
+    // Required for M-RoPE (vision) caches: mtmd assigns every token of an image
+    // the SAME dim-0 position (llama-kv-cache.cpp: cells.pos_set(i, ubatch.pos[i]),
+    // mtmd-helper set_position_mrope_2d), so position-based seq_rm() is
+    // all-or-nothing per image and cannot express a per-token eviction mask.
+    // `keep[i] != 0` retains cell i; returns the number of cells removed.
+    uint32_t endurkv_rm_cells(llama_seq_id seq_id, const int8_t * keep, uint32_t n);
+
+    // EndurKV (2026-08-07): slide surviving cells of `seq_id` down into a dense
+    // prefix [0, n) IN PLACE, in chunks, so compaction never needs a second
+    // context. Returns the number of live cells after compaction, or 0 if it
+    // declined (caller should fall back to the state round-trip).
+    uint32_t endurkv_compact_seq(llama_seq_id seq_id, uint32_t chunk_cells);
+    // KeyDiff baseline support (2026-08-16): per-cell -cos(mu(K), k_i) scores,
+    // mean over layers. Returns cells scored, or 0 on decline (non-dense cache
+    // or quantized K). See the definition for the fidelity notes.
+    // EndurKV: hand the dead tail of the KV buffer back to the OS after compaction
+    // (host buffers only). Returns bytes released. See the .cpp for why.
+    size_t endurkv_reclaim_tail(llama_seq_id seq_id);
+
+    uint32_t endurkv_keydiff_scores(llama_seq_id seq_id, float * out, uint32_t n_max);
     void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;
     void seq_keep(llama_seq_id seq_id)                                                          override;
     void seq_add (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, llama_pos shift) override;

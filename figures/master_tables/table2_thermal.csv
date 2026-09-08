@@ -1,0 +1,10 @@
+model,policy,CPU_peak_cpu_mode,CPU_rise_cpu_mode,DDR_peak_cpu_mode,DDR_rise_cpu_mode,GPU_peak_gpu_mode,GPU_rise_gpu_mode,DDR_peak_gpu_mode,DDR_rise_gpu_mode,NPU_peak_gpu_mode
+Llama-1B,vanilla,56.6,9.8,48.9,6.6,59.9,16.9,56.8,13.7,48.8
+Llama-1B,v1,67.2,21.0,51.5,9.8,55.8,13.4,54.5,12.0,48.4
+Llama-1B,tova,54.8,8.1,47.6,5.6,56.2,13.2,54.8,11.8,48.9
+Gemma-2-2B,vanilla,70.1,21.7,53.0,11.0,58.9,15.3,58.5,14.4,50.2
+Gemma-2-2B,v1,64.5,16.6,49.8,7.4,52.8,10.1,52.3,9.4,47.3
+Gemma-2-2B,tova,75.7,27.1,53.5,11.1,49.1,6.8,48.6,6.5,44.4
+Phi-3-128k,vanilla,68.7,21.8,51.8,9.4,57.0,13.9,55.2,12.3,47.7
+Phi-3-128k,v1,65.7,17.7,54.2,11.1,54.8,11.5,53.5,10.1,47.3
+Phi-3-128k,tova,57.2,11.9,50.3,8.1,54.6,11.4,52.9,9.6,47.0

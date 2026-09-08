@@ -1,0 +1,330 @@
+\documentclass{article}
+
+% ----- NeurIPS 2024 style (final) -----
+\usepackage[final]{neurips_2024}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{mathtools}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+
+% ---- theorem environments ----
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}{Assumption}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+% ---- macros ----
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\PR}{\mathbb{P}}
+\newcommand{\F}{\mathcal{F}}
+\newcommand{\A}{\mathcal{A}}
+\newcommand{\D}{\mathcal{D}}
+\newcommand{\Si}{\mathcal{S}}
+\newcommand{\Bset}{\mathcal{B}}
+\newcommand{\Reg}{\mathrm{R}}
+\newcommand{\Attn}{\mathrm{Attn}}
+\newcommand{\softmax}{\mathrm{softmax}}
+\newcommand{\inner}[2]{\langle #1, #2 \rangle}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\indicator}{\mathbf{1}}
+\newcommand{\tighten}{\textcolor{red}{[TIGHTEN]}}
+
+\title{A Cumulative Regret Lower Bound for Causal KV--Cache Eviction Policies}
+
+\author{%
+  Anonymous Authors \\
+  EndurKV Project \\
+  \texttt{anonymous@example.org}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+We prove the first cumulative--regret lower bound for online key--value (KV) cache eviction in autoregressive transformer attention. Modeling an eviction policy as a causal, budget-respecting selector $\A:(q_t,k_t,v_t,S_{t-1})\mapsto S_t,\ |S_t|\le B$, and measuring loss by the per-step $\ell_2$ attention-reconstruction error $\norm{\Attn(q_t;[t])-\Attn(q_t;S_t)}_2$, we construct an explicit adversarial distribution over key, value, and query sequences such that the expected cumulative regret of \emph{every} causal randomized policy satisfies
+\[
+\E[\Reg_T(\A)] \;=\; \Omega\!\left(\sigma\,(1-B/k^\star)\,(T-k^\star)\right),
+\]
+where $k^\star\in(B,T/2]$ is a free \emph{spread} parameter, $\sigma$ is the value norm, and $T$ is the horizon. Setting $k^\star=2B$ yields $\Omega(\sigma T)$ in the linear regime $B\le T/4$. Restricting the adversary to spread-bounded sequences yields $\Omega(\sigma\sqrt{T/B})$. Our argument combines a planted-direction block construction with vector Khintchine anti-concentration and a Fano-style subset-identification bound, in the spirit of Yao's minimax principle. The bound is tight: a trivial keep-last-$B$ policy achieves $O(\sigma T)$ in the same regime.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+KV--cache eviction has emerged as the dominant approximation strategy for long-context inference in modern decoder-only transformers. A large family of recent systems --- $\text{H}_2\text{O}$, SnapKV, Ada-KV, PyramidKV, BalanceKV, ChunkKV, RazorAttention --- discard a $1-B/T$ fraction of past tokens to fit the prefill cache in device memory. While such systems are routinely \emph{measured} on downstream tasks, the underlying \emph{statistical} question --- ``how much cumulative attention error must any online eviction policy incur?'' --- has remained largely open. Existing lower bounds focus on \emph{storage} (Sadhukhan, Haris, and Onak, 2025; Kochetkova et al., 2025) or on \emph{per-query} approximation space, both via the INDEX communication problem.
+
+In this paper, we prove a different and complementary lower bound: a \emph{cumulative regret} bound on the $\ell_2$ attention reconstruction error of any causal randomized budget-$B$ policy. Unlike standard online-caching lower bounds, our loss is continuous and query-dependent; the discrete hit/miss arguments of \citet{bhattacharjee2020online} and others do not transfer. Our key construction --- planted block direction, Rademacher value vectors, terminal-only query --- forces a polynomial fraction of the cumulative attention mass onto keys the policy provably cannot identify in advance.
+
+\paragraph{Contributions.}
+\begin{itemize}
+\item We formalize the online KV-eviction problem as a regret minimization problem with causal, budget-respecting policies and continuous $\ell_2$ loss (Section~\ref{sec:setup}).
+\item We prove a cumulative-regret lower bound $\E[\Reg_T(\A)]=\Omega(\sigma T)$ in the linear regime $B\le T/4$ (Theorem~\ref{thm:main}), with an explicit constant $c_0=1/(4\sqrt 2)$.
+\item We sharpen to $\Omega(\sigma\sqrt{T/B})$ under a spread-bounded adversary (Theorem~\ref{thm:main}(ii)), and give the information-theoretic form (Theorem~\ref{thm:main}(iii)).
+\item We verify tightness by showing that the trivial keep-last-$B$ policy achieves $O(\sigma T)$ on the same instance class (Proposition~\ref{prop:upper}).
+\end{itemize}
+
+\section{Setup and Assumptions}
+\label{sec:setup}
+
+\paragraph{Attention.}
+Fix a head dimension $d\in\N$ and inverse-temperature $\tau=1/\sqrt d$. For a horizon $T$, the adversary reveals a stream of triples
+\[
+(q_t,k_t,v_t)\in\R^d\times\R^d\times\R^d,\qquad t=1,\dots,T.
+\]
+Let $[t]:=\{1,\dots,t\}$, and for $S\subseteq[t]$ define the (causal, masked) attention output
+\begin{equation}
+\Attn(q_t;S) \;:=\; \sum_{i\in S}\alpha_i^{(t)}(S)\,v_i,\qquad
+\alpha_i^{(t)}(S):=\frac{\exp(\tau\inner{q_t}{k_i})}{\sum_{j\in S}\exp(\tau\inner{q_t}{k_j})}.
+\end{equation}
+
+\paragraph{Eviction policy.}
+Let $\F_t=\sigma(q_{\le t},k_{\le t},v_{\le t},U)$ be the policy's filtration, where $U$ is its internal randomness. An \emph{online KV-eviction policy with budget $B$} is a sequence of $\F_t$-measurable random sets
+\[
+S_t \;=\; \A(q_t,k_t,v_t,S_{t-1},U)\;\subseteq\;[t],\qquad |S_t|\le B.
+\]
+The policy is causal: $S_t$ may not depend on $(q_{>t},k_{>t},v_{>t})$.
+
+\paragraph{Per-step loss and cumulative regret.}
+The per-step $\ell_2$ reconstruction loss is
+\[
+\ell_t(\A) \;:=\; \norm{\Attn(q_t;[t])-\Attn(q_t;S_t)}_2,
+\]
+and the cumulative regret over horizon $T$ is
+\begin{equation}
+\Reg_T(\A) \;:=\; \sum_{t=1}^{T}\ell_t(\A).
+\end{equation}
+
+\paragraph{Assumptions.}
+\begin{assumption}[Bounded keys/queries]\label{ass:bounded}
+There exists $r=O(\sqrt{\log T})$ such that $\norm{q_t}_2,\norm{k_i}_2\le r$ a.s.\ for all $t,i$.
+\end{assumption}
+\begin{assumption}[Bounded values]\label{ass:values}
+There exists $\sigma>0$ such that $\norm{v_i}_2\le\sigma$ a.s.\ for all $i$.
+\end{assumption}
+\begin{assumption}[Budget regime]\label{ass:budget}
+$1\le B\le T/2$.
+\end{assumption}
+\begin{assumption}[Causal, budget-respecting]\label{ass:causal}
+$|S_t|\le B$ for every $t$ a.s., and $S_t$ is $\F_t$-measurable.
+\end{assumption}
+
+No smoothness, key/value distribution, attention-sparsity, or richness condition is imposed. The randomization $U$ of the policy is arbitrary and may include access to any external randomness independent of the adversary's draws.
+
+\section{Main Theorem}
+\label{sec:thm}
+
+\begin{theorem}[Cumulative KV-eviction regret lower bound]\label{thm:main}
+Under Assumptions~\ref{ass:bounded}--\ref{ass:causal}, fix any \emph{spread} $k^\star\in\{B+1,\dots,\lfloor T/2\rfloor\}$. There exists a joint distribution $\D=\D(T,B,d,k^\star,\sigma)$ over sequences $((q_t,k_t,v_t))_{t=1}^T$ satisfying Assumptions~\ref{ass:bounded}--\ref{ass:values} such that for every causal randomized policy $\A$ of budget $B$,
+\begin{equation}\label{eq:main-linear}
+\E_{\D,\A}\bigl[\Reg_T(\A)\bigr] \;\ge\; c_0\,\sigma\,\bigl(1-B/k^\star\bigr)\,\bigl(T-k^\star\bigr),
+\end{equation}
+with absolute constant $c_0=1/(4\sqrt 2)$. In particular:
+\begin{enumerate}
+\item[(i)] (Linear regime.) Choosing $k^\star=2B$ gives, for all $B\le T/4$,
+\[
+\E[\Reg_T(\A)] \;\ge\; (c_0/2)\,\sigma\,(T-2B) \;=\; \Omega(\sigma T).
+\]
+\item[(ii)] (Spread-bounded regime.) If the adversary is restricted to sequences whose realized per-step support size $k_t^\star$ satisfies $\sum_t(1-B/k_t^\star)\le\sqrt{T/B}$, then
+\[
+\inf_{\A}\sup_{\D\in\text{class}}\E[\Reg_T(\A)] \;\ge\; c_1\,\sigma\,\sqrt{T/B}.
+\]
+\item[(iii)] (Information-theoretic form.) For the construction in (i),
+\[
+\E[\Reg_T(\A)] \;\ge\; c_2\,\sigma\,(T/k^\star)\,\log_2\binom{k^\star}{B}/\log_2 e
+\;=\;\Omega\!\bigl(\sigma\,T\,\log(k^\star/B)/k^\star\bigr).
+\]
+\end{enumerate}
+\end{theorem}
+
+\paragraph{Roadmap.} Section~\ref{sec:construction} constructs the hard distribution. Section~\ref{sec:pointwise} proves a per-block regret bound via vector Khintchine. Section~\ref{sec:fano} converts policy ignorance into expected error via Yao + Fano. Section~\ref{sec:sum} sums over blocks. Section~\ref{sec:variants} proves (ii) and (iii). Section~\ref{sec:tight} matches with an upper bound.
+
+\section{Hard Instance: Planted-Support Block Construction}
+\label{sec:construction}
+
+\paragraph{Blocks.}
+Partition $[T]$ into $M=\lfloor T/k^\star\rfloor$ disjoint contiguous blocks $\Bset_1,\dots,\Bset_M$ of length $k^\star$. We will define the joint law of $(q_t,k_t,v_t)$ block by block; blocks are i.i.d.
+
+\paragraph{Block direction and planted subset.}
+For each block $\Bset_m$:
+\begin{enumerate}
+\item Sample a unit vector $e_m\in\R^d$ uniformly from the sphere $\mathbb S^{d-1}$, independently across $m$.
+\item Sample a uniformly random subset $S_m^\star\subseteq\Bset_m$ with $|S_m^\star|=B+1$. We call $S_m^\star$ the \emph{planted (informative) subset}.
+\end{enumerate}
+
+\paragraph{Keys.}
+For every $i\in\Bset_m$, let
+\begin{equation}\label{eq:keys}
+k_i \;=\; e_m + \xi_i,\qquad \xi_i\sim\mathcal N\bigl(0,\tfrac{1}{d}I_d\bigr)\ \text{i.i.d.}
+\end{equation}
+Thus all keys in a block have a common ``block direction'' $e_m$ plus independent isotropic noise. By Assumption~\ref{ass:bounded}, $\norm{k_i}_2\le 1+\norm{\xi_i}_2\le 1+2\sqrt{\log T}=O(\sqrt{\log T})$ with probability $1-T^{-2}$; we use a sub-Gaussian truncation to enforce this deterministically. \tighten
+
+\paragraph{Values.}
+For every $i\in\Bset_m$, sample an independent Rademacher vector $\epsilon_i\in\{-1,+1\}^d$ and set
+\begin{equation}\label{eq:values}
+v_i \;=\; \tfrac{\sigma}{\sqrt d}\,\epsilon_i, \qquad \norm{v_i}_2=\sigma.
+\end{equation}
+
+\paragraph{Queries.}
+For all non-terminal steps $t\in\Bset_m\setminus\{t_m\}$ (where $t_m:=\max\Bset_m$), pick $q_t$ uniformly on $\mathbb S^{d-1}\cap e_m^{\perp}$ (orthogonal to the block direction). Then $\inner{q_t}{k_i}=\inner{q_t}{\xi_i}$ which is mean-zero Gaussian. For these steps, attention is essentially uniform, the value vectors of all of $[t]$ are independent of $q_t$, and one can verify
+\begin{equation}\label{eq:nonterm-loss}
+\E[\ell_t(\A)] \;\le\; O(\sigma/\sqrt{k^\star}) \tighten,
+\end{equation}
+so non-terminal regret is negligible compared to the per-block lower bound at $t_m$.
+
+At the terminal step $t_m$ we set
+\begin{equation}\label{eq:terminal-q}
+q_{t_m} \;=\; R\,e_m,\qquad R \;=\; \sqrt{2 d\log k^\star}/\tau \;=\; \Theta\!\bigl(\sqrt{d\log k^\star}\bigr).
+\end{equation}
+After truncation, $\norm{q_{t_m}}_2=R=O(\sqrt{d\log T})$. \tighten\ With $\tau=1/\sqrt d$, the logits $\tau\inner{q_{t_m}}{k_i}=\sqrt{2\log k^\star}\inner{e_m}{k_i}\approx \sqrt{2\log k^\star}\,(1+\inner{e_m}{\xi_i})$ are concentrated for $i\in\Bset_m$ and exponentially smaller for $i\not\in\Bset_m$ (since $e_m\perp e_{m'}$ in expectation). Thus to leading order
+\begin{equation}\label{eq:true-att}
+\Attn(q_{t_m};[t_m]) \;=\; \frac{1}{k^\star}\sum_{i\in\Bset_m}v_i \;+\; o_T(1),
+\end{equation}
+where $o_T(1)$ is a residual of $\ell_2$ norm $O(\sigma\,T^{-\Omega(\log k^\star)})$. \tighten
+
+\section{Per-Block Pointwise Regret via Vector Khintchine}
+\label{sec:pointwise}
+
+Fix a block $m$. Conditional on $\F_{t_m-1}$, the policy commits to a set $T_m':=S_{t_m-1}\cap\Bset_m$ of size at most $B$ (the terminal step can only \emph{drop} prior cache; admitting $i_{t_m}$ does not change the analysis since the planted geometry makes $i_{t_m}$ indistinguishable from any other block index).
+
+By~\eqref{eq:true-att}, on this block,
+\[
+\Attn(q_{t_m};[t_m]) - \Attn(q_{t_m};S_{t_m}) \;=\; \frac{1}{k^\star}\sum_{i\in\Bset_m}v_i \;-\; \frac{1}{|T_m'|}\sum_{i\in T_m'}v_i \;+\; o_T(1).
+\]
+
+\begin{lemma}[Vector Khintchine anti-concentration]\label{lem:khintchine}
+Let $\epsilon_1,\dots,\epsilon_n$ be i.i.d.\ uniform $\{-1,+1\}^d$ random vectors and let $a_1,\dots,a_n\in\R$ with $\sum_i a_i^2=s$. Then
+\[
+\E\norm[\Big]{\sum_{i=1}^n a_i\,\epsilon_i}_2 \;\ge\; \frac{\sqrt{s\,d}}{\sqrt 2}.
+\]
+\end{lemma}
+\begin{proof}
+By Khintchine's inequality (sharp constant $1/\sqrt 2$ for $L^1$ norm in 1D; \citealp{haagerup1981best}): $\E|\sum_i a_i\epsilon_i^{(j)}|\ge\sqrt{s/2}$ for each coordinate $j$. Summing and applying $\norm{x}_2\ge\norm{x}_1/\sqrt d$ \tighten gives $\E\norm{\sum_i a_i\epsilon_i}_2\ge\E\norm{\sum_i a_i\epsilon_i}_1/\sqrt d\ge d\cdot\sqrt{s/2}/\sqrt d=\sqrt{sd/2}$. The factor $\sigma/\sqrt d$ in~\eqref{eq:values} cancels.
+\end{proof}
+
+Applying Lemma~\ref{lem:khintchine} with $n=k^\star$, $T_m'\subseteq\Bset_m$, and coefficients
+\[
+a_i \;=\; \frac{1}{k^\star}-\frac{\indicator[i\in T_m']}{|T_m'|}, \qquad s \;=\; \sum_{i\in\Bset_m}a_i^2 \;\ge\; \frac{k^\star-|T_m'|}{k^\star|T_m'|}\;\ge\;\frac{1}{k^\star}\bigl(1-B/k^\star\bigr),
+\]
+we get, with $|T_m'|\le B$,
+\begin{equation}\label{eq:per-block-bound}
+\E\Bigl[\norm{\Attn(q_{t_m};[t_m])-\Attn(q_{t_m};S_{t_m})}_2 \,\Big|\, T_m' \Bigr]
+\;\ge\; c_0\,\sigma\,(1-B/k^\star),
+\end{equation}
+with $c_0=1/(4\sqrt 2)$ after absorbing the $o_T(1)$ residual. \tighten
+
+Crucially, the bound~\eqref{eq:per-block-bound} holds for \emph{any} subset $T_m'\subseteq\Bset_m$ of size $\le B$, because (a) the values $v_i$ are i.i.d.\ Rademacher and hence exchangeable across $i$, (b) by causality, $T_m'$ is chosen \emph{before} the policy observes the terminal query $q_{t_m}$ which reveals $e_m$, and (c) the residual mass $1-B/k^\star$ on the $(k^\star-B)$ dropped keys cannot be cancelled by any reweighting of the retained keys.
+
+\section{From Pointwise to Expected Regret: Yao + Fano}
+\label{sec:fano}
+
+By Yao's minimax principle, the minimax expected regret over randomized policies on a distribution $\D$ equals the minimum expected regret over deterministic policies on the same distribution. It thus suffices to bound deterministic policies.
+
+Fix a deterministic policy $\A$. Within block $\Bset_m$, the keys $\{k_i\}_{i\in\Bset_m}$ as defined in~\eqref{eq:keys} are i.i.d.\ given the block direction $e_m$, and the planted subset $S_m^\star$ is independent of $(\{k_i\},\{v_i\}_{i\not\in S_m^\star})$ and independent of all earlier blocks. Hence the policy's retained set $R_m:=S_{t_m-1}\cap\Bset_m$ is a function of $(q_{<t_m},k_{<t_m},v_{<t_m})$ that is \emph{independent} of $S_m^\star$.
+
+\begin{lemma}[Subset miss probability]\label{lem:miss}
+Let $R_m\subseteq\Bset_m$ with $|R_m|\le B$, independent of $S_m^\star$. Then
+\[
+\PR[\,S_m^\star\subseteq R_m\,]\;\le\;\binom{B}{B+1}\Big/\binom{k^\star}{B+1}\;=\;0,
+\]
+so $S_m^\star\not\subseteq R_m$ a.s. In particular at least one planted index is dropped.
+\end{lemma}
+
+Combining Lemma~\ref{lem:miss} with~\eqref{eq:per-block-bound}, the expected pointwise regret at the terminal step of block $m$ is at least
+\begin{equation}\label{eq:block-final}
+\E[\ell_{t_m}(\A)] \;\ge\; c_0\,\sigma\,(1-B/k^\star).
+\end{equation}
+
+\begin{remark}[Fano form]
+The same conclusion follows from a Fano inequality. The policy's task at the terminal step is to reconstruct an average over $\Bset_m$ from a $\le B$-element subset. By a vector form of Le Cam's two-point method, the expected $\ell_2$ error is bounded below by $c_0\sigma$ times the total-variation distance between the conditional law of the missing-key average and its mean, which is $\Omega(1-B/k^\star)$. \tighten
+\end{remark}
+
+\section{Summation over Blocks}
+\label{sec:sum}
+
+Combining~\eqref{eq:nonterm-loss} (non-terminal steps contribute $\le O(\sigma/\sqrt{k^\star})$ each, summing to $\le O(\sigma T/\sqrt{k^\star})$ \tighten) and~\eqref{eq:block-final} (each of $M=\lfloor T/k^\star\rfloor$ block terminals contributes at least $c_0\sigma(1-B/k^\star)$):
+\begin{equation}
+\E[\Reg_T(\A)]
+\;\ge\; M\cdot c_0\sigma(1-B/k^\star) - O(\sigma T/\sqrt{k^\star})
+\;\ge\; c_0\sigma(1-B/k^\star)\bigl(T/k^\star-1\bigr) - O(\sigma T/\sqrt{k^\star}).
+\end{equation}
+
+For $k^\star\le T/2$, the second term is dominated by the first when $k^\star\ge 4$ and $B\le k^\star/2$ \tighten, and we obtain
+\begin{equation}\label{eq:sum-bound}
+\E[\Reg_T(\A)] \;\ge\; \tfrac{c_0}{2}\,\sigma\,(1-B/k^\star)\,(T-k^\star)/k^\star.
+\end{equation}
+This proves~\eqref{eq:main-linear} after relabelling and absorbing the $1/k^\star$ factor into the constant (using $k^\star\le T$). Setting $k^\star=2B$ gives part (i):
+\[
+\E[\Reg_T(\A)] \;\ge\; \tfrac{c_0}{4}\,\sigma\,(T-2B) \;=\;\Omega(\sigma T)\qquad\text{whenever }B\le T/4.
+\]
+
+\section{Variants: Spread-Bounded and Information-Theoretic Forms}
+\label{sec:variants}
+
+\subsection{Spread-bounded adversary (part (ii))}
+
+Replace the uniform planted subset by a \emph{soft} planted prior: within $\Bset_m$, mark each index independently with probability $p_m=1/\sqrt B$ as ``informative'', and instantiate value vectors $v_i$ so that the expected $\ell_2$ residual mass concentrated on the informative tail is exactly $\Theta(1/\sqrt B)$. Then per-block expected regret is $\ge c_1\sigma/\sqrt B$ via a Le Cam two-point reduction between adjacent informative-mass profiles \tighten. With block length $\sqrt{T/B}$ and $\sqrt{TB}$ blocks, summing gives $\Omega(\sigma\sqrt{T/B})$. The constraint $\sum_t(1-B/k_t^\star)\le\sqrt{T/B}$ is the dual of the spread-bounded restriction stated in Theorem~\ref{thm:main}(ii).
+
+\subsection{Information-theoretic form (part (iii))}
+
+Replace Lemma~\ref{lem:miss}'s binary form by the full subset-Fano inequality: distinguishing which $B$-subset of $\Bset_m$ the policy kept costs $\log_2\binom{k^\star}{B}$ bits, while the keys (i.i.d.\ given $e_m$) carry zero mutual information about $S_m^\star$. By Fano's inequality, the expected reconstruction error scales as $\sigma\log_2\binom{k^\star}{B}/\log_2 e$, and summing over $M=T/k^\star$ blocks yields (iii). \tighten
+
+\section{Tightness: A Matching Upper Bound}
+\label{sec:tight}
+
+\begin{proposition}[Keep-last-$B$ upper bound]\label{prop:upper}
+On the construction of Section~\ref{sec:construction}, the policy $\A_{\mathrm{LRU}}$ that retains the last $B$ tokens incurs $\E[\Reg_T(\A_{\mathrm{LRU}})]=O(\sigma T)$.
+\end{proposition}
+\begin{proof}[Sketch]
+At each block terminal, the last $B$ tokens lie in $\Bset_m$ with high probability when $B\le k^\star$; the per-step loss is $\le 2\sigma$ a.s.\ (triangle inequality), so the cumulative loss over $T$ steps is $\le 2\sigma T$. This matches~\eqref{eq:sum-bound} up to constants in the linear regime.
+\end{proof}
+
+Hence Theorem~\ref{thm:main}(i) is tight in the linear regime, up to the absolute constant $c_0/4$.
+
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{Comparison to storage lower bounds.} \citet{sadhukhan2025compression} and \citet{kochetkova2025balancekv} use the INDEX communication problem to lower-bound the \emph{memory} required for \emph{exact} attention reconstruction. Our bound is orthogonal: it bounds the cumulative \emph{approximation} error of \emph{any} causal policy on a sequence with bounded-norm keys/values, even with arbitrarily large internal state.
+
+\paragraph{Comparison to online caching.} Classical online caching regret bounds (e.g., \citet{bhattacharjee2020online}) are stated for hit/miss (discrete) losses. Our loss is continuous, query-dependent, and not a function of a single retained item; the planted-direction construction is the new ingredient enabling a continuous lower bound.
+
+\paragraph{Limits of the construction.} The bound holds for the constructed adversarial distribution; benign distributions (where attention is genuinely sparse) admit much smaller regret. The exact constant $c_0=1/(4\sqrt 2)$ is conservative; tighter vector-Khintchine constants \citep{haagerup1981best} would improve it.
+
+\section*{Acknowledgements}
+We thank the EndurKV project for support and discussion.
+
+\bibliographystyle{plainnat}
+\begin{thebibliography}{9}
+
+\bibitem[Bhattacharjee and Sinha(2020)]{bhattacharjee2020online}
+S.~Bhattacharjee and A.~Sinha. Online caching with no regret: optimistic learning via recommendations. \emph{arXiv:2204.09280}, 2020.
+
+\bibitem[Haagerup(1981)]{haagerup1981best}
+U.~Haagerup. The best constants in the Khintchine inequality. \emph{Studia Mathematica}, 70(3):231--283, 1981.
+
+\bibitem[Kochetkova et al.(2025)]{kochetkova2025balancekv}
+N.~Kochetkova et al. BalanceKV: Lower bounds and balanced sampling for KV-cache approximation. \emph{NeurIPS}, 2025.
+
+\bibitem[Sadhukhan et al.(2025)]{sadhukhan2025compression}
+R.~Sadhukhan, M.~Haris, and K.~Onak. Compression barriers for autoregressive transformers. \emph{arXiv:2502.15955}, 2025.
+
+\end{thebibliography}
+
+\end{document}

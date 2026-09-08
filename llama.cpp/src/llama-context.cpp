@@ -5,6 +5,7 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
+#include "llama-kv-cache.h"   // EndurKV: llama_endurkv_seq_rm_cells (cell-index eviction)
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
@@ -3219,6 +3220,78 @@ bool llama_memory_seq_rm(
     }
 
     return mem->seq_rm(seq_id, p0, p1);
+}
+
+// EndurKV (2026-07-25): cell-index eviction for M-RoPE/vision caches — see llama.h.
+uint32_t llama_endurkv_seq_rm_cells(
+        llama_memory_t mem,
+          llama_seq_id seq_id,
+          const int8_t * keep,
+              uint32_t n) {
+    if (!mem || !keep) {
+        return 0;
+    }
+
+    auto * kv = dynamic_cast<llama_kv_cache *>(mem);
+    if (!kv) {
+        // Non-unified memory types (recurrent/hybrid) have no cell-indexed KV.
+        return 0;
+    }
+
+    return kv->endurkv_rm_cells(seq_id, keep, n);
+}
+
+// EndurKV (2026-08-07): in-place chunked compaction — see llama.h and
+// llama_kv_cache::endurkv_compact_seq for why this exists alongside the
+// state round-trip.
+uint32_t llama_endurkv_compact_seq(
+        llama_memory_t mem,
+          llama_seq_id seq_id,
+              uint32_t chunk_cells) {
+    if (!mem) {
+        return 0;
+    }
+
+    auto * kv = dynamic_cast<llama_kv_cache *>(mem);
+    if (!kv) {
+        return 0;
+    }
+
+    return kv->endurkv_compact_seq(seq_id, chunk_cells);
+}
+
+// EndurKV (2026-08-31): madvise tail reclaim — see llama.h.
+size_t llama_endurkv_reclaim_tail(
+        llama_memory_t mem,
+          llama_seq_id seq_id) {
+    if (!mem) {
+        return 0;
+    }
+
+    auto * kv = dynamic_cast<llama_kv_cache *>(mem);
+    if (!kv) {
+        return 0;
+    }
+
+    return kv->endurkv_reclaim_tail(seq_id);
+}
+
+// EndurKV (2026-08-16): KeyDiff key-diversity scores — see llama.h.
+uint32_t llama_endurkv_keydiff_scores(
+        llama_memory_t mem,
+          llama_seq_id seq_id,
+               float * out,
+              uint32_t n_max) {
+    if (!mem || !out) {
+        return 0;
+    }
+
+    auto * kv = dynamic_cast<llama_kv_cache *>(mem);
+    if (!kv) {
+        return 0;
+    }
+
+    return kv->endurkv_keydiff_scores(seq_id, out, n_max);
 }
 
 void llama_memory_seq_cp(

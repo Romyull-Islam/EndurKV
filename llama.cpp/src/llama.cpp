@@ -1218,3 +1218,11 @@ const char * llama_print_system_info(void) {
     return s.c_str();
 }
 
+// EndurKV Solution 2: toggle the FA-on eviction-score side node. The global
+// lives in llama-graph.cpp (where build_attn_mha reads it). w>0 = observation
+// window (last W query rows scored against the prompt K-cache); 0 = disabled.
+void llama_endurkv_set_evict_obs_window(int32_t w) {
+    extern int g_endurkv_evict_obs_window;
+    g_endurkv_evict_obs_window = w < 0 ? 0 : w;
+}
+

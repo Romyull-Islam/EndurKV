@@ -1,0 +1,99 @@
+{
+  "kind": "RES_SCHEMA",
+  "version": 1,
+  "generator": "host_plot_llama1b_thermal.py",
+  "figure": "/home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/20_llama1b_thermal_trajectories.png",
+  "title": "Llama-1B stays thermally comfortable (peak 51.7 C, 13 C below kernel cliff) - eviction effect on thermals is small but measurable",
+  "role_in_paper": "FIGURE 20 - Llama-1B Wave-3 thermal trajectories",
+  "model": "Llama-3.2-1B-Instruct-Q4_K_M",
+  "prompt_id": "narrativeqa_pub_001",
+  "device": "OnePlus-15 / Snapdragon 8 Elite Gen 5",
+  "wave": "wave3",
+  "wave_source": "/home/mislam22/EndurKV_workspace/phone-logs/wave3_real_1780680903",
+  "panels": {
+    "top_left": "DDR temp vs time (4 policies, with 65 C cliff)",
+    "top_right": "CPU (cpullc-0-0) temp vs time (4 policies)",
+    "bottom_left": "n_kv_cells vs time (from steps.csv)",
+    "bottom_right": "RSS (MB) vs time (from steps.csv)"
+  },
+  "x_axis": "time in minutes (cold-start / session-start)",
+  "y_axes": {
+    "top_left": "DDR memory temperature (C)",
+    "top_right": "CPU temperature (C)",
+    "bottom_left": "KV cache size (n_kv_cells)",
+    "bottom_right": "process RSS (MB)"
+  },
+  "thresholds": {
+    "kernel_freq_cliff_c": 65.0,
+    "cliff_mechanism": "SD8-Gen5 kernel thermal governor caps big-core to ~1267 MHz when ddr_temp >= 65 C",
+    "headroom_c_below_cliff": 13.3
+  },
+  "headline": {
+    "all_cells_peak_ddr_c": 51.7,
+    "all_cells_peak_cpu_c": 58.7,
+    "below_cliff_c": 13.3,
+    "interpretation": "Llama-1B (1.3 GB Q4_K_M) stays cool across all 4 Wave-3 policies; DDR peaks at 51.7 C, well below the SD8-Gen5 kernel freq-cliff at 65 C. Eviction-policy differences across vanilla / v1_K2048 / v1_K512 / v1_FA_K512 produce small but measurable thermal shifts (~2 C span in peak DDR)."
+  },
+  "cells": [
+    {
+      "policy": "vanilla",
+      "label": "vanilla       (no control, full KV)",
+      "src_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave3_real_1780680903/vanilla",
+      "n_iter": 5,
+      "session_duration_s": 1650.0010714530945,
+      "sensors_rows": 6037,
+      "steps_rows": 110,
+      "peak_ddr_c": 51.7,
+      "mean_ddr_c": 47.22,
+      "peak_cpu_c": 58.7,
+      "mean_cpu_c": 53.73,
+      "peak_kv_cells": 8028,
+      "peak_rss_mb": 1210.8
+    },
+    {
+      "policy": "v1_K2048",
+      "label": "v1   K=2048   (large budget)",
+      "src_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave3_real_1780680903/v1_K2048",
+      "n_iter": 4,
+      "session_duration_s": 1718.9373185634613,
+      "sensors_rows": 6261,
+      "steps_rows": 12,
+      "peak_ddr_c": 49.8,
+      "mean_ddr_c": 47.33,
+      "peak_cpu_c": 57.1,
+      "mean_cpu_c": 53.88,
+      "peak_kv_cells": 8007,
+      "peak_rss_mb": 1321.2
+    },
+    {
+      "policy": "v1_K512",
+      "label": "v1   K=512    (tight budget)",
+      "src_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave3_real_1780680903/v1_K512",
+      "n_iter": 4,
+      "session_duration_s": 1677.8321521282196,
+      "sensors_rows": 6155,
+      "steps_rows": 12,
+      "peak_ddr_c": 49.4,
+      "mean_ddr_c": 47.09,
+      "peak_cpu_c": 57.5,
+      "mean_cpu_c": 53.94,
+      "peak_kv_cells": 8007,
+      "peak_rss_mb": 1321.4
+    },
+    {
+      "policy": "v1_fa_K512",
+      "label": "v1_FA K=512   (custom FA kernel)",
+      "src_dir": "/home/mislam22/EndurKV_workspace/phone-logs/wave3_real_1780680903/v1_fa_K512",
+      "n_iter": 4,
+      "session_duration_s": 1651.7326385974884,
+      "sensors_rows": 6096,
+      "steps_rows": 88,
+      "peak_ddr_c": 49.8,
+      "mean_ddr_c": 47.24,
+      "peak_cpu_c": 57.1,
+      "mean_cpu_c": 54.31,
+      "peak_kv_cells": 8028,
+      "peak_rss_mb": 1205.5
+    }
+  ]
+}

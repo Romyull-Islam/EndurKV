@@ -1,0 +1,106 @@
+{
+  "kind": "PLOT_SCHEMA",
+  "name": "13_kv_cache_vs_cpu_temp",
+  "figure": "/home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/13_kv_cache_vs_cpu_temp.png",
+  "script": "/home/mislam22/EndurKV_workspace/EndurKV/scripts/android/host_plot_kv_vs_cpu.py",
+  "title": "Race-to-idle effect: aggressive eviction can raise CPU temp via higher throughput",
+  "wave_finding": "Wave-8 race-to-idle: smaller cache -> faster decode -> more sustained compute -> higher mean CPU temp",
+  "panels": [
+    {
+      "id": "top",
+      "kind": "timeseries",
+      "x": "wall_time_since_cell_start_s",
+      "y_left": "kv_cache_size_cells (n_kv_cells, per step)",
+      "y_right": "cpu_big_core_temp_C (cpu-1-0-0_temp_mc / 1000)",
+      "series_per_policy": true,
+      "linestyle": "solid for cache, dashed for CPU temp"
+    },
+    {
+      "id": "bottom",
+      "kind": "scatter_with_linreg",
+      "x": "kv_cache_size_cells (cache interpolated to sensor timestamps)",
+      "y": "cpu_big_core_temp_C (per-row MAX across big-core cluster)",
+      "fit": "linear (numpy.polyfit deg=1)",
+      "fit_metric": "R^2",
+      "global_fit_included": true
+    }
+  ],
+  "sources": {
+    "wave10_ksweep_root": "/home/mislam22/EndurKV_workspace/phone-logs/wave10_ksweep_1780815847",
+    "cells": [
+      "/home/mislam22/EndurKV_workspace/phone-logs/wave10_ksweep_1780815847/K256",
+      "/home/mislam22/EndurKV_workspace/phone-logs/wave10_ksweep_1780815847/K384",
+      "/home/mislam22/EndurKV_workspace/phone-logs/wave10_ksweep_1780815847/K1024"
+    ],
+    "per_cell_inputs": [
+      "sensors.csv (monotonic_s + CPU big-core temp columns)",
+      "stress.csv (iter -> t_elapsed_s)",
+      "iter*/steps.csv (wall_us, n_kv_cells)"
+    ]
+  },
+  "sensors": {
+    "cpu_big_core_columns_for_max": [
+      "cpu-1-0-0_temp_mc",
+      "cpu-1-0-1_temp_mc",
+      "cpu-1-1-0_temp_mc",
+      "cpu-1-1-1_temp_mc",
+      "cpullc-1-0_temp_mc",
+      "cpullc-1-1_temp_mc"
+    ],
+    "cpu_single_best_column_for_plotting": "cpu-1-0-0_temp_mc",
+    "unit_conversion": "value / 1000.0 -> deg C",
+    "row_filter": "10 C < temp < 110 C (drop obvious bad reads, NaN-safe)"
+  },
+  "policies": [
+    {"cell": "K256",  "label": "K=256 (aggressive eviction)",   "color": "#d62728"},
+    {"cell": "K384",  "label": "K=384 (moderate)",              "color": "#1f77b4"},
+    {"cell": "K1024", "label": "K=1024 (loose, near-vanilla)",  "color": "#2ca02c"}
+  ],
+  "per_cell_stats": [
+    {
+      "cell": "K256",
+      "peak_kv_cells": 2314,
+      "cpu_max_peak_C": 70.90,
+      "cpu_max_mean_C": 66.01,
+      "cpu_1_0_0_peak_C": 68.60,
+      "cpu_1_0_0_mean_C": 63.60,
+      "decode_tps_iter1": 8.004
+    },
+    {
+      "cell": "K384",
+      "peak_kv_cells": 2316,
+      "cpu_max_peak_C": 70.90,
+      "cpu_max_mean_C": 65.95,
+      "cpu_1_0_0_peak_C": 68.60,
+      "cpu_1_0_0_mean_C": 63.53,
+      "decode_tps_iter1": 7.759
+    },
+    {
+      "cell": "K1024",
+      "peak_kv_cells": 2314,
+      "cpu_max_peak_C": 71.70,
+      "cpu_max_mean_C": 64.85,
+      "cpu_1_0_0_peak_C": 68.60,
+      "cpu_1_0_0_mean_C": 62.51,
+      "decode_tps_iter1": 7.105
+    }
+  ],
+  "regression_global": {
+    "model": "cpu_C = a + b * n_kv_cells (per sensor sample, all policies)",
+    "slope_C_per_cell": 0.0011,
+    "intercept_C": 64.24,
+    "r_squared": 0.025,
+    "n_samples": 40170,
+    "interpretation": "Weak positive cross-policy correlation: cache size alone explains only ~2.5% of CPU-temp variance because the dominant driver is decode throughput (sustained compute), not cache footprint per se."
+  },
+  "finding": {
+    "headline": "Race-to-idle effect: cells with smaller caches (K=256) decode faster (8.00 tok/s vs 7.11 tok/s for K=1024) and therefore keep the big cores at a higher mean temperature even though their KV footprint is smaller.",
+    "evidence": [
+      "K=256 mean big-core CPU temp = 66.01 C  (decode 8.00 tok/s)",
+      "K=384 mean big-core CPU temp = 65.95 C  (decode 7.76 tok/s)",
+      "K=1024 mean big-core CPU temp = 64.85 C (decode 7.11 tok/s)",
+      "Same workload, same DVFS, same watchdog; only the eviction budget K differs."
+    ],
+    "policy_implication": "Aggressive eviction trades DRAM heat (lower KV footprint) for higher sustained CPU load -> the system gets hotter on the CPU side, not cooler. Must co-optimise CPU and DRAM thermals when choosing K."
+  }
+}
