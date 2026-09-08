@@ -67,10 +67,10 @@ The policies that bound the cache were built for server GPUs and judged by perpl
 We evaluate on a OnePlus 15 (Snapdragon 8 Elite Gen 5, Adreno 840) with four models and nine policies, on quality, throughput, heat and energy at once. This paper makes five contributions.
 
 \begin{enumerate}[label=(\roman*), leftmargin=*, itemsep=1pt]
-\item The realizability gap: nominal per-head budgets do not compact on a sequence-level engine, measured for five policies on four models (\S\ref{sec:eval-cpu}, \S\ref{sec:eval-gpu}).
+\item The realizability gap: nominal per-head budgets do not compact on a sequence-level engine, measured for five policies on four models (\S\ref{sec:eval}).
 \item In-graph scoring, one keep set and in-place compaction, which keep an attention-driven evictor on the FlashAttention path and make an infeasible configuration run (\S\ref{sec:design}).
-\item A thermal watchdog with CPU and GPU ladders anchored at the measured vendor trigger, and the negative result that cache size does not cap peak temperature (\S\ref{sec:control}, \S\ref{sec:eval-thermal}).
-\item An energy-aware scheduler with one lever and two loops, measured through a real battery discharge and under provoked disturbances (\S\ref{sec:eval-energy}).
+\item A thermal watchdog with CPU and GPU ladders anchored at the measured vendor trigger, and the negative result that cache size does not cap peak temperature (\S\ref{sec:design}, \S\ref{sec:eval}).
+\item An energy-aware scheduler with one lever and two loops, measured through a real battery discharge and under provoked disturbances (\S\ref{sec:eval}).
 \item A multi-axis on-device evaluation with every baseline in its own published configuration (\S\ref{sec:eval}).
 \end{enumerate}
 
@@ -198,7 +198,7 @@ H2O, TOVA & \multicolumn{5}{c}{\emph{refused by the gate; their CPU rows stand}}
 \paragraph{Mobile GPU.} Table~\ref{tab:gpu} runs the same workload on the Adreno 840. The CPU path's state-swap and state-API defrag are not viable here: the swap serializes hundreds of megabytes through host memory, and the Vulkan backend stores FA-off and FA-on caches in different layouts. In-graph scoring removes both needs. Prefill is vanilla-class by construction. \muKV\ decodes at 1.23 times the full cache at 7.4\% of the cells; without compaction the cache stays physically sparse and the gain falls to 1.06. On Llama-3.2-1B every per-head evictor runs at 0.12 to 0.23 times the full cache with 3.5K to 6.6K cells live. On Phi-3-mini the round trip is killed at 16K, while in-place compaction runs there and reaches 2.64 times the full cache on 7.9\% of the cells. Phi-3 also needs a driver gate: the FlashAttention-off capture is numerically broken at head dimension 96, and uncorrected runs decode at full speed while emitting 18 to 44\% corrupted tokens. The gate promotes SnapKV and Ada-KV to the in-graph side node and refuses H2O and TOVA. The two promoted evictors then reach 1.15 and 1.81 times the full cache while holding 97\% and 39\% of it. Quantized KV is numerically invalid on this driver, so every GPU row is f16.
 
 \begin{table}[tb]
-\caption{Quality, both benchmarks measured on the phone. Needle: hits out of 14 depths per model, and the mean live cache after prefill. LongBench: Llama-3.2-1B on the CPU, 103 prompts, each policy at its own published budget.}
+\caption{Quality, both benchmarks on the phone. Needle: hits out of 14 depths per model, and the mean live cache after prefill. LongBench: Llama-3.2-1B, 103 prompts, each policy at its own budget.}
 \label{tab:quality}
 \centering\scriptsize
 \setlength{\tabcolsep}{2.4pt}

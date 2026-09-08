@@ -54,14 +54,14 @@
 \fill[gnf,draw=gn,rounded corners=2pt,line width=0.8pt] (0.05,-0.1) rectangle (4.05,2.25);
 \fill[rdf,draw=rd,rounded corners=2pt,line width=0.8pt] (4.5,-0.1) rectangle (8.5,2.25);
 \node[head,anchor=north] at (2.05,2.2) {seq-level evict and compact};
-\node[head,anchor=north] at (6.5,2.2) {union across heads {\mdseries\scriptsize (4 of 32 shown)}};
+\node[head,anchor=north] at (6.5,2.2) {union across heads};
 \draw[flow] (keep.south) -- (2.05,2.25);
 \input{mech_grids.tex}
 \node[lab,rotate=90] at (0.25,1.35) {layers};
 \node[lab,rotate=-90] at (8.38,1.35) {heads};
 \node[lab] at (2.05,0.93) {token position}; \node[lab] at (6.5,0.93) {token position};
-\node[lab] at (2.75,0.7) {$\to$}; \node[lab,anchor=north] at (6.5,0.55) {union of 32 heads: 13 of 16 bins live};
-\node[lab,text=gn,anchor=north] at (2.05,0.45) {compacted: same positions in every layer};
+\node[lab] at (2.75,0.7) {$\to$}; \node[lab,anchor=north] at (6.5,0.55) {13 of 16 bins live};
+\node[lab,text=gn,anchor=north] at (2.05,0.45) {same positions in every layer};
 \node[lab,text=rd,anchor=north] at (6.5,0.25) {any head keeps it, it survives};
 \node[lab,font=\bfseries\scriptsize,text=gn] at (2.05,-0.35) {live $=K$, contiguous};
 \node[lab,font=\bfseries\scriptsize,text=rd] at (6.5,-0.35) {live $\gg K$, cannot compact};
