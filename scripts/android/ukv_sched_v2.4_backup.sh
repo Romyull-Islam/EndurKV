@@ -1,8 +1,7 @@
 #!/system/bin/sh
 # ============================================================================
 # ukv_sched.sh -- energy-aware scheduler for muKV on the phone: two loops and a lever
-# (2026-09-08, v2.5: per-model cost table and lever bias under $ROOT/tables, seeded from the shipped
-#  Llama-3.2-1B table and held out of the lever loops until the model's own costs are learned; v2.4: --model, per-model backend capability list ukv_backend.txt, output-validity check after every run, automatic CPU re-run when a GPU run fails or emits degenerate output, --no-feedback now also freezes the cost table; 2026-09-06, v2.3: start-anchored energy split with a 30 s gauge lag, bench in background; v2.2: loops act on model error, bias decays when both budgets are met, walk slack has a
+# (2026-09-08, v2.4: --model, per-model backend capability list ukv_backend.txt, output-validity check after every run, automatic CPU re-run when a GPU run fails or emits degenerate output, --no-feedback now also freezes the cost table; 2026-09-06, v2.3: start-anchored energy split with a 30 s gauge lag, bench in background; v2.2: loops act on model error, bias decays when both budgets are met, walk slack has a
 #  5% tolerance floor, table learning is clipped to 10% per request)
 #
 # ONE LEVER. L in [0, 1]: 1 = performance, 0 = energy. The battery tier only sets its
@@ -81,22 +80,6 @@ MNAME=$(basename $MODEL)
 # here never gets a GPU plan. Seeded with Bonsai-8B-Q1_0 (its Vulkan kernels return non-finite logits).
 CAP=$ROOT/ukv_backend.txt
 [ -f $CAP ] || echo "Bonsai-8B-Q1_0.gguf gpu no non-finite logits on Adreno, 2026-08" > $CAP
-# v2.5 (2026-09-08): the cost table is PER MODEL. Energy and time per token differ by an order of
-# magnitude between models (Bonsai-8B costs 5.1x what the shipped Llama-3.2-1B row predicts), so one
-# shared table mispredicts every other model and, worse, learning from it corrupts the row that was
-# right. A fresh per-model table is seeded from the shipped one and marked; while it is a seed the
-# loops report their error but do NOT move the lever, since that error is the seed's, not the phone's.
-SEEDMODEL=Llama-3.2-1B-Instruct-Q4_K_M
-MKEY=$(printf '%s' "$(basename "$MODEL" .gguf)" | tr -c 'A-Za-z0-9._-' '_')
-TDIR=$ROOT/tables; mkdir -p $TDIR
-TABLE=$TDIR/$MKEY.txt; BIAS=$TDIR/$MKEY.bias.txt
-if [ ! -s "$TABLE" ]; then
-  if [ "$MKEY" = "$SEEDMODEL" ]; then cp $ROOT/ukv_sched_table.txt $TABLE
-  else { echo "# seed 3"; cat $ROOT/ukv_sched_table.txt; } > $TABLE; fi
-  [ -s $ROOT/ukv_lever_bias.txt ] && [ "$MKEY" = "$SEEDMODEL" ] && cp $ROOT/ukv_lever_bias.txt $BIAS
-  echo "[sched] new cost table for $MKEY at $TABLE" >&2
-fi
-SEED=$(awk 'NR==1 && /^# seed /{print $3; exit} {exit}' $TABLE); [ -z "$SEED" ] && SEED=0
 [ -z "$TAG" ] && TAG=sched_$(date +%Y%m%d_%H%M%S)
 OUT=$ROOT/sched/$TAG; mkdir -p $OUT
 
@@ -188,7 +171,7 @@ PT=$(echo "$ROW" | awk -v np=$NPROMPT -v no=$NOUT '{printf "%.1f", (np*$7+no*$8)
 TBUD=$(awk -v t=$TFULL -v s=$TSLACK -v pt=$PT 'BEGIN{b=t*(1+s)/1000; if (pt*1.05>b) b=pt*1.05; printf "%.0f", b}')
 EBUD=$(awk -v pe=$PE 'BEGIN{printf "%.0f", pe*1.05}')
 ETARGET=$(awk -v e=$EFULL -v s=$ESAVE 'BEGIN{printf "%.0f", e*(1-s)/1000}')
-echo "[sched] soc=${SOC}% status=$STAT mains=$MAINS tier=$TIER lever=$L ($LSRC) -> weights=(q $WQ, t $WT, e $WE) lam=$LAM qf=$QF batt=${BATT}C ddr=${DDR}C hot=$HOT gpu_ok=$GPU_OK table=$MKEY${SEED:+ (seed $SEED)}" >&2
+echo "[sched] soc=${SOC}% status=$STAT mains=$MAINS tier=$TIER lever=$L ($LSRC) -> weights=(q $WQ, t $WT, e $WE) lam=$LAM qf=$QF batt=${BATT}C ddr=${DDR}C hot=$HOT gpu_ok=$GPU_OK" >&2
 echo "[sched] request: ~$NPROMPT prompt tokens, output cap $NOUT ($LENRULE); loop budgets: time <= ${TBUD} s, energy <= ${EBUD} J (tier saving target ${ETARGET} J)" >&2
 echo "[sched] plan: $PLAN backend=$BACKEND gpu_mhz=$GMHZ${DMHZ:+ decode_mhz=$DMHZ} K=$K predicted E=${PE} J T=${PT} s" >&2
 [ "$DRY" = 1 ] && exit 0
@@ -264,17 +247,12 @@ if [ "$FEEDBACK" = 1 ] && [ "$NP" -gt 0 ] && [ "$NS" -gt 0 ] && awk -v e=$EP 'BE
     function upd(old, meas,  v) { v=(1-a)*old+a*meas; if (v>old*1.10) v=old*1.10; if (v<old*0.90) v=old*0.90; return sprintf("%.1f", v) }
     $1==plan && NF>=9 { $5=upd($5, ep*1000/np); $6=upd($6, ed*1000/ns); $7=upd($7, pms/np); $8=upd($8, dms/ns) }
     { print }' $TABLE > $TABLE.new && mv $TABLE.new $TABLE
-  if [ "$SEED" -gt 0 ]; then
-    NSEED=$((SEED-1))
-    awk -v n=$NSEED 'NR==1 && /^# seed /{ if (n>0) print "# seed " n; next } { print }' $TABLE > $TABLE.s && mv $TABLE.s $TABLE
-    LEARN="table updated (seed, $NSEED to go)"; SEED=$NSEED
-  else LEARN="table updated"; fi
+  LEARN="table updated"
 else LEARN="no table update (feedback off or measurement missing)"; fi
 # the two loops: compare the meter with the budgets and nudge the lever for this tier
-LOOPS=$(awk -v e=$ETOT -v t=$TTOT -v eb=$EBUD -v tb=$TBUD -v bias=$BIASV -v fb=$FEEDBACK -v seed=$SEED 'BEGIN{
+LOOPS=$(awk -v e=$ETOT -v t=$TTOT -v eb=$EBUD -v tb=$TBUD -v bias=$BIASV -v fb=$FEEDBACK 'BEGIN{
   et=(e-eb)/eb; tt=(t-tb)/tb; nb=bias; act="hold"
-  if (fb==1 && seed>0) { act=sprintf("hold: the cost table is still a seed for this model, %d request(s) to go", seed) }
-  else if (fb==1) {
+  if (fb==1) {
     if (tt>0 && (et<=0 || tt>=et)) { nb=bias+0.1; act="performance loop: over time budget -> lever +0.1" }
     else if (et>0)                 { nb=bias-0.1; act="energy loop: over energy budget -> lever -0.1" }
     else if (bias>0.001 || bias<-0.001) {

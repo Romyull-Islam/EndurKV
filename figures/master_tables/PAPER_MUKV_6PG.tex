@@ -164,7 +164,7 @@ TOVA & 2048 & 3.9 & 1022 & 6060 & 56.0 & 1063 \\
 \paragraph{Sustained decode on the CPU.} Table~\ref{tab:cpu} runs a 9.7K-token prompt followed by 4096 generated tokens. Every policy builds the full prompt cache during prefill (Figure~\ref{fig:cache-trajectory}). \muKV\ then compacts to 721 cells, and its re-eviction keeps the cache bounded near 2K. SnapKV can only drop to 5.9K, and vanilla grows without bound. On Llama-3.2-1B the bounded cache buys 24.2 against 5.0\,tok/s, 2.6 times less wall time and 62\% less energy. Its DDR peak is the coolest, 5\C\ below vanilla, at the same vendor-clamped 1.6\,GHz. SnapKV, Ada-KV, H2O and TOVA keep 3.5K to 6.1K cells live at a nominal 1024. That is a 1.6 to 2.8 times reduction, against the 5 to 10 times their papers report. At their own published budgets the gap widens. On 110 LongBench prompts on the phone CPU, SnapKV at 2048 per head keeps 94\% of the cache and H2O at 20\% of the prompt keeps 92\%. TOVA and Ada-KV at 2048 keep 77\% and 71\%. \muKV\ keeps 14\%. They pay the FA-off capture as well. They run at 5.8 to 6.8\,tok/s and 818 to 1094\,mWh, at or above vanilla's energy. StreamingLLM is the control: it compacts to 777 cells, fewer than \muKV, yet runs at 6.6\,tok/s because it stays on the FA-off path in this engine. Retention does not predict speed; the kernel path does. Quality is unchanged. Teacher-forced perplexity on a WikiText slice verified disjoint from the prompt gives 8.198 against 8.023 (vanilla against \muKV) on Llama-3.2-1B. It gives 3.983 against 3.938 on Phi-3-mini and 6.717 against 6.736 on Bonsai-8B. \muKV\ had evicted 92\% of the prompt cache. Weight compression shrinks the static term of per-token traffic; eviction shrinks the growing one. On 1-bit Bonsai-8B (lower block) \muKV\ gives 4.5 times the throughput, 60\% less energy and a DDR peak 9.7\C\ cooler, with no change to its parameters. The lower two blocks run the same text on Phi-3-mini and gemma-2-2b with every baseline at its published budget. There \muKV\ decodes 4.5 and 2.4 times faster than the full cache with 55\% and 40\% less energy, while the baselines keep 85 to 100\% of the cache.
 
 \begin{table}[tb]
-\caption{Adreno 840, 12K-token prompt plus 4096 generated tokens, f16 KV for every policy, cold start, median of $n$ runs.}
+\caption{Adreno 840, 12K-token prompt plus 4096 generated tokens, f16 KV for every policy, cold start, median of $n$ runs. Phi-3 rows come from the current build with the driver gate.}
 \label{tab:gpu}
 \centering\footnotesize
 \setlength{\tabcolsep}{3.5pt}
@@ -183,22 +183,17 @@ H2O                  & 1 & 279 & 3.58 & 0.15 & 6110 \\
 StreamingLLM         & 1 & 176 & 5.55 & 0.23 & 777 \\
 \midrule
 \multicolumn{6}{l}{\emph{Phi-3-mini, ctx 16384}} \\
-vanilla (full cache) & 3 & 606 & 4.27 & 1.00 & 11157 \\
-\muKV, no compaction & 3 & 621 & 8.78 & 2.06 & 878 \\
-SnapKV               & 1 & 966 & 0.91 & 0.21 & 9468 \\
-Ada-KV               & 1 & 923 & 1.27 & 0.30 & 3796 \\
-TOVA                 & 1 & 853 & 1.19 & 0.28 & 5252 \\
-H2O                  & 1 & 1078 & 1.04 & 0.24 & 10095 \\
-StreamingLLM         & 1 & 830 & 1.20 & 0.28 & 917 \\
-\midrule
-\multicolumn{6}{l}{\emph{Phi-3-mini, ctx 8192}} \\
-vanilla (full cache) & 3 & 157 & 7.59 & 1.00 & 4091 \\
-\textbf{\muKV}       & 3 & 160 & \good{13.59} & \good{1.79} & 885 \\
+vanilla (full cache)     & 1 & 471 & 5.05 & 1.00 & 11157 \\
+\textbf{\muKV}, in place & 1 & 586 & \good{13.36} & \good{2.64} & 878 \\
+StreamingLLM, own budget & 1 & 445 & 10.60 & 2.10 & 2000 \\
+Ada-KV, gate promoted    & 1 & 572 & 9.13 & 1.81 & 4326 \\
+SnapKV, gate promoted    & 1 & 532 & 5.80 & 1.15 & 10862 \\
+H2O, TOVA & \multicolumn{5}{c}{\emph{refused by the gate; their CPU rows stand}} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\paragraph{Mobile GPU.} Table~\ref{tab:gpu} runs the same workload on the Adreno 840. The CPU path's state-swap and state-API defrag are not viable here: the swap serializes hundreds of megabytes through host memory, and the Vulkan backend stores FA-off and FA-on caches in different layouts. In-graph scoring removes both needs. Prefill is vanilla-class by construction. \muKV\ decodes at 1.23 times the full cache at 7.4\% of the cells; without compaction the cache stays physically sparse and the gain falls to 1.06. Every per-head evictor runs at 0.12 to 0.23 times the full cache with 3.5K to 6.6K cells live. The ordering holds on Phi-3-mini at 16K, where the round-trip compaction does not fit and the uncompacted \muKV\ still decodes at 2.06 times vanilla. Quantized KV is numerically invalid on this driver, so every GPU row is f16.
+\paragraph{Mobile GPU.} Table~\ref{tab:gpu} runs the same workload on the Adreno 840. The CPU path's state-swap and state-API defrag are not viable here: the swap serializes hundreds of megabytes through host memory, and the Vulkan backend stores FA-off and FA-on caches in different layouts. In-graph scoring removes both needs. Prefill is vanilla-class by construction. \muKV\ decodes at 1.23 times the full cache at 7.4\% of the cells; without compaction the cache stays physically sparse and the gain falls to 1.06. On Llama-3.2-1B every per-head evictor runs at 0.12 to 0.23 times the full cache with 3.5K to 6.6K cells live. On Phi-3-mini the round trip is killed at 16K, while in-place compaction runs there and reaches 2.64 times the full cache on 7.9\% of the cells. Phi-3 also needs a driver gate: the FlashAttention-off capture is numerically broken at head dimension 96, and uncorrected runs decode at full speed while emitting 18 to 44\% corrupted tokens. The gate promotes SnapKV and Ada-KV to the in-graph side node and refuses H2O and TOVA. The two promoted evictors then reach 1.15 and 1.81 times the full cache while holding 97\% and 39\% of it. Quantized KV is numerically invalid on this driver, so every GPU row is f16.
 
 \begin{table}[tb]
 \caption{Quality. Needle retrieval on the phone: hits out of 14 depths per model. LongBench F1 on the RTX 4500 Ada: mean over five tasks, and cells kept as a share of the prompt.}
