@@ -66,8 +66,8 @@
 \draw[ctrl] (compact.south) -- (12.65,5.37) node[lab,text=or,midway,right=1pt] {slide};
 \draw[kv] (14.05,5.15) -- (15.45,5.15) -- (decode.south) node[lab,text=bl,pos=0.78,right=1pt] {read $K$};
 % ================= control plane, two rows =================
-\tikzset{colA/.style={box,minimum width=3.6cm,text width=3.4cm,minimum height=0.8cm},
-         colA2/.style={colA,draw=or,fill=orf,line width=0.8pt,minimum height=1.2cm},
+\tikzset{colA/.style={box,minimum width=4.0cm,text width=3.8cm,minimum height=0.8cm},
+         colA2/.style={colA,draw=or,fill=orf,line width=0.8pt,minimum height=1.55cm},
          colB/.style={box,minimum width=2.4cm,text width=2.25cm,minimum height=1.2cm},
          colB2/.style={colB,draw=or,fill=orf,line width=0.8pt},
          colBo/.style={colB,draw=gn,fill=gnf,line width=0.8pt},
@@ -77,7 +77,7 @@
 \node[head,text=or,anchor=west] at (6.2,3.2) {ENERGY \quad {\mdseries per request, 0.3\,s}};
 \node[head,text=gn,anchor=west] at (12.0,3.2) {LEARN \quad {\mdseries after each request}};
 \node[colA]  (sens)  at (2.35,2.55)  {\bx{Sensors}{skin, battery, DDR, CPU}};
-\node[colA2] (wd)    at (2.35,1.05)  {\bx{Watchdog}{CPU ladder to 1017\,MHz\\ GPU ladder to 902\,MHz\\ vendor limiter last}};
+\node[colA2] (wd)    at (2.35,1.05)  {\bx{Watchdog}{CPU 1497\slash 1382\slash 1267\slash 1132\slash 1017,\\ both clusters, lower of battery and skin\\ GPU 1050\slash 967\slash 902 on DDR\\ vendor limiter last}};
 \node[colBt] (batt)  at (9.65,2.55)  {\bx{Battery state}{level, charging, $N$}};
 \node[colBo] (plan)  at (6.6,1.05)   {\bx{Plan}{GPU clocks, $K$,\\ answer cap}};
 \node[colB2] (lever) at (9.65,1.05)  {\bx{Tier $\to$ lever $L$}{1 / 0.5 / 0 by tier,\\ plus the bias}};
