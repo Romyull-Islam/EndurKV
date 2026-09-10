@@ -166,19 +166,21 @@ table(s,0.6,2.1,12.1,3.4,[
 text(s,0.6,5.8,12.1,1.2,["At their own published budgets the gap widens: SnapKV at 2048 per head keeps 94% of the cache, H2O at 20% of the prompt keeps 92%, TOVA and Ada-KV keep 77% and 71%. μKV keeps 14%.","On Bonsai-8B the full cache reaches a 72.2 °C DDR peak. μKV reaches 62.5 °C, 9.7 °C cooler, with no change to the model's parameters."],15,BODY)
 
 # ---------- 9 the realizability gap ----------
-s,k=slide(); header(s,"FINDING 1  ·  THE REALIZABILITY GAP","What each paper claims, and what the phone gives back",k)
-text(s,0.6,1.55,12.1,0.4,"Phone CPU, Llama-3.2-1B, 110 LongBench prompts, mean 8043 tokens. Every baseline at its own published budget, not ours.",14,MUTED)
-table(s,0.6,2.0,12.1,2.7,[
- ["Policy","What its own paper claims","Its own budget, as we ran it","Cache kept"],
- ["SnapKV","8.2x memory efficiency at 16K inputs","2048 per head","94%"],
- ["H2O","5 to 10x smaller KV cache","20% of the prompt","92%"],
- ["TOVA","full quality at 1/8 of the cache","2048 per layer","77%"],
- ["Ada-KV","no ratio of its own; it reallocates a given budget","2048 per head, reallocated across heads","71%"],
- ["StreamingLLM","22.2x over sliding-window recompute","4 sinks + 2000 recent","33%"],
- ["μKV","this work","1024, sequence-level","14%"]],
- colw=[1.9,4.6,3.9,1.7],size=13,hl=[6])
-text(s,0.6,5.0,12.1,1.3,["No claim above is wrong on a server. Each is a statement about how many scores were dropped, not about how much memory came back.","On a shared cell array those are different numbers, and only the second one changes the phone's DRAM traffic."],16,BODY)
-text(s,0.6,6.35,12.1,0.6,"Report realized cells, not selection ratios.",20,RUST,True)
+s,k=slide(); header(s,"FINDING 1  ·  THE REALIZABILITY GAP","What each paper actually says, and what the phone gives back",k)
+text(s,0.6,1.52,12.1,0.4,"Phone CPU, Llama-3.2-1B, 110 LongBench prompts, mean 8043 tokens. Every baseline at its own published budget, not ours.",13.5,MUTED)
+table(s,0.6,1.95,12.1,2.95,[
+ ["Policy","What the paper actually says","Its own budget, as we ran it","Cache kept"],
+ ["","CLAIMS A MEMORY REDUCTION","",""],
+ ["SnapKV","“an 8.2x enhancement in memory efficiency” at 16K inputs","2048 per head","94%"],
+ ["H2O","“reduce KV cache memory footprint by 5-10x”","20% of the prompt","92%"],
+ ["TOVA","“nearly on par …, in some cases only 1/8 of the original cache”","2048 per layer","77%"],
+ ["","MAKES NO MEMORY-REDUCTION CLAIM","",""],
+ ["Ada-KV","“the first head-wise adaptive budget allocation strategy”","2048 per head, reallocated","71%"],
+ ["StreamingLLM","a speed claim: “up to 22.2x speedup” over recompute","4 sinks + 2000 recent","33%"],
+ ["μKV (this work)","—","1024, sequence-level","14%"]],
+ colw=[2.3,5.2,2.9,1.7],size=11.5,hl=[1,5,8])
+text(s,0.6,5.15,12.1,1.4,["The contradiction is only a contradiction where a memory claim was made. SnapKV and H2O claim a ratio and do not deliver it here. TOVA hedges its own claim.","Ada-KV claims quality gains at a budget you give it, and StreamingLLM claims speed. Their rows report what a per-head or windowed budget simply leaves live on this engine."],14.5,BODY)
+text(s,0.6,6.6,12.1,0.5,"Report realized cells, not selection ratios.",18,RUST,True)
 
 # ---------- 10 GPU table ----------
 s,k=slide(); header(s,"TABLE 2  ·  MOBILE GPU, GROUPED BY HOW EACH POLICY SELECTS","Adreno 840, Llama-3.2-1B, ctx 16384, cooled per cell",k)
