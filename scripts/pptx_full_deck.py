@@ -99,7 +99,7 @@ foot(s,"μKV is the existence proof that one policy can hold all three at once. 
 # ---------- 4 architecture ----------
 s,k=slide(); header(s,"DESIGN","μKV on the phone: three changes to the pass, one controller beside it",k)
 fit(s,PNG+"/fig_architecture_tikz.png",6.67,1.75,12.2,4.3)
-foot(s,"Circled 1 to 9 are components. 1-3 are the pass, 4 is the watchdog, 5-9 are the scheduler. The control-plane figure letters its stages A to F so the two never collide.")
+foot(s,"Circled numbers are shared with the control-plane figure: 1-3 the pass, 4 sense, 5 decide, 6 act, 7 measure, 8 learn, 9 thermal guard. Same part, same number, both figures.")
 
 # ---------- 5 mechanism ----------
 s,k=slide(); header(s,"MECHANISM","Selection is sequence-level, from real attention captured in-graph",k)
@@ -110,6 +110,21 @@ bullets(s,7.2,2.0,5.6,4.5,[
  "On the 9737-token prompt: 4 sinks, 721 anchors, 299 recent = K of 1024.",
  "One keep set for every head and layer, which is what lets the array compact.",
  "Heat map is a real capture on Llama-3.2-1B, layer 8, 16 queries."],size=15)
+
+# ---------- 5b the keep set, stage by stage ----------
+s,k=slide(); header(s,"FROM THE SIDE NODE TO THE KEEP SET","Every stage in order, and what each one produces",k)
+table(s,0.45,1.62,12.45,4.5,[
+ ["","Stage","What it does","What comes out","Fig 1"],
+ ["a","flash attention","fuses softmax into the kernel, so the attention matrix is never written to memory","layer output only","—"],
+ ["b","kq_evict side node","recomputes softmax(K Qᵀ) for the last 16 queries, on the last prefill chunk only, as a graph output rather than a mid-graph read","A, 16 x N scores","1"],
+ ["c","reduce over queries","averages the 16 query rows away","s, L x N: one score per layer per position","1"],
+ ["d","aggregate layers and heads","mean over l and h. This is the step that makes selection sequence-level","one score per position, length N","2"],
+ ["e","max-pool, kernel 7","each position takes the max of its 7-wide neighbourhood, so clusters survive and isolated spikes do not","smoothed score, length N","2"],
+ ["f","α-gate","measures αa, the attention mass outside the recent window, floored at 0.70 and capped at 0.95, then splits the K budget","n_anchor and n_recent","2"],
+ ["g","select","takes the top n_anchor positions by score, plus 4 sink tokens, plus the recent window","joint keep set, K positions","2"],
+ ["h","compact in place","survivors slide into a dense prefix inside the tensors prefill already allocated","live = K, contiguous","3"]],
+ colw=[0.4,2.2,5.5,3.1,0.7],size=12)
+text(s,0.45,6.25,12.45,0.9,["Measured instance: on the 9737-token prompt αa came out at 0.71, so K = 1024 is 4 sinks, 721 anchors and 299 recent cells.","A per-head evictor skips stage d. Each head then keeps its own K, the union across heads leaves live ≫ K, and the array cannot compact."],14,BODY)
 
 # ---------- 6 cache trajectory ----------
 s,k=slide(); header(s,"WHY BUDGETS DO NOT MATERIALIZE","Every policy builds the full prompt cache. Only some give it back.",k)
@@ -281,7 +296,7 @@ text(s,0.6,4.4,12.1,2.2,["KV-Compress reports the same limitation independently:
 # ---------- 17 control plane ----------
 s,k=slide(); header(s,"CONTROL PLANE","One lever, two loops, and a cost table measured on the device",k)
 fit(s,PNG+"/fig_control_plane_tikz.png",6.67,1.8,12.2,4.0)
-foot(s,"Stages are lettered A to F so they never collide with the numbered components above. Stage D is steps 1 to 3. No online policy learning runs on the phone; the decision is a deterministic table walk.")
+foot(s,"Numbers match the architecture figure, so the same part carries the same number in both. Run is steps 1 to 3. No online policy learning runs on the phone; the decision is a deterministic table walk.")
 
 # ---------- 18 watchdog ladders ----------
 s,k=slide(); header(s,"THE WATCHDOG IS A LADDER, NOT A CAP","Three caps, five ladders, three sensors, reduce only",k)

@@ -84,8 +84,8 @@
 \node[colC]  (meter) at (14.05,2.55) {\bx{Meter}{USB rail + coulomb counter, per phase}};
 \node[colB2] (loops) at (12.65,1.05) {\bx{Two loops}{time miss: $+0.1$\\ energy miss: $-0.1$}};
 \node[colB2] (table) at (15.45,1.05) {\bx{Cost table}{EMA per plan,\\ clipped to 10\%}};
-\node[stepn] at (wd.north west) {4};\node[stepn] at (lever.north west) {5};\node[stepn] at (plan.north west) {6};
-\node[stepn] at (meter.north west) {7};\node[stepn] at (loops.north west) {8};\node[stepn] at (table.north west) {9};
+\node[stepn] at (sens.north west) {4};\node[stepn] at (batt.north west) {4};\node[stepn] at (wd.north west) {9};\node[stepn] at (lever.north west) {5};\node[stepn] at (plan.north west) {6};
+\node[stepn] at (meter.north west) {7};\node[stepn] at (loops.north west) {8};\node[stepn] at (table.north west) {8};
 \draw[data] (sens) -- (wd);
 \draw[data] (batt) -- (lever);
 \draw[ctrl] (lever) -- (plan) node[lab,text=or,midway,above=1pt] {rates};

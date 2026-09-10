@@ -17,6 +17,7 @@
   lab/.style={font=\scriptsize,inner sep=1pt,text=ink},
   stepn/.style={circle,fill=or,text=white,font=\bfseries\tiny,inner sep=1pt,minimum size=9pt},
   stepg/.style={stepn,fill=gr},
+  stepr/.style={rectangle,rounded corners=3pt,fill=or,text=white,font=\bfseries\tiny,inner sep=1.5pt,minimum height=9pt},
   head/.style={font=\bfseries\scriptsize,inner sep=1pt}
 }
 \newcommand{\bx}[2]{\textbf{#1}\\[1pt]{\scriptsize #2}}
@@ -33,10 +34,10 @@
 \node[box]  (sense)   at (1.7,3.7) {\bx{Sense}{battery level, charging\\ prompt $N$, length asked\\ DDR, battery temp.}};
 \node[mukv] (decide)  at (5.15,3.7)  {\bx{Decide}{tier from the battery\\ lever $L$ = tier + bias\\ walk the cost table}};
 \node[mukv] (act)     at (8.6,3.7) {\bx{Act}{GPU clock caps\\ (prefill, decode)\\ budget $K$, answer cap}};
-\node[box]  (run)     at (12.05,3.7) {\bx{Run}{prefill, score, select,\\ compact, decode\\ (steps 1 to 3, Figure~1)}};
+\node[box]  (run)     at (12.05,3.7) {\bx{Run}{prefill, score, select,\\ compact, decode\\ (Figure~1)}};
 \node[mukv] (measure) at (15.5,3.7){\bx{Measure}{USB rail +\\ coulomb counter\\ per phase}};
-\node[stepg] at (sense.north west) {A};\node[stepn] at (decide.north west) {B};\node[stepn] at (act.north west) {C};
-\node[stepg] at (run.north west) {D};\node[stepn] at (measure.north west) {E};
+\node[stepg] at (sense.north west) {4};\node[stepn] at (decide.north west) {5};\node[stepn] at (act.north west) {6};
+\node[stepr] at (run.north west) {1-3};\node[stepn] at (measure.north west) {7};
 \draw[data] (sense) -- (decide);
 \draw[data] (decide) -- (act);
 \draw[ctrl] (act) -- (run);
@@ -44,7 +45,7 @@
 % learn and thermal guard
 \node[wmukv] (learn) at (4.4,1.15) {\bx{Learn}{cost table: EMA per plan, clipped to 10\% per request\\ time miss: $L+0.1$; energy miss: $L-0.1$; both met: bias decays}};
 \node[wide]  (guard) at (12.6,1.15) {\bx{Thermal guard}{CPU ladder at battery 47 to 49.5\,\textdegree C and skin 50 to 52.5\,\textdegree C\\ GPU ladder at DDR 60, 62, 63.5\,\textdegree C; vendor limiter last}};
-\node[stepn] at (learn.north west) {F};
+\node[stepn] at (learn.north west) {8};\node[stepg] at (guard.north west) {9};
 \draw[meas] (measure.south) -- (15.5,2.35) -- (16.85,2.35) -- (16.85,-0.1) -- (2.0,-0.1) -- (2.0,0.55) node[lab,text=gn,pos=0.62,below=1pt] {energy and time per phase};
 \draw[ctrl] (5.15,1.75) -- (decide.south) node[lab,text=or,pos=0.5,right=2pt] {bias, table costs};
 \draw[heat] (12.75,2.92) -- (12.75,1.75) node[lab,text=gr,pos=0.5,right=1pt] {heat};
