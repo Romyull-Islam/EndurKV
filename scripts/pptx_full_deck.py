@@ -111,20 +111,24 @@ bullets(s,7.2,2.0,5.6,4.5,[
  "One keep set for every head and layer, which is what lets the array compact.",
  "Heat map is a real capture on Llama-3.2-1B, layer 8, 16 queries."],size=15)
 
-# ---------- 5b the keep set, stage by stage ----------
-s,k=slide(); header(s,"FROM THE SIDE NODE TO THE KEEP SET","Every stage in order, and what each one produces",k)
-table(s,0.45,1.62,12.45,4.5,[
- ["","Stage","What it does","What comes out","Fig 1"],
- ["a","flash attention","fuses softmax into the kernel, so the attention matrix is never written to memory","layer output only","—"],
- ["b","kq_evict side node","recomputes softmax(K Qᵀ) for the last 16 queries, on the last prefill chunk only, as a graph output rather than a mid-graph read","A, 16 x N scores","1"],
- ["c","reduce over queries","averages the 16 query rows away","s, L x N: one score per layer per position","1"],
- ["d","aggregate layers and heads","mean over l and h. This is the step that makes selection sequence-level","one score per position, length N","2"],
- ["e","max-pool, kernel 7","each position takes the max of its 7-wide neighbourhood, so clusters survive and isolated spikes do not","smoothed score, length N","2"],
- ["f","α-gate","measures αa, the attention mass outside the recent window, floored at 0.70 and capped at 0.95, then splits the K budget","n_anchor and n_recent","2"],
- ["g","select","takes the top n_anchor positions by score, plus 4 sink tokens, plus the recent window","joint keep set, K positions","2"],
- ["h","compact in place","survivors slide into a dense prefix inside the tensors prefill already allocated","live = K, contiguous","3"]],
- colw=[0.4,2.2,5.5,3.1,0.7],size=12)
-text(s,0.45,6.25,12.45,0.9,["Measured instance: on the 9737-token prompt αa came out at 0.71, so K = 1024 is 4 sinks, 721 anchors and 299 recent cells.","A per-head evictor skips stage d. Each head then keeps its own K, the union across heads leaves live ≫ K, and the array cannot compact."],14,BODY)
+# ---------- 5b the keep set, part by part ----------
+s,k=slide(); header(s,"FROM THE SIDE NODE TO THE KEEP SET","Every part of Figure 2, in order, and what each one produces",k)
+table(s,0.45,1.50,12.45,4.85,[
+ ["","Part, as labelled in the figure","What it does","What comes out"],
+ ["a","Q K V → flash attention → output","the unmodified layer; the fused kernel never stores attention","layer output only"],
+ ["b","kq_evict side node","softmax(K Qᵀ) for the last 16 queries, last chunk, as a graph output","raw attention, 16 queries"],
+ ["c","heat map,  A ∈ ℝ^(16×N)","a real capture, Llama-3.2-1B layer 8, log scale","the 16 × N attention block"],
+ ["d","per-layer scores,  s ∈ ℝ^(L×N)","averages the 16 query rows away","one score per layer, per position"],
+ ["e","aggregate layers and heads","mean over l and h; this is what makes selection sequence-level","one score per position"],
+ ["f","max-pool, kernel 7","each position takes its 7-wide max: clusters survive, spikes do not","smoothed score"],
+ ["g","α-gate","αa is the mass outside the recent window, floor 0.70; it splits K","n_anchor and n_recent"],
+ ["h","joint keep set,  K positions","top n_anchor by score, plus 4 sinks, plus the recent window","4 sinks + 721 anchors + 299 recent"],
+ ["i","seq-level evict and compact","every layer keeps the same positions, so survivors slide together","live = K, contiguous"],
+ ["","BRANCH (b): what a per-head evictor does instead","",""],
+ ["j","per-head top-K","skips part e; each head keeps its own K positions","K per head, different sets"],
+ ["k","union across heads","a position survives if any head keeps it","13 of 16 bins live, cannot compact"]],
+ colw=[0.35,3.6,5.4,3.1],size=10.5,hl=[10])
+foot(s,"Measured instance: on the 9737-token prompt αa came out at 0.71, so K = 1024 is 4 sinks, 721 anchors and 299 recent cells.  Parts b to d are step 1 of Figure 1, e to h are step 2, i is step 3.")
 
 # ---------- 6 cache trajectory ----------
 s,k=slide(); header(s,"WHY BUDGETS DO NOT MATERIALIZE","Every policy builds the full prompt cache. Only some give it back.",k)
