@@ -159,7 +159,25 @@ The scheduler runs once per request in about 0.3\,s (Figure~\ref{fig:controlplan
 
 \paragraph{The cost table is per model.} Energy and time per token differ by an order of magnitude between models. Bonsai-8B on the CPU costs 5.1 times the energy that the Llama-3.2-1B row predicts. One shared table would mispredict every other model, and learning from those requests would corrupt the row that was right. Each model therefore keeps its own table, seeded from the measured one. While a table is still a seed the loops report their error but hold the lever, because that error belongs to the seed and not to the phone.
 
-\paragraph{Two loops on model error.} After the request the meter reports energy and time per phase. If time ran more than 5\% over the budget the plan was chosen under, the performance loop moves the bias 0.1 toward performance. If energy ran more than 5\% over its prediction, the energy loop moves it 0.1 toward energy. When both are met the bias decays by 0.05 toward the tier default. The bias is clamped to $\pm0.3$. This is the JouleGuard coupling~\cite{hoffmann2015jouleguard}: the loops act on the model's error, so a disturbance moves the lever and a quiet request moves it back. Knobs only one loop feels belong to that loop: the decode clock and the answer cap to the energy loop, the CPU clock to the watchdog. Only the prefill clock is shared, and the lever arbitrates it. The cost table learns by an exponential moving average clipped to 10\% per request, so interference cannot pass for a plan's cost. There is no online policy learning on the user's phone. The decision is a table walk, the table is seeded from measurements, and the loops correct it. A contextual bandit trained on 24 real requests chose the rule's plan in 13 of 15 free choices. The other two took the low tier's 726\,MHz arm, which tied with 902 within 0.002 and which the scheduler's stopping rule refuses. Its learning cost 15.7\,kJ and 149 minutes of phone time, which the rule does not pay.
+\paragraph{Two loops on model error.} After the request the meter reports energy and time per phase. If time ran more than 5\% over the budget the plan was chosen under, the performance loop moves the bias 0.1 toward performance. If energy ran more than 5\% over its prediction, the energy loop moves it 0.1 toward energy. When both are met the bias decays by 0.05 toward the tier default. The bias is clamped to $\pm0.3$. This is the JouleGuard coupling~\cite{hoffmann2015jouleguard}: the loops act on the model's error, so a disturbance moves the lever and a quiet request moves it back. Knobs only one loop feels belong to that loop: the decode clock and the answer cap to the energy loop, the CPU clock to the watchdog. Only the prefill clock is shared, and the lever arbitrates it. The cost table learns by an exponential moving average clipped to 10\% per request, so interference cannot pass for a plan's cost. There is no online policy learning on the user's phone. The decision is a table walk, the table is seeded from measurements, and the loops correct it. We tested whether learning is needed at all. A contextual bandit with the same three contexts, the same reward and one pull per real request explored the GPU clock arms for 24 requests (Table~\ref{tab:bandit}). It reproduced the rule at the healthy and low tiers. At the mid tier it preferred a flat 902\,MHz, which scores 0.041 higher on that tier's own objective because it saves 21\% of the energy for 26\% more time. The rule refuses that plan, not because it ranks it lower but because 181\,s misses the mid tier's 173\,s time budget. So the one place learning helps is a place where the rule's time guard, not its ranking, is what binds. Learning cost 15.7\,kJ and 149 minutes of phone time, and 93\% of its regret fell in the mandatory warm start. The rule pays none of that, because its table is measured once, offline.
+
+\begin{table}[tb]
+\caption{Contextual bandit against the rule, 24 real requests on the phone GPU with Llama-3.2-1B, 9737-token prompt and 1024 output, cooled per pull. Utility is the tier's own objective, so both are scored on one scale. Full per-arm results in the artifact.}
+\label{tab:bandit}
+\centering\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{l l r l r r}
+\toprule
+\textbf{Tier} & \textbf{Rule's plan} & \textbf{Util.} & \textbf{Bandit} & \textbf{Util.} & \textbf{Gain} \\
+\midrule
+healthy & 1200, decode 902 & $+0.099$ & 1200 & $+0.100$ & $+0.001$ \\
+mid     & 1200, decode 726 & $-0.285$ & 902  & \good{$-0.244$} & \good{$+0.041$} \\
+low     & 902              & $-0.455$ & 902  & $-0.455$ & $0$ \\
+\midrule
+\multicolumn{6}{l}{\emph{Cost of learning: 24 pulls, 15.7\,kJ, 149 min; 93\% of regret in the warm start}} \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \section{Implementation}
 \label{sec:impl}

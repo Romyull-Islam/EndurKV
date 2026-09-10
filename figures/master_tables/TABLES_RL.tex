@@ -1,0 +1,107 @@
+\documentclass[10pt]{article}
+\usepackage[margin=0.7in,landscape]{geometry}
+\usepackage{booktabs,xcolor,amsmath}\usepackage[labelformat=empty]{caption}
+\newcommand{\muKV}{$\mu$KV}
+\definecolor{kvgreen}{RGB}{40,174,96}\definecolor{kvred}{RGB}{192,57,43}
+\newcommand{\good}[1]{\textcolor{kvgreen}{\textbf{#1}}}
+\newcommand{\bad}[1]{\textcolor{kvred}{#1}}
+\pagestyle{empty}
+\begin{document}
+\section*{Contextual bandit against the rule: complete results}
+
+\noindent\textbf{Protocol.} One pull is one real request on the phone: Llama-3.2-1B on the Adreno 840,
+9737-token prompt, 1024 output tokens, $K{=}1024$, \muKV\ frozen config. Cooling gate (DDR $\le35$\,\textdegree C,
+battery $\le33$\,\textdegree C) before every pull, CPU caps pinned, GPU cap restored after each pull.
+Energy is metered from the USB rail plus the coulomb counter. Epsilon-greedy, $\epsilon=0.25$, warm start of
+one pull per (context, arm). 24 pulls on 2026-09-03, 11:08 to 13:37.
+
+\medskip
+\noindent\textbf{Reward.} $r = w_q - w_t\,T/T_\mathrm{ref} - w_e\,E/E_\mathrm{ref}$ with
+$E_\mathrm{ref}=782.0$\,J and $T_\mathrm{ref}=142.4$\,s, the cost table's prediction for this request at
+1200\,MHz. The weights are the scheduler's own tier weights, so the bandit optimizes exactly the objective
+the rule is built to serve.
+
+\begin{table}[h]\centering\small
+\caption*{\textbf{Table R1.} Contexts and their weights. Identical to the scheduler's lever anchors.}
+\begin{tabular}{l r r r r r}
+\toprule
+\textbf{Context} & \textbf{battery} & $w_q$ & $w_t$ & $w_e$ & \textbf{time slack} \\
+\midrule
+healthy & mains or $>$50\% & 0.55 & 0.40 & 0.05 & 5\% \\
+mid     & 21 to 50\%       & 0.35 & 0.20 & 0.45 & 22\% \\
+low     & $\le$20\%        & 0.20 & 0.10 & 0.70 & 40\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]\centering\small
+\caption*{\textbf{Table R2.} Every context and arm the bandit pulled. Energy and time are measured means.
+The bandit's preferred arm is marked. All 24 pulls are represented.}
+\begin{tabular}{l r r r r r l}
+\toprule
+\textbf{Context} & \textbf{Arm (MHz)} & \textbf{pulls} & \textbf{Energy (J)} & \textbf{Time (s)} & \textbf{Mean reward} & \\
+\midrule
+healthy & 1200 & 6 & 804.6 & 139.1 & \good{$+0.1079$} & bandit's choice \\
+healthy & 902  & 1 & 599.4 & 180.6 & $+0.0043$ & \\
+healthy & 726  & 1 & 559.0 & 218.4 & $-0.0991$ & \\
+\midrule
+mid & 1200 & 1 & 799.5 & 139.1 & $-0.3054$ & \\
+mid & 902  & 6 & 579.6 & 180.5 & \good{$-0.2370$} & bandit's choice \\
+mid & 726  & 1 & 579.5 & 218.5 & $-0.2903$ & \\
+\midrule
+low & 1200 & 1 & 790.2 & 139.2 & $-0.6050$ & \\
+low & 902  & 4 & 591.4 & 180.7 & \good{$-0.4562$} & bandit's choice \\
+low & 726  & 3 & 563.4 & 218.4 & $-0.4577$ & within 0.0015 of 902 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\clearpage
+\begin{table}[h]\centering\small
+\caption*{\textbf{Table R3.} What learning bought. Utility is the tier's own objective evaluated on the
+cost table, so rule and bandit are scored on the same scale. The rule may pick split-clock plans the
+bandit's arm set does not contain.}
+\begin{tabular}{l l r l r r l}
+\toprule
+\textbf{Context} & \textbf{Rule's plan} & \textbf{Utility} & \textbf{Bandit's arm} & \textbf{Utility} & \textbf{Gain} & \textbf{Verdict} \\
+\midrule
+healthy & prefill 1200, decode 902 & $+0.0989$ & 1200 & $+0.0999$ & $+0.0010$ & tie \\
+mid     & prefill 1200, decode 726 & $-0.2845$ & 902  & \good{$-0.2440$} & \good{$+0.0405$} & bandit wins \\
+low     & 902                      & $-0.4551$ & 902  & $-0.4551$ & $0$ & identical \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]\centering\small
+\caption*{\textbf{Table R4.} The one disagreement, in physical units. The rule refuses the bandit's arm
+because it misses the mid tier's time budget of 173.1\,s, not because it ranks it lower.}
+\begin{tabular}{l r r r}
+\toprule
+\textbf{Mid tier, 9737 prompt $+$ 1024 output} & \textbf{Energy (J)} & \textbf{Time (s)} & \textbf{Utility} \\
+\midrule
+Rule: prefill 1200, decode 726 & 750.0 & 144.5 & $-0.2845$ \\
+Bandit: flat 902               & \good{589.5} & \bad{181.4} & \good{$-0.2440$} \\
+\midrule
+Difference & $-160.5$ ($-21\%$) & $+36.9$ ($+26\%$) & $+0.0405$ ($+14\%$) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]\centering\small
+\caption*{\textbf{Table R5.} What learning cost. Regret is measured against an oracle that always plays the
+bandit's own final best arm. Almost all of it is paid in the mandatory warm start.}
+\begin{tabular}{l r r r}
+\toprule
+ & \textbf{Pulls} & \textbf{Energy (kJ)} & \textbf{Regret} \\
+\midrule
+Warm start, one pull per context and arm & 9  & 5.9 & \bad{0.542} \\
+Free choices                              & 15 & 9.8 & 0.043 \\
+\midrule
+Total                                     & 24 & \bad{15.7} & 0.585 \\
+\midrule
+\multicolumn{4}{l}{Wall-clock cost including the cooling gates: 149 minutes} \\
+\multicolumn{4}{l}{The rule pays none of this. Its table is seeded from measurements taken once, offline.} \\
+\bottomrule
+\end{tabular}
+\end{table}
+\end{document}
