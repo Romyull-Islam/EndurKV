@@ -99,7 +99,7 @@ foot(s,"μKV is the existence proof that one policy can hold all three at once. 
 # ---------- 4 architecture ----------
 s,k=slide(); header(s,"DESIGN","μKV on the phone: three changes to the pass, one controller beside it",k)
 fit(s,PNG+"/fig_architecture_tikz.png",6.67,1.75,12.2,4.3)
-foot(s,"Scoring runs inside the FlashAttention prefill graph, so content awareness costs 1.9% of prefill and no decode bandwidth.")
+foot(s,"Circled 1 to 9 are components. 1-3 are the pass, 4 is the watchdog, 5-9 are the scheduler. The control-plane figure letters its stages A to F so the two never collide.")
 
 # ---------- 5 mechanism ----------
 s,k=slide(); header(s,"MECHANISM","Selection is sequence-level, from real attention captured in-graph",k)
@@ -281,12 +281,12 @@ text(s,0.6,4.4,12.1,2.2,["KV-Compress reports the same limitation independently:
 # ---------- 17 control plane ----------
 s,k=slide(); header(s,"CONTROL PLANE","One lever, two loops, and a cost table measured on the device",k)
 fit(s,PNG+"/fig_control_plane_tikz.png",6.67,1.8,12.2,4.0)
-foot(s,"There is no online policy learning on the user's phone. The decision is a deterministic table walk.")
+foot(s,"Stages are lettered A to F so they never collide with the numbered components above. Stage D is steps 1 to 3. No online policy learning runs on the phone; the decision is a deterministic table walk.")
 
 # ---------- 18 watchdog ladders ----------
 s,k=slide(); header(s,"THE WATCHDOG IS A LADDER, NOT A CAP","Three caps, five ladders, three sensors, reduce only",k)
 fit(s,PNG+"/fig_architecture_6pg.png",6.67,1.75,12.2,4.3)
-foot(s,"Each CPU cluster takes the lower of the battery and skin ladders. DDR above 71 °C floors both to 1267 MHz.")
+foot(s,"Each CPU cluster takes the lower of the battery and skin ladders. DDR above 71 °C floors both to 1267 MHz. Battery here is temperature in °C, not charge in %; the scheduler tiers use charge.")
 
 # ---------- 19 bonsai thermal ----------
 s,k=slide(); header(s,"THE WORKLOAD THAT REACHES THE CLIFF","Bonsai-8B, phone CPU, full cache against μKV",k)
@@ -310,13 +310,14 @@ box(s,0.6,5.3,12.1,1.1,"Cache size controls throughput, time and energy. The clo
 # ---------- 21 energy-aware tiers ----------
 s,k=slide(); header(s,"TABLE 6  ·  ENERGY-AWARE SCHEDULING","123 requests through a real discharge, 91% to 11%, charging off",k)
 table(s,0.6,1.9,12.1,2.0,[
- ["Battery","GPU plan","Answer cap","Cable J","Battery J","Battery s"],
- ["mains or above 50%","1200, decode 902","4096","1336","885","280"],
+ ["Battery charge","GPU plan (MHz)","Answer cap (tokens)","Cable J","Battery J","Battery s"],
+ ["mains or above 50%","1200, decode 902","4096","1336","885","280"],  # noqa
  ["21 to 50%","1200, decode 726","1024","577","748","210"],
  ["20% or below","902","512","500","506","177"],
  ["GPU unavailable","CPU, K = 1024","by tier","822","—","—"]],
  colw=[2.8,2.8,1.8,1.6,1.6,1.5],size=14)
-bullets(s,0.6,4.2,12.1,2.4,[
+text(s,0.6,4.12,12.1,0.45,"The cache budget K stays at 1024 cells in every tier. The answer cap is a token count. Same number, different quantity.",15,RUST,True)
+bullets(s,0.6,4.7,12.1,2.1,[
  "The two lower tiers cut energy per request by 15% and 43%, with time falling 25% and 37%.",
  "On the battery the phone is a different machine. The same healthy request costs 885 J instead of 1336.",
  "The OEM caps prefill at 726 MHz within a minute of every request when unplugged, so the answer cap carries the saving.",
