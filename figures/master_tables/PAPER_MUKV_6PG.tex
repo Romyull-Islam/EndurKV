@@ -48,7 +48,7 @@ Three properties decide the outcome, and every published policy lacks one. Selec
 \muKV\ is the existence proof that one policy can hold all three. It computes real attention scores inside the FlashAttention prefill graph through a small side node, selects one keep set for every head and layer, and compacts in place. On the Adreno 840 it decodes at 1.19 times the full cache on 7.4\% of the cells. A corrected StreamingLLM ties that speed, which is our strongest evidence that the mechanism is real, but it needs three times the budget and loses the needles. \muKV\ ties the full cache across a 392-cell needle sweep and stays within 0.1 to 3.7 F1 on LongBench at 13\% of the cache. On the CPU it decodes 4.8 times faster than the full cache at 62\% less energy. We argue that on-device cache work should report realized cells, not selection ratios.
 \end{abstract}
 
-\keywords{Mobile LLM inference, KV cache eviction, FlashAttention, thermal management, energy-aware scheduling, on-device AI}
+\keywords{Mobile LLM inference, KV cache eviction, KV cache compaction, FlashAttention, thermal management, on-device AI}
 
 \maketitle
 \makeatletter\fancyhead[RO]{\@headfootfont HotMobile '27}\fancyhead[LE]{\@headfootfont HotMobile '27}\makeatother
