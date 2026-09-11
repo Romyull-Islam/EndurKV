@@ -266,31 +266,31 @@ Table~\ref{tab:cpu} runs a 9.7K-token prompt followed by 4096 generated tokens o
 \label{tab:gpu}
 \centering\footnotesize
 \setlength{\tabcolsep}{3.5pt}
-\begin{tabular}{l r r r r r}
+\begin{tabular}{l r r r r r r}
 \toprule
-\textbf{Policy} & \textbf{$n$} & \textbf{Prefill (s)} & \textbf{tok/s} & \textbf{dec\,$\times$} & \textbf{Cells} \\
+\textbf{Policy} & \textbf{$n$} & \textbf{Prefill (s)} & \textbf{tok/s} & \textbf{dec\,$\times$} & \textbf{Cells} & \textbf{\%} \\
 \midrule
-\multicolumn{6}{l}{\emph{Llama-3.2-1B, ctx 16384}} \\
-vanilla (no eviction) & 3 & 124 & 24.30 & 1.00 & 9741 \\
-\multicolumn{6}{l}{\quad\emph{sequence-level selection}} \\
-\textbf{\muKV}, $K{=}1024$ & 3 & 126 & \good{29.02} & \good{1.19} & 723 \\
-StreamingLLM, own budget & 3 & 124 & 29.03 & 1.19 & 2005 \\
-\multicolumn{6}{l}{\quad\emph{per-head selection}} \\
-SnapKV               & 1 & 229 & 4.76 & \bad{0.20} & 6592 \\
-Ada-KV               & 1 & 276 & 2.86 & \bad{0.12} & 3519 \\
-TOVA                 & 1 & 176 & 4.34 & \bad{0.18} & 4125 \\
-H2O                  & 1 & 279 & 3.58 & \bad{0.15} & 6110 \\
-\multicolumn{6}{l}{\quad\emph{controls that isolate one property each}} \\
-\muKV, compaction off & 3 & 132 & 25.61 & 1.05 & 723 \\
-StreamingLLM, forced off the kernel & 3 & 234 & 5.81 & 0.24 & 777 \\
+\multicolumn{7}{l}{\emph{Llama-3.2-1B, ctx 16384}} \\
+vanilla (no eviction) & 3 & 124 & 24.30 & 1.00 & 9741 & 100 \\
+\multicolumn{7}{l}{\quad\emph{sequence-level selection}} \\
+\textbf{\muKV}, $K{=}1024$ & 3 & 126 & \good{29.02} & \good{1.19} & 723 & 7.4 \\
+StreamingLLM, own budget & 3 & 124 & 29.03 & 1.19 & 2005 & 20.6 \\
+\multicolumn{7}{l}{\quad\emph{per-head selection}} \\
+SnapKV               & 1 & 229 & 4.76 & \bad{0.20} & 6592 & 67.7 \\
+Ada-KV               & 1 & 276 & 2.86 & \bad{0.12} & 3519 & 36.1 \\
+TOVA                 & 1 & 176 & 4.34 & \bad{0.18} & 4125 & 42.3 \\
+H2O                  & 1 & 279 & 3.58 & \bad{0.15} & 6110 & 62.7 \\
+\multicolumn{7}{l}{\quad\emph{controls that isolate one property each}} \\
+\muKV, compaction off & 3 & 132 & 25.61 & 1.05 & 723 & 7.4 \\
+StreamingLLM, forced off the kernel & 3 & 234 & 5.81 & 0.24 & 777 & 8.0 \\
 \midrule
-\multicolumn{6}{l}{\emph{Phi-3-mini, ctx 16384}} \\
-vanilla (full cache)     & 1 & 471 & 5.05 & 1.00 & 11157 \\
-\textbf{\muKV}, in place & 1 & 586 & \good{13.36} & \good{2.64} & 878 \\
-StreamingLLM, own budget & 1 & 445 & 10.60 & 2.10 & 2000 \\
-Ada-KV, gate promoted    & 1 & 572 & 9.13 & 1.81 & 4326 \\
-SnapKV, gate promoted    & 1 & 532 & 5.80 & 1.15 & 10862 \\
-H2O, TOVA & \multicolumn{5}{c}{\emph{refused by the gate; their CPU rows stand}} \\
+\multicolumn{7}{l}{\emph{Phi-3-mini, ctx 16384}} \\
+vanilla (full cache)     & 1 & 471 & 5.05 & 1.00 & 11157 & 100 \\
+\textbf{\muKV}, in place & 1 & 586 & \good{13.36} & \good{2.64} & 878 & 7.9 \\
+StreamingLLM, own budget & 1 & 445 & 10.60 & 2.10 & 2000 & 17.9 \\
+Ada-KV, gate promoted    & 1 & 572 & 9.13 & 1.81 & 4326 & 38.8 \\
+SnapKV, gate promoted    & 1 & 532 & 5.80 & 1.15 & 10862 & 97.4 \\
+H2O, TOVA & \multicolumn{6}{c}{\emph{refused by the gate; their CPU rows stand}} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -406,7 +406,7 @@ StreamingLLM         & 2004     & 22.59 & 22.63 & 18.59 & 76.14 & 34.99 & 33\% \
 \label{fig:bonsai-thermal}
 \end{figure}
 
-Figure~\ref{fig:bonsai-thermal} shows the workload that reaches the cliff. The full cache on Bonsai-8B runs 85.6 minutes and drives the battery to 50.2\C. At 50\C\ the vendor deep-throttles both clusters, the prime cores to 883\,MHz, in a sawtooth of 17 dips. The longest lasts 123\,s; the run spends 923\,s at 883\,MHz in total. \muKV\ finishes in 33.2 minutes at a 44.2\C\ battery peak, before the trigger. The watchdog belongs to \muKV\ and is never given to a baseline in any comparison in this paper. The orange trace is an ablation, included because \muKV\ finishes before the cliff and so cannot show the clock lever by itself. The glide, driven by the battery and the skin ladders, flattens the battery rise from 0.48 to 0.05\C/min and settles it at 49.1\C. The prime cores never reach 883\,MHz and spend 9\,s in total below 1\,GHz. This decode is bandwidth-bound, so preventing the throttle adds no speed: 1.0\,tok/s either way. The watchdog buys thermal sustainability; \muKV\ buys speed and efficiency through the cache. The DDR panel separates the two levers. DDR peaks near 70\C\ in both full-cache runs, set by memory traffic, while each 883\,MHz dip sheds about 8\C.
+Figure~\ref{fig:bonsai-thermal} shows the workload that reaches the cliff. The full cache on Bonsai-8B runs 85.6 minutes and drives the battery to 50.2\C. At 50\C\ the vendor deep-throttles both clusters, the prime cores to 883\,MHz, in a sawtooth of 17 dips. The longest lasts 123\,s; the run spends 923\,s at 883\,MHz in total. \muKV\ finishes in 33.2 minutes at a 44.2\C\ battery peak, before the trigger. The watchdog belongs to \muKV\ and is never given to a baseline in any comparison in this paper. The watchdog stayed dormant in every cell of Table~\ref{tab:cpu}, which makes that result eviction alone. The orange trace is an ablation, included because \muKV\ finishes before the cliff and so cannot show the clock lever by itself. The glide, driven by the battery and the skin ladders, flattens the battery rise from 0.48 to 0.05\C/min and settles it at 49.1\C. The prime cores never reach 883\,MHz and spend 9\,s in total below 1\,GHz. This decode is bandwidth-bound, so preventing the throttle adds no speed: 1.0\,tok/s either way. The watchdog buys thermal sustainability; \muKV\ buys speed and efficiency through the cache. The DDR panel separates the two levers. DDR peaks near 70\C\ in both full-cache runs, set by memory traffic, while each 883\,MHz dip sheds about 8\C.
 
 \paragraph{The GPU ladder, measured.} On the 4096-token GPU request at 1200\,MHz the vendor limiter fires in every cell. Three cooled cells per arm give 1289 against 1390\,J, 216 against 214\,s, and a DDR peak of 75 against 90\C. The ladder saves 7\% of energy and 15 degrees for 1\% more time.
 
