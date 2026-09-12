@@ -32,7 +32,6 @@
 \fill[panel,draw=pline,rounded corners=3pt] (0,4.35) rectangle (17,7.45);
 \fill[panel,draw=pline,rounded corners=3pt] (0,0.05) rectangle (17,3.75);
 \node[head,anchor=north west,text=gr] at (0.15,7.4) {INFERENCE PASS \quad {\mdseries llama.cpp, CPU or Adreno GPU, one request}};
-\node[head,anchor=north west,text=gr] at (1.30,3.7) {THERMAL WATCHDOG \quad {\mdseries 2\,Hz, one step at a time, never raises}};
 \draw[data] (10.9,7.25) -- (11.5,7.25);\node[lab,anchor=west] at (11.55,7.25) {data};
 \draw[ctrl] (12.35,7.25) -- (12.95,7.25);\node[lab,anchor=west] at (13.0,7.25) {control};
 \draw[heat] (14.05,7.25) -- (14.65,7.25);\node[lab,anchor=west] at (14.7,7.25) {heat};
@@ -62,51 +61,22 @@
 \node[lab,text=bl,anchor=west] at (13.35,4.68) {recent 299};
 \draw[ctrl] (compact.south) -- (12.65,5.37) node[lab,text=or,midway,right=1pt] {slide};
 \draw[kv] (14.05,5.15) -- (15.45,5.15) -- (decode.south) node[lab,text=bl,pos=0.78,right=1pt] {read $K$};
-% ================= control plane: the two ladders, drawn as ladders =================
-\tikzset{colA/.style={box,minimum width=2.9cm,text width=2.7cm,minimum height=0.9cm},
-         tread/.style={line width=1.1pt,or},
-         vend/.style={line width=0.9pt,gr,dashed},
-         axl/.style={font=\tiny,text=gr,inner sep=1pt},
-         mhz/.style={font=\tiny,text=ink,inner sep=1pt}}
-\node[colA] (sens) at (2.05,2.35) {\bx{Sensors}{skin, battery,\\ DDR, CPU}};
-\node[colA,draw=gn,fill=gnf,line width=0.8pt] (appl) at (2.05,1.05) {\bx{Kernel applies}{the lower of user\\ and vendor cap}};
-\draw[data] (sens) -- (appl);
-\draw[vend] (3.90,0.28) -- (4.40,0.28); \node[lab,anchor=west,text=gr,font=\tiny] at (4.45,0.28) {vendor limiter, applied last};
-\node[lab,anchor=west,text=gr,font=\tiny] at (10.30,0.28) {DDR $\ge$ 71\,\textdegree C also floors both CPU clusters to 1267};
-% ---- CPU ladder: battery C -> prime-core cap
-\node[head,text=or,anchor=west] at (3.90,3.42) {CPU cap, both clusters \; {\mdseries lower of the two rows}};
-\draw[gr,line width=0.4pt] (3.90,0.95) -- (9.00,0.95);
-\draw[tread] (3.90,3.05) -- (4.57,3.05) -- (4.57,2.85) -- (5.91,2.85) -- (5.91,2.51) -- (6.58,2.51)
-          -- (6.58,2.17) -- (7.25,2.17) -- (7.25,1.78) -- (7.93,1.78) -- (7.93,1.44) -- (8.60,1.44);
-\draw[vend] (8.60,1.44) -- (8.60,1.05) -- (9.00,1.05);
-\node[mhz,anchor=south,text=gr] at (4.23,3.06) {dormant};
-\node[mhz,anchor=south] at (5.24,2.86) {1497};
-\node[mhz,anchor=south] at (6.24,2.52) {1382};
-\node[mhz,anchor=south] at (6.91,2.18) {1267};
-\node[mhz,anchor=south] at (7.59,1.79) {1132};
-\node[mhz,anchor=south] at (8.26,1.45) {1017};
-\node[mhz,anchor=south,text=gr] at (8.80,1.06) {883};
-\foreach \x/\t in {4.57/47.0, 5.91/48.0, 6.58/48.5, 7.25/49.0, 7.93/49.5, 8.60/50.0}
-  {\draw[gr,line width=0.3pt] (\x,0.95) -- (\x,0.85); \node[axl,anchor=north] at (\x,0.83) {\t};}
-\foreach \x/\t in {4.57/50.0, 5.91/51.0, 6.58/51.5, 7.25/52.0, 7.93/52.5, 8.60/52.8}
-  {\node[axl,anchor=north] at (\x,0.55) {\t};}
-\node[axl,anchor=west] at (9.05,0.83) {battery};
-\node[axl,anchor=west] at (9.05,0.55) {skin};
-% ---- GPU ladder: DDR C -> Adreno cap
-\node[head,text=or,anchor=west] at (10.30,3.42) {GPU cap \; {\mdseries by DDR \textdegree C, 1.5\,\textdegree C hysteresis}};
-\draw[gr,line width=0.4pt] (10.30,0.95) -- (15.60,0.95);
-\draw[tread] (10.30,2.81) -- (11.26,2.81) -- (11.26,2.26) -- (13.19,2.26) -- (13.19,1.95) -- (14.64,1.95)
-          -- (14.64,1.70) -- (15.12,1.70);
-\draw[vend] (15.12,1.70) -- (15.12,1.05) -- (15.60,1.05);
-\node[mhz,anchor=south,text=gr] at (10.78,2.82) {1200 base};
-\node[mhz,anchor=south] at (12.22,2.27) {1050};
-\node[mhz,anchor=south] at (13.91,1.96) {967};
-\node[mhz,anchor=south] at (14.88,1.71) {902};
-\node[mhz,anchor=south,text=gr] at (15.36,1.06) {726};
-\foreach \x/\t in {11.26/60.0, 13.19/62.0, 14.64/63.5, 15.12/64.0}
-  {\draw[gr,line width=0.3pt] (\x,0.95) -- (\x,0.85); \node[axl,anchor=north] at (\x,0.83) {\t};}
+% ================= control plane: compact, ranges not ladders =================
+\tikzset{colA/.style={box,minimum height=1.25cm,align=center},
+         note/.style={font=\scriptsize,text=gr,inner sep=1pt}}
+\node[head,anchor=north west,text=gr] at (0.95,3.62) {THERMAL WATCHDOG \quad {\mdseries reduce only, one step at a time}};
+\node[colA,minimum width=3.9cm,text width=3.7cm] (sens) at (2.45,1.95)
+  {\bx{Sensors}{skin, battery and DDR,\\ sampled at 2\,Hz}};
+\node[colA,draw=or,fill=orf,line width=0.8pt,minimum width=6.4cm,text width=6.2cm] (wd) at (8.55,1.95)
+  {\bx{Watchdog}{CPU 1497 to 1017\,MHz, both clusters,\\ the lower of the battery and skin ladders\\ GPU 1050 to 902\,MHz, on DDR}};
+\node[colA,draw=gn,fill=gnf,line width=0.8pt,minimum width=4.1cm,text width=3.9cm] (appl) at (14.55,1.95)
+  {\bx{Kernel applies}{the lower of the user cap\\ and the vendor cap}};
+\draw[data] (sens) -- (wd);
+\draw[ctrl] (wd) -- (appl);
+\node[note,anchor=north west] at (0.35,0.95)
+  {Each ladder floor stays above the vendor cliff it anticipates: 883\,MHz on the CPU at battery 50\,\textdegree C, 726\,MHz on the GPU at DDR 64\,\textdegree C.};
 % ---- links between the panels
-\draw[heat] (0.90,4.35) -- (sens.north -| 0.90,0) node[lab,text=gr,pos=0.55,right=1pt] {heat};
-\draw[ctrlg] (appl.west) -- (0.30,1.05) -- (0.30,4.35) node[lab,text=gr,pos=0.62,right=1pt] {clock caps};
+\draw[heat] (0.40,4.35) -- (0.40,1.95) -- (sens.west) node[lab,text=gr,pos=0.30,right=1pt] {heat};
+\draw[ctrlg] (appl.east) -- (16.75,1.95) -- (16.75,4.35) node[lab,text=gr,pos=0.9,left=1pt] {clock caps};
 \end{tikzpicture}
 \end{document}
