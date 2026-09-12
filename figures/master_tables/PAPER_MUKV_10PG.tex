@@ -89,8 +89,8 @@ We evaluate on a OnePlus 15 (Snapdragon 8 Elite Gen 5, Adreno 840) with four mod
 
 \begin{figure*}[tp]
 \centering
-\includegraphics[width=0.96\textwidth]{fig_architecture_tikz.pdf}
-\caption{\muKV\ on the phone. Top: the inference pass, with scoring, selection and compaction (1 to 3) as the only changes. Bottom: the thermal, energy and learning columns of the control plane (4 to 9).}
+\includegraphics[width=0.96\textwidth]{fig_architecture_merged.pdf}
+\caption{\muKV\ on the phone. Top: the inference pass; scoring, selection and compaction (1 to 3) are the only changes. Bottom: the control plane, once per request. The same nine numbers name the same parts.}
 \label{fig:architecture}
 \end{figure*}
 
@@ -144,14 +144,7 @@ A userspace daemon samples skin, battery and DDR temperature at 2\,Hz and drives
 \subsection{Energy-aware scheduling: one lever, two loops}
 \label{sec:sched}
 
-\begin{figure*}[tp]
-\centering
-\includegraphics[width=0.96\textwidth]{fig_control_plane_tikz.pdf}
-\caption{The energy-aware control plane, once per request. Circled numbers are the components of Figure~\ref{fig:architecture}, so the same part carries the same number in both figures. Run is that figure's steps 1 to 3.}
-\label{fig:controlplane}
-\end{figure*}
-
-The scheduler runs once per request in about 0.3\,s (Figure~\ref{fig:controlplane}). It reads the battery level, the charging state, the prompt length, and whether the caller fixed an answer length. A tier follows: mains or above 50\%, 21 to 50\%, and 20\% or below. The tier sets a lever $L\in\{1, 0.5, 0\}$ plus a learned bias. $L$ fixes every rate the scheduler trades at. The exchange rate a step must beat is 1.5, 0.8 or 0.5\,J saved per second given up. A quality floor and a time slack follow it. So does the answer cap when the caller left the length open: 4096, 1024 or 512 tokens.
+The scheduler runs once per request in about 0.3\,s (Figure~\ref{fig:architecture}). It reads the battery level, the charging state, the prompt length, and whether the caller fixed an answer length. A tier follows: mains or above 50\%, 21 to 50\%, and 20\% or below. The tier sets a lever $L\in\{1, 0.5, 0\}$ plus a learned bias. $L$ fixes every rate the scheduler trades at. The exchange rate a step must beat is 1.5, 0.8 or 0.5\,J saved per second given up. A quality floor and a time slack follow it. So does the answer cap when the caller left the length open: 4096, 1024 or 512 tokens.
 
 \paragraph{Plan.} A measured cost table holds energy and time per plan. A plan is a GPU clock cap for prefill, one for decode, and the cache budget. The walk down the plan ladder takes a step only if the predicted saving beats the exchange rate and the predicted time stays inside the budget. The split plan, prefill at 1200\,MHz and decode at 902, is the two-configuration schedule of Kim, Imes and Hoffmann~\cite{kim2015racepace}. It is also the best measured point by energy-delay product (\S\ref{sec:eval-energy}).
 

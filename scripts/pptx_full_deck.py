@@ -98,8 +98,8 @@ foot(s,"μKV is the existence proof that one policy can hold all three at once. 
 
 # ---------- 4 architecture ----------
 s,k=slide(); header(s,"DESIGN","μKV on the phone: three changes to the pass, one controller beside it",k)
-fit(s,PNG+"/fig_architecture_tikz.png",6.67,1.75,12.2,4.3)
-foot(s,"Circled numbers are shared with the control-plane figure: 1-3 the pass, 4 sense, 5 decide, 6 act, 7 measure, 8 learn, 9 thermal guard. Same part, same number, both figures.")
+fit(s,PNG+"/fig_architecture_merged.png",6.67,1.75,12.2,4.3)
+foot(s,"One figure, nine parts: 1-3 the pass, 4 sense, 5 decide, 6 act, 7 measure, 8 learn, 9 thermal guard. The paper's architecture and control-plane figures are now merged into this one.")
 
 # ---------- 5 mechanism ----------
 s,k=slide(); header(s,"MECHANISM","Selection is sequence-level, from real attention captured in-graph",k)
@@ -305,7 +305,7 @@ text(s,0.6,4.4,12.1,2.2,["KV-Compress reports the same limitation independently:
 # ---------- 17 control plane ----------
 s,k=slide(); header(s,"CONTROL PLANE","One lever, two loops, and a cost table measured on the device",k)
 fit(s,PNG+"/fig_control_plane_tikz.png",6.67,1.8,12.2,4.0)
-foot(s,"Numbers match the architecture figure, so the same part carries the same number in both. Run is steps 1 to 3. No online policy learning runs on the phone; the decision is a deterministic table walk.")
+foot(s,"The lower half of the figure above, enlarged. Run is steps 1 to 3. No online policy learning runs on the phone; the decision is a deterministic table walk.")
 
 # ---------- 18 watchdog ladders ----------
 s,k=slide(); header(s,"THE WATCHDOG IS A LADDER, NOT A CAP","Three caps, five ladders, three sensors, reduce only",k)
