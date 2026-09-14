@@ -26,6 +26,12 @@ PARTS = [
     ('07_thermal',  'Thermal: clock ladders',      (3.2, 6.9, 33.2, 52.6)),
     ('08_energy',   'Energy: tier, lever, plan',   (35.2, 6.9, 66.2, 52.6)),
     ('09_learn',    'Learning: meter and loops',   (68.2, 6.9, 97.4, 52.6)),
+    # one box at a time, so 5 to 9 get the same treatment as steps 1 to 3
+    ('12_tier',     'Tier to lever L',             (36.6, 20.9, 65.6, 35.0)),
+    ('13_plan',     'Plan',                        (36.6, 6.8, 65.6, 20.9)),
+    ('14_meter',    'Meter',                       (69.6, 35.0, 97.6, 49.4)),
+    ('15_loops',    'Two loops',                   (69.6, 20.9, 97.6, 35.0)),
+    ('16_costtable','Cost table',                  (69.6, 6.8, 97.6, 20.9)),
 ]
 DIM, EDGE = 0.80, '#D55E00'
 FW0, FH0 = 7.2, 3.64          # the source figure's own size, so a crop keeps its proportions
