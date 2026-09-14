@@ -92,7 +92,7 @@ arr(cB[0] + cB[1]/2, r1 - 0.2, cB[0] + cB[1]/2, r2 + hb + 0.3, c=INK)
 arr(cB[0] + cB[1]/2, r2 - 0.2, cB[0] + cB[1]/2, r3 + hb + 0.3, c=ORANGE, ls='--')
 
 box(cC[0], r1, cC[1], hb, 'Meter', 'USB rail + coulomb\ncounter, per phase', ec=ORANGE, fc=ORANGEF); step(cC[0], r1 + hb + 0.3, 7)
-box(cC[0], r2, cC[1], hb, 'Two loops', 'time miss: L + 0.1\nenergy miss: L - 0.1', ec=ORANGE, fc=ORANGEF); step(cC[0], r2 + hb + 0.3, 8)
+box(cC[0], r2, cC[1], hb, 'Two loops', 'time miss: bias + 0.1\nenergy miss: bias - 0.1', ec=ORANGE, fc=ORANGEF); step(cC[0], r2 + hb + 0.3, 8)
 box(cC[0], r3, cC[1], hb, 'Cost table', 'EMA per plan,\nclipped to 10%', ec=ORANGE, fc=ORANGEF); step(cC[0], r3 + hb + 0.3, 9)
 arr(cC[0] + cC[1]/2, r1 - 0.2, cC[0] + cC[1]/2, r2 + hb + 0.3, c=INK)
 arr(cC[0] + cC[1]/2, r2 - 0.2, cC[0] + cC[1]/2, r3 + hb + 0.3, c=INK)
