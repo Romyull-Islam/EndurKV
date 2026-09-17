@@ -20,8 +20,8 @@ plt.rcParams.update({'font.family': 'DejaVu Sans', 'font.size': 7.6})
 
 #  label                       cells%  mult  kernel  (dx, dy) label nudge   ha
 P = [('no eviction',            100.0, 1.00, 'on',  (-2.5,  0.11), 'right'),
-     ('SnapKV',                  61.8, 0.18, 'off', ( 2.5,  0.02), 'left'),
-     ('H2O',                     62.7, 0.15, 'off', (-2.5,  0.00), 'right'),
+     ('SnapKV',                  61.8, 0.18, 'off', ( 3.0,  0.05), 'left'),
+     ('H2O',                     62.7, 0.15, 'off', (-3.0, -0.05), 'right'),
      ('TOVA',                    42.3, 0.19, 'off', ( 2.5,  0.02), 'left'),
      ('Ada-KV',                  36.1, 0.16, 'off', (-2.5,  0.00), 'right'),
      ('StreamingLLM, kernel off', 20.6, 0.26, 'off', ( 2.5,  0.02), 'left'),
