@@ -92,6 +92,17 @@ for pol in ('snapkv', 'adakv', 'h2o', 'tova', 'streamingllm'):
     r = [_lb[p][pol] / _lb[p]['vanilla'] for p in _lb if pol in _lb[p] and _lb[p].get('vanilla') and _lb[p].get(pol)]
     if r: S['own_budget_cpu_retention'][pol] = (statistics.mean(r), len(r))
 S['own_budget_gpu_cells'] = {k: D['new'][k].get('kept') for k in D['new'] if k.endswith('_own')}
+# Phi-3-mini on the Adreno, gated campaign (run_phi3_gpu_complete.sh, /tmp/phi3_gpu_complete): every policy runs on the
+# fused kernel here (SnapKV and Ada-KV promoted to the side node by the driver gate), so the rows isolate cache size.
+PHI3_BYTES_PER_CELL = 32 * 32 * 96 * 2 * 2   # 32 layers, 32 kv heads, head_dim 96, f16 K and V
+S['phi3_gpu'] = {}
+for pol in ('vanilla', 'streamingllm', 'mukv', 'adakv', 'snapkv'):
+    m = f'/tmp/phi3_gpu_complete/{pol}/meta.json'
+    if os.path.exists(m):
+        j = json.load(open(m)); S['phi3_gpu'][pol] = {'tps': j['decode_tps'], 'cells': int(round(j['retained_kv_bytes'] / PHI3_BYTES_PER_CELL)), 'n_prompt': j['n_prompt_tokens']}
+if 'vanilla' in S['phi3_gpu']:
+    vb = S['phi3_gpu']['vanilla']['tps']
+    for pol in S['phi3_gpu']: S['phi3_gpu'][pol]['x'] = S['phi3_gpu'][pol]['tps'] / vb
 D['summary'] = S
 json.dump(D, open('/tmp/claims_data.json', 'w'), indent=1)
 print("new cells:", len(D['new']), "| published:", len(P))
@@ -99,4 +110,4 @@ print("gpu vanilla aug n=%d median=%s | new n=%d median=%s" % (S['gpu_vanilla_au
 for pol in ('snapkv', 'adakv', 'h2o', 'tova'): print(" ", pol, S[pol + '_gpu_runs'])
 print("kernel-off @published:", S['kernel_off_published_budget'])
 print("realized cells:", S['realized_cells'])
-print("own-budget gpu:", S['own_budget_gpu'], S['own_budget_gpu_cells']); print("own-budget cpu retention:", S['own_budget_cpu_retention'])
+print("own-budget gpu:", S['own_budget_gpu'], S['own_budget_gpu_cells']); print('phi3 gpu:', {k: (round(v['x'], 2), v['cells']) for k, v in S['phi3_gpu'].items()}); print("own-budget cpu retention:", S['own_budget_cpu_retention'])
