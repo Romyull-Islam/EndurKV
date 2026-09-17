@@ -37,7 +37,12 @@ for j in sorted(glob.glob('/tmp/qres/*.json')):
 P = D['published']
 def add(tag, jpath, errpath=None):
     if os.path.exists(jpath):
-        m = meta(jpath); m['kept'] = kept(errpath) if errpath else None; P[tag] = m
+        m = meta(jpath); m['kept'] = kept(errpath) if errpath else None
+        if m['kept'] is None:
+            try: rb = json.load(open(jpath)).get('retained_kv_bytes')
+            except Exception: rb = None
+            if rb: m['kept'] = int(rb // BYTES_PER_CELL)   # cells live after prefill, from the run's own byte count
+        P[tag] = m
 for pol in ('snapkv', 'adakv', 'h2o', 'tova'):
     add(pol + '_aug05', f'/tmp/phone_gpu_16k/llama1b_{pol}/meta.json', f'/tmp/phone_gpu_16k/llama1b_{pol}/err')
 for r in (1, 2, 3):
@@ -66,6 +71,13 @@ S['kernel_off_published_budget'] = {k: D['new'][k]['tps'] for k in D['new'] if k
 S['realized_cells'] = {k: D['new'][k]['kept'] for k in D['new'] if re.search(r'_k\d+$', k)}
 for pol in ('snapkv', 'adakv', 'h2o', 'tova'):
     if pol + '_aug05' in P: S['realized_cells'][pol + '_k1024_aug05'] = P[pol + '_aug05']['kept']
+import statistics as _st2
+_mk = [P[f'mukv_aug_r{r}']['kept'] for r in (1, 2, 3) if P.get(f'mukv_aug_r{r}', {}).get('kept')]
+_sk = [P[f'sfown_aug_r{r}']['kept'] for r in (1, 2, 3) if P.get(f'sfown_aug_r{r}', {}).get('kept')]
+if _mk: S['realized_cells']['mukv_k1024'] = int(_st2.median(_mk))
+if _sk: S['realized_cells']['sllm_k2004'] = int(_st2.median(_sk))   # StreamingLLM at its published budget, 4 + 2000
+_sn = [v for v in (P.get('snapkv_aug05', {}).get('kept'), D['new'].get('snapkv_r1', {}).get('kept')) if v]
+if _sn: S['realized_cells']['snapkv_k1024'] = int(_st2.median(_sn))   # median of the two campaigns, as in the papers
 S['own_budget_gpu'] = {k: D['new'][k]['tps'] for k in D['new'] if k.endswith('_own')}
 # CPU own-budget retention: LongBench prompts on the phone CPU, each policy at its published budget,
 # retained_kv_bytes against the vanilla run of the same prompt, mean of the per-prompt ratio (the papers' number; /tmp/lb_native)
