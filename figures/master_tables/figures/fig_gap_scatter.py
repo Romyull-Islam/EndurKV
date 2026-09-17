@@ -23,11 +23,9 @@ P = [('no eviction',            100.0, 1.00, 'on',  (-2.5,  0.11), 'right'),
      ('H2O',                     62.7, 0.15, 'off', (-2.5,  0.00), 'right'),
      ('TOVA',                    42.3, 0.18, 'off', ( 2.5,  0.02), 'left'),
      ('Ada-KV',                  36.1, 0.12, 'off', (-2.5,  0.00), 'right'),
-     ('StreamingLLM, own budget',20.6, 1.19, 'on',  ( 2.5,  0.03), 'left'),
-     ('StreamingLLM, $K$=1024',  10.5, 1.17, 'on',  ( 2.5, -0.09), 'left'),
-     ('same policy, same $K$,\nforced off the kernel', 8.0, 0.24, 'off', ( 2.5, 0.06), 'left'),
+     ('StreamingLLM, its published budget', 20.6, 1.19, 'on', ( 2.5, 0.03), 'left'),
      ('$\\mu$KV',                 7.4, 1.19, 'on',  ( 0.0,  0.12), 'center'),
-     ('$\\mu$KV, no compaction',  7.4, 1.05, 'on',  ( 9.0, -0.09), 'left')]
+     ('$\\mu$KV, no compaction',  7.4, 1.05, 'on',  ( 2.5, -0.09), 'left')]
 
 fig, ax = plt.subplots(figsize=(7.0, 2.75), dpi=200)
 ax.axhline(1.0, color=REF, lw=0.9, ls='--', zorder=1)
