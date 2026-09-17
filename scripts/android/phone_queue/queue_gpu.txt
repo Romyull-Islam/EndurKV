@@ -1,30 +1,21 @@
-# ordered by claim value per minute; cells with a result json are skipped
-# anchor
+# 04:14 reorder: finish the diagonal (2 fast cells), then the headline repeats
 v_r1 gen 4096 --policy vanilla --k-nominal 1024
-# claim: kernel, not retention (E2b, first sample)
 shown_r1 gen 4096 --policy streamingllm --n-sink 4 --k-nominal 2004 --no-fa-positional --no-defrag
-# claim: budgets do not materialize (E4 at 256 and 2048; 1024 exists)
 snapkv_k256 gen 64 --policy snapkv --obs-window 64 --snapkv-kernel 5 --n-sink 0 --k-nominal 256
-adakv_k256 gen 64 --policy adakv --n-sink 0 --obs-window 32 --k-nominal 256
-h2o_k256 gen 64 --policy h2o --n-sink 0 --obs-window 64 --k-nominal 256
-tova_k256 gen 64 --policy tova --k-nominal 256
 sllm_k256 gen 64 --policy streamingllm --n-sink 4 --compact-inplace --k-nominal 256
 mukv_k256 gen 64 --policy v1_fa2 --fa-on-evict --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70 --compact-inplace --k-nominal 256
 snapkv_k2048 gen 64 --policy snapkv --obs-window 64 --snapkv-kernel 5 --n-sink 0 --k-nominal 2048
-adakv_k2048 gen 64 --policy adakv --n-sink 0 --obs-window 32 --k-nominal 2048
-h2o_k2048 gen 64 --policy h2o --n-sink 0 --obs-window 64 --k-nominal 2048
-tova_k2048 gen 64 --policy tova --k-nominal 2048
 sllm_k2048 gen 64 --policy streamingllm --n-sink 4 --compact-inplace --k-nominal 2048
 mukv_k2048 gen 64 --policy v1_fa2 --fa-on-evict --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70 --compact-inplace --k-nominal 2048
-# claim: evicting is slower than not evicting (E1, second sample of each)
 snapkv_r1 gen 4096 --policy snapkv --obs-window 64 --snapkv-kernel 5 --n-sink 0 --k-nominal 1024
 adakv_r1 gen 4096 --policy adakv --n-sink 0 --obs-window 32 --k-nominal 1024
 h2o_r1 gen 4096 --policy h2o --n-sink 0 --obs-window 64 --k-nominal 1024
 tova_r1 gen 4096 --policy tova --k-nominal 1024
-# claim: even at their own budgets (E3, the two ends)
 snapkv_own gen 4096 --policy snapkv --obs-window 64 --snapkv-kernel 5 --n-sink 0 --k-nominal 2048
 adakv_own gen 4096 --policy adakv --n-sink 0 --obs-window 32 --k-nominal 2048
-# later: remaining repeats and the rest
+adakv_k2048 gen 64 --policy adakv --n-sink 0 --obs-window 32 --k-nominal 2048
+h2o_k2048 gen 64 --policy h2o --n-sink 0 --obs-window 64 --k-nominal 2048
+tova_k2048 gen 64 --policy tova --k-nominal 2048
 v_r2 gen 4096 --policy vanilla --k-nominal 1024
 shown_r2 gen 4096 --policy streamingllm --n-sink 4 --k-nominal 2004 --no-fa-positional --no-defrag
 snapkv_r2 gen 4096 --policy snapkv --obs-window 64 --snapkv-kernel 5 --n-sink 0 --k-nominal 1024
@@ -52,3 +43,6 @@ h2o_k1024 gen 64 --policy h2o --n-sink 0 --obs-window 64 --k-nominal 1024
 tova_k1024 gen 64 --policy tova --k-nominal 1024
 sllm_k1024 gen 64 --policy streamingllm --n-sink 4 --compact-inplace --k-nominal 1024
 mukv_k1024 gen 64 --policy v1_fa2 --fa-on-evict --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70 --compact-inplace --k-nominal 1024
+adakv_k256 gen 64 --policy adakv --n-sink 0 --obs-window 32 --k-nominal 256
+h2o_k256 gen 64 --policy h2o --n-sink 0 --obs-window 64 --k-nominal 256
+tova_k256 gen 64 --policy tova --k-nominal 256
