@@ -8,7 +8,8 @@ state is the only categorical split, encoded by hue AND marker shape so identity
 never rests on colour alone.
 
 Every point is measured, Llama-3.2-1B, ctx 16384, 9737-token prompt, 4096
-generated. Multipliers are against the no-eviction arm of the same session.
+generated. Multipliers are against the pooled no-eviction median (24.34 tok/s, n=4);
+per-head points are medians of two campaigns.
 """
 import matplotlib
 matplotlib.use('Agg')
@@ -19,10 +20,11 @@ plt.rcParams.update({'font.family': 'DejaVu Sans', 'font.size': 7.6})
 
 #  label                       cells%  mult  kernel  (dx, dy) label nudge   ha
 P = [('no eviction',            100.0, 1.00, 'on',  (-2.5,  0.11), 'right'),
-     ('SnapKV',                  67.7, 0.20, 'off', ( 2.5,  0.02), 'left'),
+     ('SnapKV',                  64.7, 0.18, 'off', ( 2.5,  0.02), 'left'),
      ('H2O',                     62.7, 0.15, 'off', (-2.5,  0.00), 'right'),
-     ('TOVA',                    42.3, 0.18, 'off', ( 2.5,  0.02), 'left'),
-     ('Ada-KV',                  36.1, 0.12, 'off', (-2.5,  0.00), 'right'),
+     ('TOVA',                    42.3, 0.19, 'off', ( 2.5,  0.02), 'left'),
+     ('Ada-KV',                  36.1, 0.14, 'off', (-2.5,  0.00), 'right'),
+     ('StreamingLLM, kernel off', 20.6, 0.28, 'off', ( 2.5,  0.02), 'left'),
      ('StreamingLLM, its published budget', 20.6, 1.19, 'on', ( 2.5, 0.03), 'left'),
      ('$\\mu$KV',                 7.4, 1.19, 'on',  ( 0.0,  0.12), 'center'),
      ('$\\mu$KV, no compaction',  7.4, 1.05, 'on',  ( 2.5,  0.00), 'left')]
