@@ -110,11 +110,23 @@ cell(){ # tag mode flags...
   echo "[$(date +%H:%M:%S)] cooling for $TAG ..."; settle || { echo "  [SKIP-HOT] $TAG"; return; }
   adb_safe_shell "su -c 'rm -f /data/local/tmp/sl_$TAG.csv; nohup sh /data/local/tmp/sample_sensors.sh --out /data/local/tmp/sl_$TAG.csv --hz 2 >/dev/null 2>&1 &'" < /dev/null
   echo "[$(date +%H:%M:%S)] running $TAG ..."
-  adb_safe_shell "su -c 'cd $BIN && LD_LIBRARY_PATH=$BIN $PIN ./eviction_bench --model $M --prompt $P \
+  # Launch detached on the phone and poll. Every adb call stays short, so a
+  # dropped tunnel can neither kill a 20-minute run nor trip the helper's
+  # timeout, whose remedy (adb kill-server) is fatal through a tunnel.
+  adb_safe_shell "su -c 'rm -f $DEV/$TAG.json; cd $BIN && LD_LIBRARY_PATH=$BIN nohup $PIN ./eviction_bench --model $M --prompt $P \
     --prompt-id $TAG $EX --ctx-size 16384 --seed 42 --threads 4 --n-gpu-layers 99 --greedy \
     --cache-type-k f16 --cache-type-v f16 $* --n-batch 512 --n-ubatch 64 \
     --out-meta $DEV/$TAG.json --out-gen $DEV/$TAG.gen --out-csv /dev/null \
-    > /dev/null 2> $DEV/$TAG.err'" < /dev/null
+    > /dev/null 2> $DEV/$TAG.err < /dev/null &'" < /dev/null
+  local T0=$(date +%s)
+  while true; do
+    sleep 30
+    done_flag=$(adb_safe_shell "su -c 'test -s $DEV/$TAG.json && echo yes || echo no'" < /dev/null | tr -d '\r' | tail -1)
+    [ "$done_flag" = "yes" ] && break
+    alive=$(adb_safe_shell "su -c 'pgrep -f \"prompt-id $TAG \" | wc -l'" < /dev/null | tr -d '\r' | tail -1)
+    if [ "${alive:-1}" = "0" ]; then echo "  [$TAG] process gone without a result"; break; fi
+    [ $(($(date +%s)-T0)) -gt 5400 ] && { echo "  [$TAG] 90 min, giving up"; adb_safe_shell "su -c 'pkill -f \"prompt-id $TAG \"'" < /dev/null; break; }
+  done
   adb_safe_shell "su -c 'pkill -f sample_sensors'" < /dev/null
   adb_safe_pull "$DEV/$TAG.json" "$D/meta.json" >/dev/null 2>&1
   adb_safe_pull "$DEV/$TAG.gen"  "$D/gen.txt"   >/dev/null 2>&1
