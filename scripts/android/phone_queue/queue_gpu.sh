@@ -30,7 +30,7 @@ settle(){
     log "  settle ddr=${sd}C batt=${sb}C"
     [ $sd -le 35 ] && [ $sb -le 33 ] && return 0
   done; return 1; }
-grep -vE '^\s*(#|$)' $Q | while read -r TAG MODE STEPS FLAGS; do
+grep -vE '^[[:space:]]*(#|$)' $Q | while read -r TAG MODE STEPS FLAGS; do
   [ -s $RES/$TAG.json ] && { log "[$TAG] cached"; continue; }
   if [ "$MODE" = ppl ]; then EX="--eval-mode ppl --eval-text $E"; else EX="--eval-mode gen --max-tokens $STEPS --ignore-eos"; fi
   log "[$TAG] cooling"; settle || log "[$TAG] hot after 3 settles, running anyway"
