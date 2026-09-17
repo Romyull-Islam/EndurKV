@@ -92,6 +92,7 @@ for pol in ('snapkv', 'adakv', 'h2o', 'tova', 'streamingllm'):
     r = [_lb[p][pol] / _lb[p]['vanilla'] for p in _lb if pol in _lb[p] and _lb[p].get('vanilla') and _lb[p].get(pol)]
     if r: S['own_budget_cpu_retention'][pol] = (statistics.mean(r), len(r))
 S['own_budget_gpu_cells'] = {k: D['new'][k].get('kept') for k in D['new'] if k.endswith('_own')}
+S['sllm_nocompact'] = {k: D['new'][k]['tps'] for k in D['new'] if k.startswith('sllm_nocompact')}   # published budget, fused kernel on, --no-defrag
 # Phi-3-mini on the Adreno, gated campaign (run_phi3_gpu_complete.sh, /tmp/phi3_gpu_complete): every policy runs on the
 # fused kernel here (SnapKV and Ada-KV promoted to the side node by the driver gate), so the rows isolate cache size.
 PHI3_BYTES_PER_CELL = 32 * 32 * 96 * 2 * 2   # 32 layers, 32 kv heads, head_dim 96, f16 K and V
