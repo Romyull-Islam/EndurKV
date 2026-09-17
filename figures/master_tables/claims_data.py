@@ -67,6 +67,19 @@ S['realized_cells'] = {k: D['new'][k]['kept'] for k in D['new'] if re.search(r'_
 for pol in ('snapkv', 'adakv', 'h2o', 'tova'):
     if pol + '_aug05' in P: S['realized_cells'][pol + '_k1024_aug05'] = P[pol + '_aug05']['kept']
 S['own_budget_gpu'] = {k: D['new'][k]['tps'] for k in D['new'] if k.endswith('_own')}
+# CPU own-budget retention: LongBench prompts on the phone CPU, each policy at its published budget,
+# retained_kv_bytes against the vanilla run of the same prompt, mean of the per-prompt ratio (the papers' number; /tmp/lb_native)
+import glob, statistics
+_lb = {}
+for m in glob.glob('/tmp/lb_native/*/meta.json'):
+    try: j = json.load(open(m))
+    except Exception: continue
+    pid = os.path.basename(os.path.dirname(m)).split('_', 1)[1]; _lb.setdefault(pid, {})[j.get('policy')] = j.get('retained_kv_bytes')
+S['own_budget_cpu_retention'] = {}
+for pol in ('snapkv', 'adakv', 'h2o', 'tova', 'streamingllm'):
+    r = [_lb[p][pol] / _lb[p]['vanilla'] for p in _lb if pol in _lb[p] and _lb[p].get('vanilla') and _lb[p].get(pol)]
+    if r: S['own_budget_cpu_retention'][pol] = (statistics.mean(r), len(r))
+S['own_budget_gpu_cells'] = {k: D['new'][k].get('kept') for k in D['new'] if k.endswith('_own')}
 D['summary'] = S
 json.dump(D, open('/tmp/claims_data.json', 'w'), indent=1)
 print("new cells:", len(D['new']), "| published:", len(P))
@@ -74,4 +87,4 @@ print("gpu vanilla aug n=%d median=%s | new n=%d median=%s" % (S['gpu_vanilla_au
 for pol in ('snapkv', 'adakv', 'h2o', 'tova'): print(" ", pol, S[pol + '_gpu_runs'])
 print("kernel-off @published:", S['kernel_off_published_budget'])
 print("realized cells:", S['realized_cells'])
-print("own-budget gpu:", S['own_budget_gpu'])
+print("own-budget gpu:", S['own_budget_gpu'], S['own_budget_gpu_cells']); print("own-budget cpu retention:", S['own_budget_cpu_retention'])
