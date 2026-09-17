@@ -6,8 +6,8 @@ paired dot plot (dumbbell) because every entity has exactly two values and the
 reader's question is about the gap between them, not the absolute level.
 x is a ratio spanning 40x, so it is logarithmic; the 1.0 rule is the anchor.
 
-CPU: /tmp/nat_cpu, vanilla 5.02 tok/s. GPU: vanilla 24.34 tok/s (pooled median, n=4); per-head GPU values are
-medians of two campaigns.
+CPU: /tmp/nat_cpu, vanilla 5.02 tok/s. GPU: vanilla 24.68 tok/s (pooled median, n=6); per-head GPU values are
+medians of three runs.
 Llama-3.2-1B, 9737-token prompt, 4096 generated, ctx 16384.
 """
 import matplotlib
@@ -18,11 +18,11 @@ CPU, GPU, REF, INK, MUTED = '#0072B2', '#D55E00', '#8f8f8f', '#1a1a1a', '#5a5a5a
 plt.rcParams.update({'font.family': 'DejaVu Sans', 'font.size': 7.6})
 
 #  policy      cpu tok/s  gpu tok/s
-R = [('SnapKV',    6.78,  4.35),
-     ('Ada-KV',    6.70,  3.42),
-     ('TOVA',      5.99,  4.57),
-     ('H2O',       5.84,  3.59)]
-CPU_BASE, GPU_BASE = 5.02, 24.34
+R = [('SnapKV',    6.78,  4.36),
+     ('Ada-KV',    6.70,  3.96),
+     ('TOVA',      5.99,  4.81),
+     ('H2O',       5.84,  3.61)]
+CPU_BASE, GPU_BASE = 5.02, 24.68
 
 fig, ax = plt.subplots(figsize=(3.33, 2.1), dpi=200)
 ax.axvspan(0.08, 1.0, color='#f6f2ef', zorder=0)
