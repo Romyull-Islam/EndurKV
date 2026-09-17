@@ -25,7 +25,7 @@ P = [('no eviction',            100.0, 1.00, 'on',  (-2.5,  0.11), 'right'),
      ('Ada-KV',                  36.1, 0.12, 'off', (-2.5,  0.00), 'right'),
      ('StreamingLLM, its published budget', 20.6, 1.19, 'on', ( 2.5, 0.03), 'left'),
      ('$\\mu$KV',                 7.4, 1.19, 'on',  ( 0.0,  0.12), 'center'),
-     ('$\\mu$KV, no compaction',  7.4, 1.05, 'on',  ( 2.5, -0.09), 'left')]
+     ('$\\mu$KV, no compaction',  7.4, 1.05, 'on',  ( 2.5,  0.00), 'left')]
 
 fig, ax = plt.subplots(figsize=(7.0, 2.75), dpi=200)
 ax.axhline(1.0, color=REF, lw=0.9, ls='--', zorder=1)
