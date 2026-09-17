@@ -55,7 +55,7 @@ def cell(name):
                 cc = max([fnum(rows[i],c) or 0 for c in cpu_cols]); pk['cpu'] = max(pk['cpu'], cc/1000)
     return dict(g=g, ppl=(pp or {}).get('perplexity'), E=E, pk=pk)
 
-ORDER = [('vanilla','vanilla'), ('snapkv','SnapKV'), ('adakv','AdaKV'),
+ORDER = [('vanilla','vanilla'), ('snapkv','SnapKV'), ('adakv','Ada-KV'),
          ('streamingllm','StrLLM'), ('h2o','H2O'), ('tova','TOVA'), ('tova_canon','TOVA-c'),
          ('mukv_swap','μKV-swap'), ('mukv_faon','μKV')]
 cells = {k: cell(k) for k, _ in ORDER}
@@ -106,7 +106,7 @@ per_cell_b = None
 v = cells.get('vanilla')
 if v and v['g'].get('retained_kv_bytes'): per_cell_b = v['g']['retained_kv_bytes']/v['g']['n_prompt_tokens']
 SHOW = [k for k in ('vanilla','snapkv','adakv','mukv_faon') if cells.get(k)]
-LBL  = dict(vanilla='vanilla', snapkv='SnapKV', adakv='AdaKV', mukv_faon='μKV')
+LBL  = dict(vanilla='vanilla', snapkv='SnapKV', adakv='Ada-KV', mukv_faon='μKV')
 for k in SHOW:
     d = os.path.join(ROOT, k); g = cells[k]['g']
     xs, ys = [], []
