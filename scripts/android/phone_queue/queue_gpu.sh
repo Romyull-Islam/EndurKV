@@ -33,7 +33,9 @@ settle(){
 grep -vE '^[[:space:]]*(#|$)' $Q | while read -r TAG MODE STEPS FLAGS; do
   [ -s $RES/$TAG.json ] && { log "[$TAG] cached"; continue; }
   if [ "$MODE" = ppl ]; then EX="--eval-mode ppl --eval-text $E"; else EX="--eval-mode gen --max-tokens $STEPS --ignore-eos"; fi
-  log "[$TAG] cooling"; settle || log "[$TAG] hot after 3 settles, running anyway"
+  # a cells-only cell (64-token decode) measures what survives prefill, which does not
+  # depend on temperature; skip the gate there and spend the phone time on measurements
+  if [ "$STEPS" -le 64 ]; then log "[$TAG] no gate, cells-only cell"; else log "[$TAG] cooling"; settle || log "[$TAG] hot after 3 settles, running anyway"; fi
   rm -f $RES/$TAG.sensors.csv
   nohup sh /data/local/tmp/sample_sensors.sh --out $RES/$TAG.sensors.csv --hz 2 >/dev/null 2>&1 &
   log "[$TAG] running"
