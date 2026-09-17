@@ -14,9 +14,15 @@ def meta(path):
                 steps=int(g('n_decode_steps') or 0), prompt=int(g('n_prompt_tokens') or 0),
                 k=int(g('k_nominal') or 0), ppl=float(g('perplexity') or 0))
 
+BYTES_PER_CELL = 16 * 8 * 64 * 2 * 2   # Llama-3.2-1B, f16 K and V: 32 KiB per cell
 def kept(errpath):
+    """Cells live after prefill, by the paper's method: retained_kv bytes / bytes per cell.
+    The [evict-dbg] kept= line is a pre-gate pool for muKV and is not used."""
     if not os.path.exists(errpath): return None
-    m = re.search(r'kept=(\d+)', open(errpath, errors='ignore').read())
+    t = open(errpath, errors='ignore').read()
+    m = re.search(r'\[cache\] retained_kv=([0-9.]+) MiB', t)
+    if m: return int(round(float(m.group(1)) * 1048576 / BYTES_PER_CELL))
+    m = re.search(r'kept=(\d+)', t)
     return int(m.group(1)) if m else None
 
 D = {'new': {}, 'published': {}}
