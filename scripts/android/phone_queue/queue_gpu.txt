@@ -1,6 +1,7 @@
 # 04:14 reorder: finish the diagonal (2 fast cells), then the headline repeats
 v_r1 gen 4096 --policy vanilla --k-nominal 1024
 shown_r1 gen 4096 --policy streamingllm --n-sink 4 --k-nominal 2004 --no-fa-positional --no-defrag
+sllm_nocompact_r1 gen 4096 --policy streamingllm --n-sink 4 --k-nominal 2004 --no-defrag
 snapkv_k256 gen 64 --policy snapkv --obs-window 64 --snapkv-kernel 5 --n-sink 0 --k-nominal 256
 sllm_k256 gen 64 --policy streamingllm --n-sink 4 --compact-inplace --k-nominal 256
 mukv_k256 gen 64 --policy v1_fa2 --fa-on-evict --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70 --compact-inplace --k-nominal 256
