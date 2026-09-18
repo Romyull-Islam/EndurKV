@@ -8,8 +8,8 @@ state is the only categorical split, encoded by hue AND marker shape so identity
 never rests on colour alone.
 
 Every point is measured, Llama-3.2-1B, ctx 16384, 9737-token prompt, 4096
-generated. Multipliers are against the pooled no-eviction median (24.68 tok/s, n=6);
-per-head points are medians of three runs.
+generated. Multipliers are against the no-eviction median of the same session (24.30 August,
+25.61 September), then the median over runs; per-head points are medians of three runs.
 """
 import matplotlib
 matplotlib.use('Agg')
@@ -20,12 +20,12 @@ plt.rcParams.update({'font.family': 'DejaVu Sans', 'font.size': 7.6})
 
 #  label                       cells%  mult  kernel  (dx, dy) label nudge   ha
 P = [('no eviction',            100.0, 1.00, 'on',  (-2.5,  0.11), 'right'),
-     ('SnapKV',                  61.8, 0.18, 'off', ( 3.0,  0.05), 'left'),
+     ('SnapKV',                  61.8, 0.17, 'off', ( 3.0,  0.05), 'left'),
      ('H2O',                     62.7, 0.15, 'off', (-3.0, -0.05), 'right'),
      ('TOVA',                    42.3, 0.19, 'off', ( 2.5,  0.02), 'left'),
-     ('Ada-KV',                  36.1, 0.16, 'off', (-2.5,  0.00), 'right'),
-     ('StreamingLLM, kernel off', 20.6, 0.26, 'off', ( 2.5,  0.02), 'left'),
-     ('StreamingLLM, its published budget', 20.6, 1.18, 'on', ( 2.5, 0.03), 'left')]
+     ('Ada-KV',                  36.1, 0.15, 'off', (-2.5,  0.00), 'right'),
+     ('StreamingLLM, kernel off', 20.6, 0.25, 'off', ( 2.5,  0.02), 'left'),
+     ('StreamingLLM, its published budget', 20.6, 1.19, 'on', ( 2.5, 0.03), 'left')]
 
 fig, ax = plt.subplots(figsize=(7.0, 2.75), dpi=200)
 ax.axhline(1.0, color=REF, lw=0.9, ls='--', zorder=1)

@@ -6,8 +6,7 @@ paired dot plot (dumbbell) because every entity has exactly two values and the
 reader's question is about the gap between them, not the absolute level.
 x is a ratio spanning 40x, so it is logarithmic; the 1.0 rule is the anchor.
 
-CPU: /tmp/nat_cpu, vanilla 5.02 tok/s. GPU: vanilla 24.68 tok/s (pooled median, n=6); per-head GPU values are
-medians of three runs.
+CPU: /tmp/nat_cpu, vanilla 5.02 tok/s. GPU ratios are medians over runs against the same session's no-eviction arm (24.30 August, 25.61 September).
 Llama-3.2-1B, 9737-token prompt, 4096 generated, ctx 16384.
 """
 import matplotlib
@@ -17,11 +16,11 @@ import matplotlib.pyplot as plt
 CPU, GPU, REF, INK, MUTED = '#0072B2', '#D55E00', '#8f8f8f', '#1a1a1a', '#5a5a5a'
 plt.rcParams.update({'font.family': 'DejaVu Sans', 'font.size': 7.6})
 
-#  policy      cpu tok/s  gpu tok/s
-R = [('SnapKV',    6.78,  4.36),
-     ('Ada-KV',    6.70,  3.96),
-     ('TOVA',      5.99,  4.81),
-     ('H2O',       5.84,  3.61)]
+#  policy      cpu tok/s  gpu ratio (median over runs of tok/s against the same session's no-eviction arm)
+R = [('SnapKV',    6.78,  0.17),
+     ('Ada-KV',    6.70,  0.15),
+     ('TOVA',      5.99,  0.19),
+     ('H2O',       5.84,  0.15)]
 CPU_BASE, GPU_BASE = 5.02, 24.68
 
 fig, ax = plt.subplots(figsize=(3.33, 2.1), dpi=200)
@@ -30,7 +29,7 @@ ax.axvline(1.0, color=REF, lw=0.9, ls='--', zorder=1)
 
 for i, (lab, c, g) in enumerate(R):
     y = len(R) - 1 - i
-    xc, xg = c / CPU_BASE, g / GPU_BASE
+    xc, xg = c / CPU_BASE, g
     ax.plot([xg, xc], [y, y], color='#d6d6d6', lw=1.6, zorder=2, solid_capstyle='round')
     ax.scatter([xg], [y], s=34, marker='X', color=GPU, edgecolor='white', lw=0.8, zorder=4)
     ax.scatter([xc], [y], s=34, marker='o', color=CPU, edgecolor='white', lw=0.8, zorder=4)
