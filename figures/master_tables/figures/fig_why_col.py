@@ -30,9 +30,11 @@ fig.subplots_adjust(left=0.13, right=0.985, top=0.895, bottom=0.25, wspace=0.62)
 
 # ---- (a) backend inversion: paired dots per policy, CPU and GPU, log x
 # (policy, CPU decode speed as a multiple of the full cache, GPU the same), read from the paper's
-# tables: CPU = Table 2's Llama-1B column (muKV against its same-build full cache, 4.35), GPU =
-# Table 1's matched-budget rows. Until 2026-09-25 the muKV CPU point was 24.21 tok/s over the old
-# build's full cache (5.02), a cross-build ratio of 4.82 that Table 2's footnote rules out.
+# tables: CPU = Table 2's Llama-1B column, GPU = Table 1's matched-budget rows. Until 2026-09-25 the
+# muKV CPU point was the July campaign's run (run_natural_cpu.sh, /tmp/nat_cpu, every policy on the
+# same bin_cpu_v87 build): 24.21 / 5.02 = 4.82, a valid same-build ratio. Table 2 instead reports the
+# current muKV build against its own same-build full cache (/tmp/qres_cpu, 23.755 / 5.459 = 4.35),
+# so the figure now plots 4.35 to match the table and the muKV the paper describes.
 R = [("$\\mu$KV", 4.35, 1.19), ("SnapKV", 1.35, 0.16), ("Ada-KV", 1.33, 0.16),
      ("TOVA", 1.19, 0.22), ("H2O", 1.16, 0.14)]
 a.axvspan(0.08, 1.0, color="#f6f2ef", zorder=0)
