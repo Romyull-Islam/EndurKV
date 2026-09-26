@@ -13,6 +13,12 @@
 # --gpu-mhz-decode. Decode columns measured 2026-09-03 in /tmp/split_proof, n=3 each, pinned
 # protocol. Prefill columns are the 1200 MHz row's: the prefill is identical by construction,
 # and the 3% spread the split cells showed in prefill energy is noise, not a property of the plan.
+# q for K<1024 (2026-09-22), measured: LongBench on the RTX 4500, Llama-3.2-1B, 5 tasks x 50, muKV at
+# each K against muKV at 1024 (campaigns/lb_ksweep_llama). Worst task: 0.74 at K=512 (2wikimqa), 0.76
+# at 256 (qasper). Bootstrap 95% intervals are 0.50 to 0.92 and 0.47 to 0.86, so the 0.02 inversion is
+# noise, and a smaller budget cannot keep what a larger one drops: the 256 row takes 512's 0.74. Both
+# stay under every tier's floor (1.0 / 0.9 / 0.75), so the walk never moves K, as before (seeds were
+# 0.63 and 0.58). The mean falls 4% at 512 and 12% at 256.
 # plan           backend gpu_mhz K     e_pre  e_dec  t_pre  t_dec  q
 gpu1200_k1024    gpu     1200    1024  58.2   210.3  12.0   25.0   1.00
 gpu1200d902_k1024 gpu    1200    1024  58.2   185.9  12.0   25.9   1.00
@@ -20,5 +26,5 @@ gpu1200d726_k1024 gpu    1200    1024  58.2   179.0  12.0   27.0   1.00
 gpu902_k1024     gpu     902     1024  40.6   189.6  15.9   26.0   1.00
 gpu726_k1024     gpu     726     1024  40.4   173.3  19.6   27.2   1.00
 cpu_k1024        cpu     0       1024  60.7   225.7  26.5   45.3   1.00
-cpu_k512         cpu     0       512   60.0   198.5  26.5   41.8   0.63
-cpu_k256         cpu     0       256   62.6   186.8  26.2   40.3   0.58
+cpu_k512         cpu     0       512   60.0   198.5  26.5   41.8   0.74
+cpu_k256         cpu     0       256   62.6   186.8  26.2   40.3   0.74

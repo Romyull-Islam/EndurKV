@@ -1,9 +1,12 @@
 #!/system/bin/sh
 # ============================================================================
 # ukv_sched.sh -- energy-aware scheduler for muKV on the phone: two loops and a lever
+# (2026-09-21, v2.7: --plan P lets run_guarded_bandit.py replace the rule's plan with a measured-better one;
+#  budgets, table learning and both loops are unchanged, and the log records src= and rule=; meter guard:
+#  no table update and no loop action when the power samples cover under 90% of the request)
 # (2026-09-08, v2.5: per-model cost table and lever bias under $ROOT/tables, seeded from the shipped
 #  Llama-3.2-1B table and held out of the lever loops until the model's own costs are learned; v2.4: --model, per-model backend capability list ukv_backend.txt, output-validity check after every run, automatic CPU re-run when a GPU run fails or emits degenerate output, --no-feedback now also freezes the cost table; 2026-09-06, v2.3: start-anchored energy split with a 30 s gauge lag, bench in background; v2.2: loops act on model error, bias decays when both budgets are met, walk slack has a
-#  5% tolerance floor, table learning is clipped to 10% per request)
+#  5% tolerance floor, table learning is clipped to 10% per request; v2.6: a seed request rescales the whole backend's rows)
 #
 # ONE LEVER. L in [0, 1]: 1 = performance, 0 = energy. The battery tier only sets its
 # default position (mains and above 50%: 1.0; 21 to 50%: 0.5; 20% or below: 0.0); the
@@ -37,7 +40,7 @@
 #
 # Usage:
 #   ukv_sched.sh --prompt FILE [--max-tokens N | --size S] [--lever L] [--no-feedback]
-#                [--force-soc S] [--force-status charging|discharging] [--cpu-only]
+#                [--force-soc S] [--force-status charging|discharging] [--cpu-only] [--plan P]
 #                [--ignore-eos] [--dry-run] [--tag NAME]
 # Files: table $ROOT/ukv_sched_table.txt, bias $ROOT/ukv_lever_bias.txt, log $ROOT/ukv_sched.log,
 #        per-request outputs $ROOT/sched/<tag>/.  Runs as root (su).
@@ -69,6 +72,7 @@ while [ $# -gt 0 ]; do
     --ignore-eos) IGNEOS="--ignore-eos"; shift;;
     --dry-run) DRY=1; shift;;
     --tag) TAG=$2; shift 2;;
+    --plan) FORCEPLAN=$2; shift 2;;
     *) echo "unknown arg: $1" >&2; exit 1;;
   esac
 done
@@ -174,6 +178,15 @@ PLAN=$(awk -v np=$NPROMPT -v no=$NOUT -v wq=$WQ -v wt=$WT -v we=$WE -v gpu=$GPU_
         printf("%s %.0f %.0f\n", name[cur], efull, tfull) }' $TABLE)
 set -- $PLAN; PLAN=$1; EFULL=$2; TFULL=$3
 [ "$PLAN" = "none" ] && { echo "no plan available" >&2; exit 1; }
+# --plan: a caller (run_guarded_bandit.py) may replace the rule's choice with a plan it has measured
+# to be better for this tier. Everything else stays the rule's: the tier's time commitment (TFULL,
+# TSLACK), the output cap, the budgets the loops check, the table update and the lever loops. So the
+# loops guard a bandit's plan exactly as they guard the rule's, and the log keeps both choices.
+RULEPLAN=$PLAN; PSRC=rule
+if [ -n "$FORCEPLAN" ]; then
+  if grep -q "^$FORCEPLAN " $TABLE; then PLAN=$FORCEPLAN; PSRC=bandit
+  else echo "[sched] --plan $FORCEPLAN is not in $TABLE; falling back to the rule's $RULEPLAN" >&2; fi
+fi
 ROW=$(grep -m1 "^$PLAN " $TABLE)
 BACKEND=$(echo "$ROW" | awk '{print $2}'); GMHZ=$(echo "$ROW" | awk '{print $3}'); K=$(echo "$ROW" | awk '{print $4}')
 DMHZ=$(echo "$PLAN" | sed -n 's/^gpu[0-9]*d\([0-9]*\)_.*/\1/p')
@@ -190,7 +203,7 @@ EBUD=$(awk -v pe=$PE 'BEGIN{printf "%.0f", pe*1.05}')
 ETARGET=$(awk -v e=$EFULL -v s=$ESAVE 'BEGIN{printf "%.0f", e*(1-s)/1000}')
 echo "[sched] soc=${SOC}% status=$STAT mains=$MAINS tier=$TIER lever=$L ($LSRC) -> weights=(q $WQ, t $WT, e $WE) lam=$LAM qf=$QF batt=${BATT}C ddr=${DDR}C hot=$HOT gpu_ok=$GPU_OK table=$MKEY${SEED:+ (seed $SEED)}" >&2
 echo "[sched] request: ~$NPROMPT prompt tokens, output cap $NOUT ($LENRULE); loop budgets: time <= ${TBUD} s, energy <= ${EBUD} J (tier saving target ${ETARGET} J)" >&2
-echo "[sched] plan: $PLAN backend=$BACKEND gpu_mhz=$GMHZ${DMHZ:+ decode_mhz=$DMHZ} K=$K predicted E=${PE} J T=${PT} s" >&2
+echo "[sched] plan: $PLAN (chosen by the $PSRC; rule's plan $RULEPLAN) backend=$BACKEND gpu_mhz=$GMHZ${DMHZ:+ decode_mhz=$DMHZ} K=$K predicted E=${PE} J T=${PT} s" >&2
 [ "$DRY" = 1 ] && exit 0
 
 # ---- 4. apply ----
@@ -240,7 +253,7 @@ NP=$(g n_prompt_tokens); NS=$(g n_decode_steps); PMS=$(g prefill_ms); DMS=$(g de
 MEAS=$(awk -F, -v pms=$PMS -v tms=$TMS -v lag=$SETTLE 'NR==1 { for (i=1;i<=NF;i++) c[$i]=i; next }
   { t=$c["monotonic_s"]+0; v=$c["usb_voltage_uv"]/1e6; a=$c["usb_current_ua"]; if (a<0) a=-a; a/=1e6;
     n++; T[n]=t; P[n]=v*a; Q[n]=$c["bat_charge_uah"]+0; V[n]=$c["bat_voltage_now_uv"]/1e6; G[n]=("gpu_clk_hz" in c)?$c["gpu_clk_hz"]+0:0 }
-  END { if (n<4) { print "0 0"; exit }
+  END { if (n<4) { print "0 0 0"; exit }
         # START-anchored split (2026-09-06): the bench starts prefill within seconds of the sampler
         # (first sample with the GPU above 900 MHz, else sample 2 plus 3 s) and may spend minutes in
         # teardown afterwards, so the end of the sampler window is not the end of decode. The rail
@@ -254,26 +267,44 @@ MEAS=$(awk -F, -v pms=$PMS -v tms=$TMS -v lag=$SETTLE 'NR==1 { for (i=1;i<=NF;i+
         vm=(vn>0)?vs/vn:4.35
         if (qa!="" && qb!="") { d=(qa-qb)/1e6; if (d>0) ep+=d*vm*3600 }
         if (qb!="" && qc!="") { d=(qb-qc)/1e6; if (d>0) ed+=d*vm*3600 }
-        printf("%.1f %.1f", ep, ed) }' $OUT/sensors.csv)
-EP=$(echo $MEAS | awk '{print $1}'); ED=$(echo $MEAS | awk '{print $2}')
+        cov=(T[n]-t0)/(tms/1000); if (cov>1) cov=1; if (cov<0) cov=0
+        printf("%.1f %.1f %.3f", ep, ed, cov) }' $OUT/sensors.csv)
+EP=$(echo $MEAS | awk '{print $1}'); ED=$(echo $MEAS | awk '{print $2}'); COV=$(echo $MEAS | awk '{print $3+0}')
+# v2.7 meter guard: a sampler that dies mid-request (2026-09-21: a second instance's pkill stopped it
+# 19 s into a 166 s request, and the table learned 11 J) must not teach the table or move the lever
+METER_OK=$(awk -v c=$COV 'BEGIN{print (c>=0.9)?1:0}')
 ETOT=$(awk -v a=$EP -v b=$ED 'BEGIN{printf "%.0f", a+b}'); TTOT=$(awk -v t=$TMS 'BEGIN{printf "%.0f", t/1000}')
-if [ "$FEEDBACK" = 1 ] && [ "$NP" -gt 0 ] && [ "$NS" -gt 0 ] && awk -v e=$EP 'BEGIN{exit !(e>0)}'; then
+if [ "$FEEDBACK" = 1 ] && [ "$METER_OK" = 1 ] && [ "$NP" -gt 0 ] && [ "$NS" -gt 0 ] && awk -v e=$EP 'BEGIN{exit !(e>0)}'; then
   # EMA, clipped: one request may move a row's cost by at most 10%, so a single disturbed request
   # (another app, an external cap) cannot reorder the ladder, while a persistent shift still tracks
+  if [ "$SEED" -gt 0 ]; then
+    # v2.6 (2026-09-19): while the table is still a seed for this model, its SHAPE (how plans rank
+    # against each other) is the seed model's but its LEVEL is wrong by up to 5x, and a 10% clip would
+    # need a dozen requests to close that gap. So a seed request rescales every row of the same backend
+    # by the measured-to-predicted ratio of the plan it ran, per column, unclipped. After the seed the
+    # clipped EMA below takes over and only tracks drift.
+    awk -v plan=$PLAN -v ep=$EP -v ed=$ED -v np=$NP -v ns=$NS -v pms=$PMS -v dms=$DMS '
+      NR==FNR { if ($1==plan && NF>=9) { bk=$2; r5=(ep*1000/np)/$5; r6=(ed*1000/ns)/$6; r7=(pms/np)/$7; r8=(dms/ns)/$8 } next }
+      $2==bk && NF>=9 && $1 !~ /^#/ { $5=sprintf("%.1f",$5*r5); $6=sprintf("%.1f",$6*r6); $7=sprintf("%.1f",$7*r7); $8=sprintf("%.1f",$8*r8) }
+      { print }' $TABLE $TABLE > $TABLE.new && mv $TABLE.new $TABLE
+  else
   awk -v plan=$PLAN -v a=$ALPHA -v ep=$EP -v ed=$ED -v np=$NP -v ns=$NS -v pms=$PMS -v dms=$DMS '
     function upd(old, meas,  v) { v=(1-a)*old+a*meas; if (v>old*1.10) v=old*1.10; if (v<old*0.90) v=old*0.90; return sprintf("%.1f", v) }
     $1==plan && NF>=9 { $5=upd($5, ep*1000/np); $6=upd($6, ed*1000/ns); $7=upd($7, pms/np); $8=upd($8, dms/ns) }
     { print }' $TABLE > $TABLE.new && mv $TABLE.new $TABLE
+  fi
   if [ "$SEED" -gt 0 ]; then
     NSEED=$((SEED-1))
     awk -v n=$NSEED 'NR==1 && /^# seed /{ if (n>0) print "# seed " n; next } { print }' $TABLE > $TABLE.s && mv $TABLE.s $TABLE
     LEARN="table updated (seed, $NSEED to go)"; SEED=$NSEED
   else LEARN="table updated"; fi
+elif [ "$METER_OK" != 1 ]; then LEARN="no table update: the meter covered only $(awk -v c=$COV 'BEGIN{printf "%.0f", 100*c}')% of the request"
 else LEARN="no table update (feedback off or measurement missing)"; fi
 # the two loops: compare the meter with the budgets and nudge the lever for this tier
-LOOPS=$(awk -v e=$ETOT -v t=$TTOT -v eb=$EBUD -v tb=$TBUD -v bias=$BIASV -v fb=$FEEDBACK -v seed=$SEED 'BEGIN{
+LOOPS=$(awk -v e=$ETOT -v t=$TTOT -v eb=$EBUD -v tb=$TBUD -v bias=$BIASV -v fb=$FEEDBACK -v seed=$SEED -v mok=$METER_OK 'BEGIN{
   et=(e-eb)/eb; tt=(t-tb)/tb; nb=bias; act="hold"
-  if (fb==1 && seed>0) { act=sprintf("hold: the cost table is still a seed for this model, %d request(s) to go", seed) }
+  if (fb==1 && mok!=1) { act="hold: meter failed, the loops do not act on this request" }
+  else if (fb==1 && seed>0) { act=sprintf("hold: the cost table is still a seed for this model, %d request(s) to go", seed) }
   else if (fb==1) {
     if (tt>0 && (et<=0 || tt>=et)) { nb=bias+0.1; act="performance loop: over time budget -> lever +0.1" }
     else if (et>0)                 { nb=bias-0.1; act="energy loop: over energy budget -> lever -0.1" }
@@ -292,4 +323,4 @@ fi
 TPS=$(g decode_tps)
 echo "[sched] measured: prefill ${EP} J (${PMS} ms, $NP tokens)  decode ${ED} J (${DMS} ms, $NS tokens, ${TPS} tok/s)  total ${ETOT} J / ${TTOT} s vs predicted ${PE} J / ${PT} s; $LEARN" >&2
 echo "[sched] loops: $LOOPMSG -> $LOOPACT (bias for $TIER now $NB)" >&2
-echo "$(date '+%F %T') tag=$TAG soc=$SOC mains=$MAINS tier=$TIER lever=$L bias=$BIASV->$NB batt=$BATT ddr=$DDR plan=$PLAN K=$K gpu_mhz=$GMHZ decode_mhz=${DMHZ:-same} nout_cap=$NOUT lenrule=\"$LENRULE\" np=$NP ns=$NS pred_J=$PE pred_s=$PT meas_J=$ETOT meas_s=$TTOT pre_J=$EP dec_J=$ED prefill_ms=$PMS decode_ms=$DMS tps=$TPS tbud=$TBUD ebud=$EBUD $LEARN; $LOOPACT" >> $LOG
+echo "$(date '+%F %T') tag=$TAG soc=$SOC mains=$MAINS tier=$TIER lever=$L bias=$BIASV->$NB batt=$BATT ddr=$DDR plan=$PLAN K=$K gpu_mhz=$GMHZ decode_mhz=${DMHZ:-same} nout_cap=$NOUT lenrule=\"$LENRULE\" np=$NP ns=$NS pred_J=$PE pred_s=$PT meas_J=$ETOT meas_s=$TTOT pre_J=$EP dec_J=$ED prefill_ms=$PMS decode_ms=$DMS tps=$TPS tbud=$TBUD ebud=$EBUD src=$PSRC rule=$RULEPLAN meter_cov=$COV $LEARN; $LOOPACT" >> $LOG

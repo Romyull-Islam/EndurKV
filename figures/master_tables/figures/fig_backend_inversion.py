@@ -18,13 +18,13 @@ plt.rcParams.update({'font.family': 'DejaVu Sans', 'font.size': 7.6})
 
 #  policy      cpu tok/s  gpu ratio (median over runs of tok/s against the same session's no-eviction arm)
 R = [('$\\mu$KV', 24.21, 1.19),
-     ('SnapKV',    6.78,  0.17),
-     ('Ada-KV',    6.70,  0.15),
-     ('TOVA',      5.99,  0.19),
-     ('H2O',       5.84,  0.15)]
+     ('SnapKV',    6.78,  0.16),
+     ('Ada-KV',    6.70,  0.16),
+     ('TOVA',      5.99,  0.22),
+     ('H2O',       5.84,  0.14)]
 CPU_BASE, GPU_BASE = 5.02, 24.68
 
-fig, ax = plt.subplots(figsize=(3.33, 2.35), dpi=200)
+fig, ax = plt.subplots(figsize=(3.33, 1.40), dpi=200)
 ax.axvspan(0.08, 1.0, color='#f6f2ef', zorder=0)
 ax.axvline(1.0, color=REF, lw=0.9, ls='--', zorder=1)
 
@@ -39,7 +39,7 @@ ax.set_yticks(range(len(R))); ax.set_yticklabels([r[0] for r in R][::-1], fontsi
 ax.set_xscale('log')
 ax.set_xticks([0.1, 0.25, 0.5, 1, 2, 5])
 ax.set_xticklabels(['0.1', '0.25', '0.5', '1', '2', '5'])
-ax.set_xlim(0.08, 6.5); ax.set_ylim(-0.6, len(R) - 0.2)
+ax.set_xlim(0.08, 6.5); ax.set_ylim(-0.42, len(R) - 0.36)
 ax.set_xlabel('decode speed, $\\times$ no eviction on the same backend')
 ax.text(0.95, len(R) - 0.35, 'slower than keeping\nevery token', fontsize=6.8, color=MUTED,
         ha='right', va='top', linespacing=1.25)
@@ -53,6 +53,6 @@ h = [plt.Line2D([], [], marker='o', ls='', color=CPU, markeredgecolor='white', l
      plt.Line2D([], [], marker='X', ls='', color=GPU, markeredgecolor='white', label='Adreno GPU')]
 ax.legend(handles=h, loc='lower right', frameon=False, fontsize=7.0,
           handletextpad=0.35, borderpad=0.15, labelspacing=0.25)
-fig.tight_layout(pad=0.35)
+fig.tight_layout(pad=0.22)
 fig.savefig('fig_backend_inversion.pdf'); fig.savefig('fig_backend_inversion.png', dpi=200)
 print('wrote fig_backend_inversion')

@@ -139,7 +139,7 @@ for k in SHOW:
     if xs: ax.annotate(LBL[k], (xs[-1], ys[-1]), textcoords='offset points', xytext=(3, -2),
                        fontsize=6.4, color=col(k), fontweight='bold' if k == 'mukv_faon' else 'normal')
 ax.axhline(1024, color='#555', ls=':', lw=0.8)
-ax.text(150, 1250, 'budget K=1024', fontsize=6, color='#555')
+ax.text(1700, 160, 'budget K=1024', fontsize=6, color='#555', va='bottom')   # under its line, clear of the prefill ramp
 ax.annotate('all policies build the full\nprompt cache during prefill', xy=(5200, 5600),
             xytext=(1300, 8200), fontsize=5.8, color='#666',
             arrowprops=dict(arrowstyle='->', color='#999', lw=0.7))

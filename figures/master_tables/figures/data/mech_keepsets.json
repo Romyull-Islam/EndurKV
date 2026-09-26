@@ -1,0 +1,6 @@
+{
+ "source": "attention_probe capture gov_report_pub_001 Llama-3.2-1B Q4_K_M 2026-09-07, last 16 queries, 16 position bins, K=6 bins",
+ "layer_for_perhead": 8,
+ "union_live_bins": 13,
+ "joint_keep_bins": 6
+}

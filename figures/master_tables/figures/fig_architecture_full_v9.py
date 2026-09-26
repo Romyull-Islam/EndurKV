@@ -83,7 +83,7 @@ box(cA[0], r1, cA[1], hb, 'Sensors', 'skin, battery, DDR, CPU', ec=GRAY, fc=GRAY
 box(cA[0], r2, cA[1], hb, 'Watchdog', 'CPU 1497 to 1017 MHz\nGPU 1050 to 902 MHz', ec=ORANGE, fc=ORANGEF); step(cA[0], r2 + hb + 0.3, 4)
 box(cA[0], r3, cA[1], hb, 'Vendor limiter', 'if a ladder misses,\nthe kernel takes the lower cap', ec=GRAY, fc=GRAYF)
 arr(cA[0] + cA[1]/2, r1 - 0.2, cA[0] + cA[1]/2, r2 + hb + 0.3, c=INK)
-arr(cA[0] + cA[1]/2, r2 - 0.2, cA[0] + cA[1]/2, r3 + hb + 0.3, c=GRAY, ls='--')
+arr(cA[0] + cA[1]/2, r2 - 0.2, cA[0] + cA[1]/2, r3 + hb + 0.3, c=ORANGE, ls='--')
 
 box(cB[0], r1, cB[1], hb, 'Battery state', 'level, charging, prompt N', ec=GRAY, fc=GRAYF)
 box(cB[0], r2, cB[1], hb, 'Tier to lever L', 'mains or above 50%: 1\n21 to 50%: 0.5;  20% or below: 0', ec=ORANGE, fc=ORANGEF); step(cB[0], r2 + hb + 0.3, 5)
@@ -101,7 +101,7 @@ arr(cC[0] - 0.2, r3 + hb/2, cB[0] + cB[1] + 0.3, r3 + hb/2, c=MEAS, ls='-.'); la
 
 # ---------------- links between the bands ----------------
 path([(30.8, 58.5), (30.8, r1 + hb + 0.4)], HEAT, ls=':', lw=1.2); lab(31.6, 55.6, 'heat', HEAT, ha='left')
-path([(cA[0] - 0.2, r2 + hb/2), (3.4, r2 + hb/2), (3.4, 58.4)], HEAT, ls='--'); lab(4.3, 55.6, 'clock caps', HEAT, ha='left')
+path([(cA[0] - 0.2, r2 + hb/2), (3.4, r2 + hb/2), (3.4, 58.4)], ORANGE, ls='--'); lab(4.3, 55.6, 'clock caps', ORANGE, ha='left')
 path([(cB[0] - 0.2, r3 + hb/2), (35.4, r3 + hb/2), (35.4, 58.4)], ORANGE, ls='--'); lab(36.3, 55.6, 'plan: clocks, K, answer cap', ORANGE, ha='left')
 path([(95.2, 58.5), (95.2, r1 + hb + 0.4)], MEAS, ls='-.', lw=1.2); lab(94.3, 55.6, 'energy, time', MEAS, ha='right')
 

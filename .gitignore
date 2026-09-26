@@ -1,11 +1,8 @@
 .venv/
 __pycache__/
-models/
-data/
-logs/
-models/
-data/
-logs/
+/models/
+/data/
+/logs/
 # 2026-09-08: results data, build trees and traces stay out of the repository
 benchmarks/
 entropy_probe/build*/
@@ -15,3 +12,58 @@ scripts/android/live_monitor/*.csv
 eval_pipeline/data/
 .probe_write_test
 *.pyc
+
+# 2026-09-25: build trees, scratch corpora and probe files that were still tracked are removed with this rule set
+entropy_probe/build/
+entropy_probe/build-noprobe/
+.probe_write_test
+trace_log.txt
+
+# 2026-09-25: no built documents, decks or archives in the repository; the sources that make them stay
+*.pdf
+*.pptx
+*.docx
+*.zip
+!llama.cpp/**/*.pdf
+# planning, status and briefing notes stay local
+figures/master_tables/overleaf/
+figures/master_tables/SUPERVISOR_BRIEF.md
+figures/master_tables/*_PLAN.md
+figures/master_tables/*_DISCUSSION.md
+figures/master_tables/*_REPORT.md
+figures/master_tables/*_AUDIT.md
+figures/master_tables/*_ROADMAP.md
+figures/master_tables/*_OUTLINE.md
+figures/master_tables/*_STATUS.md
+figures/master_tables/*SURVEY*.md
+figures/master_tables/PAPER_ABSTRACT_INTRO.md
+figures/master_tables/PAPER_CHANGELOG.md
+figures/master_tables/CHAPTER_RESULTS.md
+figures/master_tables/CLOSED_LOOP_VISION.md
+figures/master_tables/NEURIPS_GAP_ANALYSIS.md
+figures/master_tables/OPTIMIZATION_JOURNEY.md
+figures/master_tables/ALL_WAVES_MASTER.md
+docs/DEPLOYMENT_PLAN.md
+docs/MORNING_*.md
+docs/OVERNIGHT_*.md
+entropy_probe/*_PLAN.md
+research/
+SUBMISSION_STATUS_*.md
+TODO_ADVISOR_QUESTIONS.md
+WORKPLAN.md
+# 2026-09-25: status, pitch, strategy and advisor notes also stay local
+RESULTS_VERIFIED_*.md
+muKV_progress_report.tex
+slides/
+docs/MASTER_INDEX.md
+docs/PRESENTATION.md
+entropy_probe/CONTRIBUTION_EVIDENCE.md
+figures/master_tables/ADAKV_AHAKV_DIFFERENTIATION.md
+figures/master_tables/KVSWAP_ANALYSIS.md
+figures/master_tables/NOVEL_ALGORITHMS_INDEX.md
+figures/master_tables/SUPERVISOR_EVIDENCE_PACKAGE.md
+figures/master_tables/TTFT_PATH_FORWARD.md
+figures/master_tables/V1FA2_HEADLINE.md
+figures/master_tables/WAVE11_FILL_IN_PROTOCOL.md
+figures/master_tables/WAVE11_INTERIM.md
+figures/master_tables/WAVE11_LIVE_STORY.md

@@ -1,0 +1,1467 @@
+{
+ "discharge": {
+  "n_total": 123,
+  "n_battery": 46,
+  "soc_start": 77,
+  "soc_end": 12,
+  "tiers": {
+   "healthy": {
+    "n": 15,
+    "soc_hi": 77,
+    "soc_lo": 52,
+    "lever": 1.0,
+    "tokens": 4096,
+    "energy_J": 650,
+    "time_s": 280,
+    "J_per_token": 0.16,
+    "caps": [
+     4096
+    ],
+    "clocks": [
+     1200
+    ],
+    "loops_fired": 13,
+    "perf_fired": 13,
+    "energy_fired": 0,
+    "mean_abs_time_err": 17.1,
+    "mean_abs_energy_err": 39.6
+   },
+   "mid": {
+    "n": 21,
+    "soc_hi": 50,
+    "soc_lo": 21,
+    "lever": 0.62,
+    "tokens": 1902,
+    "energy_J": 657,
+    "time_s": 210,
+    "J_per_token": 0.35,
+    "caps": [
+     1024,
+     4096
+    ],
+    "clocks": [
+     902,
+     1200
+    ],
+    "loops_fired": 10,
+    "perf_fired": 8,
+    "energy_fired": 2,
+    "mean_abs_time_err": 11.4,
+    "mean_abs_energy_err": 20.7
+   },
+   "low": {
+    "n": 10,
+    "soc_hi": 19,
+    "soc_lo": 12,
+    "lever": 0.0,
+    "tokens": 512,
+    "energy_J": 506,
+    "time_s": 177,
+    "J_per_token": 0.99,
+    "caps": [
+     512
+    ],
+    "clocks": [
+     902
+    ],
+    "loops_fired": 3,
+    "perf_fired": 0,
+    "energy_fired": 3,
+    "mean_abs_time_err": 1.5,
+    "mean_abs_energy_err": 6.0
+   }
+  },
+  "healthy_pred_s_first": 219,
+  "healthy_pred_s_last": 267,
+  "per_request": [
+   {
+    "i": 1,
+    "soc": 77,
+    "tier": "healthy",
+    "time_err": 39.2,
+    "energy_err": -64.1,
+    "loop": "performance"
+   },
+   {
+    "i": 2,
+    "soc": 77,
+    "tier": "healthy",
+    "time_err": 31.8,
+    "energy_err": -62.8,
+    "loop": "performance"
+   },
+   {
+    "i": 3,
+    "soc": 75,
+    "tier": "healthy",
+    "time_err": 20.5,
+    "energy_err": -65.8,
+    "loop": "performance"
+   },
+   {
+    "i": 4,
+    "soc": 73,
+    "tier": "healthy",
+    "time_err": 6.5,
+    "energy_err": -41.1,
+    "loop": "performance"
+   },
+   {
+    "i": 5,
+    "soc": 71,
+    "tier": "healthy",
+    "time_err": 5.0,
+    "energy_err": -35.3,
+    "loop": "hold"
+   },
+   {
+    "i": 6,
+    "soc": 69,
+    "tier": "healthy",
+    "time_err": 19.4,
+    "energy_err": -30.3,
+    "loop": "performance"
+   },
+   {
+    "i": 7,
+    "soc": 67,
+    "tier": "healthy",
+    "time_err": 38.2,
+    "energy_err": -49.1,
+    "loop": "performance"
+   },
+   {
+    "i": 8,
+    "soc": 65,
+    "tier": "healthy",
+    "time_err": 10.3,
+    "energy_err": -35.4,
+    "loop": "performance"
+   },
+   {
+    "i": 9,
+    "soc": 63,
+    "tier": "healthy",
+    "time_err": 14.6,
+    "energy_err": -61.0,
+    "loop": "performance"
+   },
+   {
+    "i": 10,
+    "soc": 62,
+    "tier": "healthy",
+    "time_err": 6.2,
+    "energy_err": -20.6,
+    "loop": "performance"
+   },
+   {
+    "i": 11,
+    "soc": 60,
+    "tier": "healthy",
+    "time_err": 10.2,
+    "energy_err": -12.9,
+    "loop": "performance"
+   },
+   {
+    "i": 12,
+    "soc": 58,
+    "tier": "healthy",
+    "time_err": 33.7,
+    "energy_err": -44.6,
+    "loop": "performance"
+   },
+   {
+    "i": 13,
+    "soc": 56,
+    "tier": "healthy",
+    "time_err": -2.4,
+    "energy_err": -22.9,
+    "loop": "hold"
+   },
+   {
+    "i": 14,
+    "soc": 54,
+    "tier": "healthy",
+    "time_err": 7.7,
+    "energy_err": 1.1,
+    "loop": "performance"
+   },
+   {
+    "i": 15,
+    "soc": 52,
+    "tier": "healthy",
+    "time_err": 11.4,
+    "energy_err": -46.7,
+    "loop": "performance"
+   },
+   {
+    "i": 16,
+    "soc": 50,
+    "tier": "mid",
+    "time_err": 10.0,
+    "energy_err": -27.4,
+    "loop": "hold"
+   },
+   {
+    "i": 17,
+    "soc": 49,
+    "tier": "mid",
+    "time_err": 7.0,
+    "energy_err": -22.4,
+    "loop": "hold"
+   },
+   {
+    "i": 18,
+    "soc": 48,
+    "tier": "mid",
+    "time_err": 10.4,
+    "energy_err": -25.4,
+    "loop": "hold"
+   },
+   {
+    "i": 19,
+    "soc": 47,
+    "tier": "mid",
+    "time_err": -2.2,
+    "energy_err": 65.3,
+    "loop": "energy"
+   },
+   {
+    "i": 20,
+    "soc": 45,
+    "tier": "mid",
+    "time_err": 12.5,
+    "energy_err": -69.2,
+    "loop": "hold"
+   },
+   {
+    "i": 21,
+    "soc": 43,
+    "tier": "mid",
+    "time_err": 34.4,
+    "energy_err": -62.0,
+    "loop": "performance"
+   },
+   {
+    "i": 22,
+    "soc": 42,
+    "tier": "mid",
+    "time_err": 2.9,
+    "energy_err": 9.7,
+    "loop": "energy"
+   },
+   {
+    "i": 23,
+    "soc": 41,
+    "tier": "mid",
+    "time_err": 9.9,
+    "energy_err": -2.6,
+    "loop": "hold"
+   },
+   {
+    "i": 24,
+    "soc": 40,
+    "tier": "mid",
+    "time_err": 10.9,
+    "energy_err": -1.7,
+    "loop": "performance"
+   },
+   {
+    "i": 25,
+    "soc": 39,
+    "tier": "mid",
+    "time_err": 11.9,
+    "energy_err": -6.2,
+    "loop": "hold"
+   },
+   {
+    "i": 26,
+    "soc": 37,
+    "tier": "mid",
+    "time_err": 55.8,
+    "energy_err": -35.4,
+    "loop": "performance"
+   },
+   {
+    "i": 27,
+    "soc": 37,
+    "tier": "mid",
+    "time_err": 14.7,
+    "energy_err": -2.6,
+    "loop": "performance"
+   },
+   {
+    "i": 28,
+    "soc": 35,
+    "tier": "mid",
+    "time_err": 21.7,
+    "energy_err": -23.1,
+    "loop": "performance"
+   },
+   {
+    "i": 29,
+    "soc": 33,
+    "tier": "mid",
+    "time_err": 9.3,
+    "energy_err": -19.9,
+    "loop": "performance"
+   },
+   {
+    "i": 30,
+    "soc": 31,
+    "tier": "mid",
+    "time_err": 5.8,
+    "energy_err": -17.8,
+    "loop": "performance"
+   },
+   {
+    "i": 31,
+    "soc": 29,
+    "tier": "mid",
+    "time_err": 3.7,
+    "energy_err": -13.1,
+    "loop": "hold"
+   },
+   {
+    "i": 32,
+    "soc": 27,
+    "tier": "mid",
+    "time_err": 3.2,
+    "energy_err": -5.5,
+    "loop": "hold"
+   },
+   {
+    "i": 33,
+    "soc": 25,
+    "tier": "mid",
+    "time_err": 1.9,
+    "energy_err": 3.8,
+    "loop": "hold"
+   },
+   {
+    "i": 34,
+    "soc": 24,
+    "tier": "mid",
+    "time_err": 7.0,
+    "energy_err": -9.4,
+    "loop": "performance"
+   },
+   {
+    "i": 35,
+    "soc": 23,
+    "tier": "mid",
+    "time_err": 2.5,
+    "energy_err": -8.7,
+    "loop": "hold"
+   },
+   {
+    "i": 36,
+    "soc": 21,
+    "tier": "mid",
+    "time_err": -1.4,
+    "energy_err": 3.2,
+    "loop": "hold"
+   },
+   {
+    "i": 37,
+    "soc": 19,
+    "tier": "low",
+    "time_err": 3.9,
+    "energy_err": 0.8,
+    "loop": "hold"
+   },
+   {
+    "i": 38,
+    "soc": 19,
+    "tier": "low",
+    "time_err": 2.0,
+    "energy_err": 4.8,
+    "loop": "hold"
+   },
+   {
+    "i": 39,
+    "soc": 18,
+    "tier": "low",
+    "time_err": 0.8,
+    "energy_err": -11.3,
+    "loop": "hold"
+   },
+   {
+    "i": 40,
+    "soc": 17,
+    "tier": "low",
+    "time_err": -1.2,
+    "energy_err": 8.1,
+    "loop": "energy"
+   },
+   {
+    "i": 41,
+    "soc": 16,
+    "tier": "low",
+    "time_err": -0.3,
+    "energy_err": -3.5,
+    "loop": "hold"
+   },
+   {
+    "i": 42,
+    "soc": 15,
+    "tier": "low",
+    "time_err": 2.9,
+    "energy_err": -8.2,
+    "loop": "hold"
+   },
+   {
+    "i": 43,
+    "soc": 14,
+    "tier": "low",
+    "time_err": -0.4,
+    "energy_err": 5.7,
+    "loop": "energy"
+   },
+   {
+    "i": 44,
+    "soc": 14,
+    "tier": "low",
+    "time_err": -1.4,
+    "energy_err": -10.3,
+    "loop": "hold"
+   },
+   {
+    "i": 45,
+    "soc": 13,
+    "tier": "low",
+    "time_err": -0.3,
+    "energy_err": 5.7,
+    "loop": "energy"
+   },
+   {
+    "i": 46,
+    "soc": 12,
+    "tier": "low",
+    "time_err": 1.7,
+    "energy_err": -1.2,
+    "loop": "hold"
+   }
+  ]
+ },
+ "ladder": {
+  "points": [
+   {
+    "mhz": 726,
+    "n": 5,
+    "time_s": 218.4,
+    "energy_J": 566,
+    "energy_sd": 14,
+    "tps": 38.6,
+    "ddr_peak": 55.5,
+    "speedup_pct": 0.0,
+    "extra_energy_pct": 0.0
+   },
+   {
+    "mhz": 902,
+    "n": 11,
+    "time_s": 180.6,
+    "energy_J": 586,
+    "energy_sd": 13,
+    "tps": 41.0,
+    "ddr_peak": 60.1,
+    "speedup_pct": 20.9,
+    "extra_energy_pct": 3.5
+   },
+   {
+    "mhz": 1200,
+    "n": 8,
+    "time_s": 139.1,
+    "energy_J": 802,
+    "energy_sd": 13,
+    "tps": 50.2,
+    "ddr_peak": 81.6,
+    "speedup_pct": 57.0,
+    "extra_energy_pct": 41.7
+   }
+  ],
+  "steps": [
+   {
+    "frm": 726,
+    "to": 902,
+    "faster_pct": 17.3,
+    "energy_pct": 3.5,
+    "ddr_delta": 4.6
+   },
+   {
+    "frm": 902,
+    "to": 1200,
+    "faster_pct": 23.0,
+    "energy_pct": 36.9,
+    "ddr_delta": 21.5
+   }
+  ],
+  "pulls": 24
+ },
+ "ladder_fine": {
+  "points": [
+   {
+    "mhz": 826,
+    "n": 3,
+    "time_s": 195.4,
+    "energy_J": 622,
+    "energy_sd": 20,
+    "tps": 39.7,
+    "ddr_peak": 59.7,
+    "vs_top_energy_pct": -27.1,
+    "vs_top_time_pct": 38.5
+   },
+   {
+    "mhz": 902,
+    "n": 3,
+    "time_s": 181.2,
+    "energy_J": 617,
+    "energy_sd": 27,
+    "tps": 40.4,
+    "ddr_peak": 61.2,
+    "vs_top_energy_pct": -27.7,
+    "vs_top_time_pct": 28.4
+   },
+   {
+    "mhz": 967,
+    "n": 3,
+    "time_s": 170.8,
+    "energy_J": 663,
+    "energy_sd": 21,
+    "tps": 41.0,
+    "ddr_peak": 64.8,
+    "vs_top_energy_pct": -22.3,
+    "vs_top_time_pct": 21.0
+   },
+   {
+    "mhz": 1050,
+    "n": 3,
+    "time_s": 156.7,
+    "energy_J": 725,
+    "energy_sd": 19,
+    "tps": 46.7,
+    "ddr_peak": 71.3,
+    "vs_top_energy_pct": -15.0,
+    "vs_top_time_pct": 11.1
+   },
+   {
+    "mhz": 1200,
+    "n": 3,
+    "time_s": 141.1,
+    "energy_J": 853,
+    "energy_sd": 2,
+    "tps": 46.1,
+    "ddr_peak": 81.6,
+    "vs_top_energy_pct": 0.0,
+    "vs_top_time_pct": 0.0
+   }
+  ],
+  "steps": [
+   {
+    "frm": 826,
+    "to": 902,
+    "faster_pct": 7.8,
+    "energy_pct": -0.8,
+    "ddr_delta": 1.5
+   },
+   {
+    "frm": 902,
+    "to": 967,
+    "faster_pct": 6.1,
+    "energy_pct": 7.5,
+    "ddr_delta": 3.6
+   },
+   {
+    "frm": 967,
+    "to": 1050,
+    "faster_pct": 9.0,
+    "energy_pct": 9.4,
+    "ddr_delta": 6.5
+   },
+   {
+    "frm": 1050,
+    "to": 1200,
+    "faster_pct": 11.1,
+    "energy_pct": 17.7,
+    "ddr_delta": 10.3
+   }
+  ],
+  "pulls": 15,
+  "rule_with_fine_rungs": {
+   "healthy": "gpu1200",
+   "mid": "gpu967",
+   "low": "gpu902"
+  },
+  "dominated": 826
+ },
+ "cost_table": {
+  "steps": [
+   {
+    "label": "Cap the decode clock at 902 MHz",
+    "time_cost": 0.6,
+    "energy_saved": 3.2,
+    "rate": 4.94,
+    "decision": {
+     "healthy": "yes",
+     "mid": "yes",
+     "low": "yes"
+    }
+   },
+   {
+    "label": "Drop the GPU clock 1200 to 902 MHz",
+    "time_cost": 27.4,
+    "energy_saved": 24.6,
+    "rate": 0.9,
+    "decision": {
+     "healthy": "no: rate",
+     "mid": "no: slack",
+     "low": "yes"
+    }
+   },
+   {
+    "label": "Drop the GPU clock 902 to 726 MHz",
+    "time_cost": 20.5,
+    "energy_saved": 3.2,
+    "rate": 0.15,
+    "decision": {
+     "healthy": "no: rate",
+     "mid": "no: rate",
+     "low": "no: rate"
+    }
+   }
+  ],
+  "tiers": {
+   "healthy": {
+    "lam": 1.5,
+    "slack": 5
+   },
+   "mid": {
+    "lam": 0.8,
+    "slack": 21
+   },
+   "low": {
+    "lam": 0.5,
+    "slack": 40
+   }
+  }
+ },
+ "cache_lever": {
+  "full": {
+   "time_s": 930,
+   "energy_kJ": 5.3,
+   "tokens": 4096,
+   "tps": 5.459
+  },
+  "mukv": {
+   "time_s": 379,
+   "energy_kJ": 2.32,
+   "tokens": 4096,
+   "tps": 23.755
+  },
+  "time_pct": -59.2,
+  "energy_pct": -56.2,
+  "J_per_token_full": 1.29,
+  "J_per_token_mukv": 0.57
+ },
+ "loops_mid": [
+  {
+   "tag": "mid_1",
+   "label": "normal",
+   "disturbance": "none",
+   "tier": "mid",
+   "lever": 0.5,
+   "bias_before": 0.0,
+   "bias_after": 0.0,
+   "plan": "gpu1200d726_k1024",
+   "cap": 1024,
+   "time_over": -17.6,
+   "energy_over": -8.2,
+   "action": "hold: both budgets met"
+  },
+  {
+   "tag": "mid_burn_1",
+   "label": "busy app 1",
+   "disturbance": "4 cores spinning",
+   "tier": "mid",
+   "lever": 0.5,
+   "bias_before": 0.0,
+   "bias_after": -0.1,
+   "plan": "gpu1200d726_k1024",
+   "cap": 1024,
+   "time_over": -13.1,
+   "energy_over": 31.5,
+   "action": "energy loop: over energy budget -> lever -0.1"
+  },
+  {
+   "tag": "mid_burn_2",
+   "label": "busy app 2",
+   "disturbance": "4 cores spinning",
+   "tier": "mid",
+   "lever": 0.4,
+   "bias_before": -0.1,
+   "bias_after": -0.2,
+   "plan": "gpu1200d902_k1024",
+   "cap": 1024,
+   "time_over": -18.7,
+   "energy_over": 29.9,
+   "action": "energy loop: over energy budget -> lever -0.1"
+  },
+  {
+   "tag": "mid_after_1",
+   "label": "recovery 1",
+   "disturbance": "none",
+   "tier": "mid",
+   "lever": 0.3,
+   "bias_before": -0.2,
+   "bias_after": -0.15,
+   "plan": "gpu902_k1024",
+   "cap": 1024,
+   "time_over": -5.7,
+   "energy_over": -9.0,
+   "action": "hold: both budgets met -> bias decays toward the tier default"
+  },
+  {
+   "tag": "mid_after_2",
+   "label": "recovery 2",
+   "disturbance": "none",
+   "tier": "mid",
+   "lever": 0.35,
+   "bias_before": -0.15,
+   "bias_after": -0.1,
+   "plan": "gpu902_k1024",
+   "cap": 1024,
+   "time_over": -5.7,
+   "energy_over": -5.5,
+   "action": "hold: both budgets met -> bias decays toward the tier default"
+  }
+ ],
+ "loops_low": [
+  {
+   "tag": "low_1",
+   "label": "normal",
+   "disturbance": "none",
+   "tier": "low",
+   "lever": 0.0,
+   "bias_before": 0.0,
+   "bias_after": 0.0,
+   "plan": "gpu902_k1024",
+   "cap": 512,
+   "time_over": -8.7,
+   "energy_over": -5.2,
+   "action": "hold: both budgets met"
+  },
+  {
+   "tag": "low_cap_1",
+   "label": "GPU capped 1",
+   "disturbance": "726 MHz cap at 12 s",
+   "tier": "low",
+   "lever": 0.0,
+   "bias_before": 0.0,
+   "bias_after": 0.1,
+   "plan": "gpu902_k1024",
+   "cap": 512,
+   "time_over": 10.3,
+   "energy_over": -15.4,
+   "action": "performance loop: over time budget -> lever +0.1"
+  },
+  {
+   "tag": "low_cap_2",
+   "label": "GPU capped 2",
+   "disturbance": "726 MHz cap at 12 s",
+   "tier": "low",
+   "lever": 0.1,
+   "bias_before": 0.1,
+   "bias_after": 0.2,
+   "plan": "gpu1200_k1024",
+   "cap": 512,
+   "time_over": 11.2,
+   "energy_over": -35.9,
+   "action": "performance loop: over time budget -> lever +0.1"
+  },
+  {
+   "tag": "low_cap_3",
+   "label": "GPU capped 3",
+   "disturbance": "726 MHz cap at 12 s",
+   "tier": "low",
+   "lever": 0.2,
+   "bias_before": 0.2,
+   "bias_after": 0.3,
+   "plan": "gpu1200_k1024",
+   "cap": 512,
+   "time_over": 12.4,
+   "energy_over": -27.4,
+   "action": "performance loop: over time budget -> lever +0.1"
+  },
+  {
+   "tag": "low_after_1",
+   "label": "recovery 1",
+   "disturbance": "none",
+   "tier": "low",
+   "lever": 0.3,
+   "bias_before": 0.3,
+   "bias_after": 0.2,
+   "plan": "gpu1200_k1024",
+   "cap": 1024,
+   "time_over": -25.9,
+   "energy_over": 18.0,
+   "action": "energy loop: over energy budget -> lever -0.1"
+  },
+  {
+   "tag": "low_after_2",
+   "label": "recovery 2",
+   "disturbance": "none",
+   "tier": "low",
+   "lever": 0.2,
+   "bias_before": 0.2,
+   "bias_after": 0.1,
+   "plan": "gpu1200_k1024",
+   "cap": 512,
+   "time_over": -27.7,
+   "energy_over": 5.3,
+   "action": "energy loop: over energy budget -> lever -0.1"
+  }
+ ],
+ "bandit": {
+  "means": {
+   "healthy": {
+    "1200": 0.108,
+    "902": 0.004,
+    "726": -0.099
+   },
+   "mid": {
+    "1200": -0.305,
+    "902": -0.237,
+    "726": -0.29
+   },
+   "low": {
+    "1200": -0.605,
+    "902": -0.456,
+    "726": -0.458
+   }
+  },
+  "counts": {
+   "healthy": {
+    "1200": 6,
+    "902": 1,
+    "726": 1
+   },
+   "mid": {
+    "1200": 1,
+    "902": 6,
+    "726": 1
+   },
+   "low": {
+    "1200": 1,
+    "902": 4,
+    "726": 3
+   }
+  },
+  "learned": {
+   "healthy": 1200,
+   "mid": 902,
+   "low": 902
+  },
+  "energy_kJ": 15.7,
+  "minutes": 149,
+  "regret_warm_pct": 93,
+  "weights": {
+   "healthy": [
+    0.55,
+    0.4,
+    0.05
+   ],
+   "mid": [
+    0.35,
+    0.2,
+    0.45
+   ],
+   "low": [
+    0.2,
+    0.1,
+    0.7
+   ]
+  },
+  "rule": {
+   "healthy": [
+    "1200 + decode 902",
+    0.099
+   ],
+   "mid": [
+    "1200 + decode 726",
+    -0.285
+   ],
+   "low": [
+    "902",
+    -0.455
+   ]
+  },
+  "loops_during_run": false
+ },
+ "accuracy": {
+  "per_model": [
+   {
+    "model": "Llama-3.2-1B",
+    "acc_kept": 100.3,
+    "f1_full": 41.96,
+    "f1_mukv": 42.08,
+    "cells_kept": 13.0,
+    "energy_pct": 44,
+    "time_pct": 41,
+    "decode_x": 4.35,
+    "buy_back_energy_pct": 128,
+    "tokens": 4096
+   },
+   {
+    "model": "Phi-3-mini",
+    "acc_kept": 100.0,
+    "f1_full": 54.44,
+    "f1_mukv": 54.43,
+    "cells_kept": 12.2,
+    "energy_pct": 45,
+    "time_pct": 41,
+    "decode_x": 4.54,
+    "buy_back_energy_pct": 125,
+    "tokens": 2048
+   },
+   {
+    "model": "gemma-2-2b",
+    "acc_kept": 94.5,
+    "f1_full": 50.06,
+    "f1_mukv": 47.31,
+    "cells_kept": 13.0,
+    "energy_pct": 60,
+    "time_pct": 58,
+    "decode_x": 2.4,
+    "buy_back_energy_pct": 67,
+    "tokens": 2048
+   },
+   {
+    "model": "Bonsai-8B",
+    "acc_kept": 92.5,
+    "f1_full": 48.64,
+    "f1_mukv": 44.97,
+    "cells_kept": 12.6,
+    "energy_pct": 34,
+    "time_pct": 39,
+    "decode_x": 4.43,
+    "buy_back_energy_pct": 196,
+    "tokens": 4096
+   }
+  ],
+  "below_1024": {
+   "K512": -1.6,
+   "K256": -2.3
+  },
+  "needle": {
+   "full": 52,
+   "mukv": 51,
+   "of": 56
+  },
+  "clock_same_text": [
+   "902",
+   "1200",
+   "1200 + decode 726",
+   "1200 + decode 902"
+  ],
+  "run_to_run_divergence_pct": 7,
+  "bonsai_budget": {
+   "K1024": {
+    "hotpotqa": 95.8,
+    "qasper": 91.3
+   },
+   "K4096": {
+    "hotpotqa": 101.0,
+    "qasper": 97.9
+   }
+  }
+ },
+ "guarded_bandit": {
+  "n": 30,
+  "per_request": [
+   {
+    "i": 0,
+    "tier": "healthy",
+    "kind": "explore",
+    "plan": "gpu1200_k1024",
+    "rule": "gpu1200d902_k1024",
+    "gain": 0.0124,
+    "loop": "hold",
+    "E": 811.0,
+    "T": 140.0
+   },
+   {
+    "i": 1,
+    "tier": "mid",
+    "kind": "explore",
+    "plan": "gpu1200d902_k1024",
+    "rule": "gpu1200d726_k1024",
+    "gain": -0.0269,
+    "loop": "hold",
+    "E": 774.0,
+    "T": 145.0
+   },
+   {
+    "i": 2,
+    "tier": "low",
+    "kind": "explore",
+    "plan": "gpu1200d726_k1024",
+    "rule": "gpu902_k1024",
+    "gain": -0.1178,
+    "loop": "hold",
+    "E": 701.0,
+    "T": 146.0
+   },
+   {
+    "i": 3,
+    "tier": "healthy",
+    "kind": "explore",
+    "plan": "gpu902_k1024",
+    "rule": "gpu1200d726_k1024",
+    "gain": -0.0872,
+    "loop": "hold",
+    "E": 596.0,
+    "T": 179.0
+   },
+   {
+    "i": 4,
+    "tier": "mid",
+    "kind": "explore",
+    "plan": "gpu726_k1024",
+    "rule": "gpu1200d726_k1024",
+    "gain": 0.0026,
+    "loop": "hold",
+    "E": 542.0,
+    "T": 216.0
+   },
+   {
+    "i": 5,
+    "tier": "low",
+    "kind": "explore",
+    "plan": "gpu1200_k1024",
+    "rule": "gpu902_k1024",
+    "gain": -0.2029,
+    "loop": "energy loop",
+    "E": 842.0,
+    "T": 137.0
+   },
+   {
+    "i": 6,
+    "tier": "healthy",
+    "kind": "explore",
+    "plan": "gpu1200d902_k1024",
+    "rule": "gpu1200d726_k1024",
+    "gain": -0.0003,
+    "loop": "hold",
+    "E": 785.0,
+    "T": 141.0
+   },
+   {
+    "i": 7,
+    "tier": "mid",
+    "kind": "explore",
+    "plan": "gpu1200d726_k1024",
+    "rule": "gpu1200d726_k1024",
+    "gain": 0.0,
+    "loop": "hold",
+    "E": 739.0,
+    "T": 143.0
+   },
+   {
+    "i": 8,
+    "tier": "low",
+    "kind": "explore",
+    "plan": "gpu902_k1024",
+    "rule": "gpu902_k1024",
+    "gain": 0.0,
+    "loop": "hold",
+    "E": 552.0,
+    "T": 178.0
+   },
+   {
+    "i": 9,
+    "tier": "healthy",
+    "kind": "explore",
+    "plan": "gpu726_k1024",
+    "rule": "gpu1200d726_k1024",
+    "gain": -0.1907,
+    "loop": "hold",
+    "E": 555.0,
+    "T": 216.0
+   },
+   {
+    "i": 10,
+    "tier": "mid",
+    "kind": "explore",
+    "plan": "gpu902_k1024",
+    "rule": "gpu1200d726_k1024",
+    "gain": 0.0427,
+    "loop": "hold",
+    "E": 576.0,
+    "T": 178.0
+   },
+   {
+    "i": 11,
+    "tier": "low",
+    "kind": "explore",
+    "plan": "gpu726_k1024",
+    "rule": "gpu902_k1024",
+    "gain": -0.007,
+    "loop": "hold",
+    "E": 557.0,
+    "T": 216.0
+   },
+   {
+    "i": 12,
+    "tier": "healthy",
+    "kind": "explore",
+    "plan": "gpu1200_k1024",
+    "rule": "gpu1200d726_k1024",
+    "gain": 0.012,
+    "loop": "hold",
+    "E": 828.0,
+    "T": 137.0
+   },
+   {
+    "i": 13,
+    "tier": "mid",
+    "kind": "explore",
+    "plan": "gpu902_k1024",
+    "rule": "gpu1200d726_k1024",
+    "gain": 0.0427,
+    "loop": "hold",
+    "E": 564.0,
+    "T": 178.0
+   },
+   {
+    "i": 14,
+    "tier": "low",
+    "kind": "explore",
+    "plan": "gpu726_k1024",
+    "rule": "gpu902_k1024",
+    "gain": -0.007,
+    "loop": "hold",
+    "E": 554.0,
+    "T": 216.0
+   },
+   {
+    "i": 15,
+    "tier": "healthy",
+    "kind": "explore",
+    "plan": "gpu1200_k1024",
+    "rule": "gpu1200d726_k1024",
+    "gain": 0.012,
+    "loop": "hold",
+    "E": 819.0,
+    "T": 137.0
+   },
+   {
+    "i": 16,
+    "tier": "mid",
+    "kind": "go",
+    "plan": "gpu902_k1024",
+    "rule": "gpu1200d726_k1024",
+    "gain": 0.0427,
+    "loop": "hold",
+    "E": 553.0,
+    "T": 178.0
+   },
+   {
+    "i": 17,
+    "tier": "low",
+    "kind": "explore",
+    "plan": "gpu726_k1024",
+    "rule": "gpu902_k1024",
+    "gain": -0.007,
+    "loop": "hold",
+    "E": 558.0,
+    "T": 216.0
+   },
+   {
+    "i": 18,
+    "tier": "healthy",
+    "kind": "explore",
+    "plan": "gpu1200_k1024",
+    "rule": "gpu1200d726_k1024",
+    "gain": 0.012,
+    "loop": "hold",
+    "E": 826.0,
+    "T": 137.0
+   },
+   {
+    "i": 19,
+    "tier": "mid",
+    "kind": "go",
+    "plan": "gpu902_k1024",
+    "rule": "gpu1200d726_k1024",
+    "gain": 0.0427,
+    "loop": "hold",
+    "E": 574.0,
+    "T": 179.0
+   },
+   {
+    "i": 20,
+    "tier": "low",
+    "kind": "explore",
+    "plan": "gpu726_k1024",
+    "rule": "gpu902_k1024",
+    "gain": -0.007,
+    "loop": "hold",
+    "E": 534.0,
+    "T": 216.0
+   },
+   {
+    "i": 21,
+    "tier": "healthy",
+    "kind": "go",
+    "plan": "gpu1200_k1024",
+    "rule": "gpu1200d726_k1024",
+    "gain": 0.012,
+    "loop": "hold",
+    "E": 851.0,
+    "T": 137.0
+   },
+   {
+    "i": 22,
+    "tier": "mid",
+    "kind": "go",
+    "plan": "gpu902_k1024",
+    "rule": "gpu1200d726_k1024",
+    "gain": 0.0427,
+    "loop": "energy loop",
+    "E": 619.0,
+    "T": 179.0
+   },
+   {
+    "i": 23,
+    "tier": "low",
+    "kind": "fallback",
+    "plan": "gpu902_k1024",
+    "rule": "gpu902_k1024",
+    "gain": 0.0,
+    "loop": "hold",
+    "E": 550.0,
+    "T": 179.0
+   },
+   {
+    "i": 24,
+    "tier": "healthy",
+    "kind": "explore",
+    "plan": "gpu1200d726_k1024",
+    "rule": "gpu1200d902_k1024",
+    "gain": 0.0003,
+    "loop": "hold",
+    "E": 751.0,
+    "T": 143.0
+   },
+   {
+    "i": 25,
+    "tier": "mid",
+    "kind": "go",
+    "plan": "gpu902_k1024",
+    "rule": "gpu1200d726_k1024",
+    "gain": 0.0577,
+    "loop": "hold",
+    "E": 551.0,
+    "T": 179.0
+   },
+   {
+    "i": 26,
+    "tier": "low",
+    "kind": "fallback",
+    "plan": "gpu902_k1024",
+    "rule": "gpu902_k1024",
+    "gain": 0.0,
+    "loop": "hold",
+    "E": 553.0,
+    "T": 179.0
+   },
+   {
+    "i": 27,
+    "tier": "healthy",
+    "kind": "go",
+    "plan": "gpu1200_k1024",
+    "rule": "gpu1200d726_k1024",
+    "gain": 0.012,
+    "loop": "hold",
+    "E": 837.0,
+    "T": 137.0
+   },
+   {
+    "i": 28,
+    "tier": "mid",
+    "kind": "go",
+    "plan": "gpu902_k1024",
+    "rule": "gpu1200d726_k1024",
+    "gain": 0.0502,
+    "loop": "hold",
+    "E": 569.0,
+    "T": 179.0
+   },
+   {
+    "i": 29,
+    "tier": "low",
+    "kind": "fallback",
+    "plan": "gpu902_k1024",
+    "rule": "gpu902_k1024",
+    "gain": 0.0,
+    "loop": "energy loop",
+    "E": 601.0,
+    "T": 179.0
+   }
+  ],
+  "tiers": {
+   "healthy": {
+    "rule": "gpu1200d726_k1024",
+    "chosen": "gpu1200_k1024",
+    "decision": "go",
+    "r_chosen": 0.111,
+    "r_rule": 0.099,
+    "gain": 0.012,
+    "energy_pct": 13.7,
+    "time_pct": -4.6
+   },
+   "mid": {
+    "rule": "gpu1200d726_k1024",
+    "chosen": "gpu902_k1024",
+    "decision": "go",
+    "r_chosen": -0.23,
+    "r_rule": -0.273,
+    "gain": 0.043,
+    "energy_pct": -21.7,
+    "time_pct": 24.1
+   },
+   "low": {
+    "rule": "gpu902_k1024",
+    "chosen": "gpu902_k1024",
+    "decision": "fallback",
+    "r_chosen": -0.437,
+    "r_rule": -0.437,
+    "gain": 0.0,
+    "energy_pct": 0.0,
+    "time_pct": 0.0
+   }
+  },
+  "counts": {
+   "explore": 20,
+   "go": 7,
+   "fallback": 3
+  },
+  "late_gain_per_request": 0.0194,
+  "explore_cost": -0.517,
+  "net": -0.257,
+  "payback_requests": 14,
+  "loops_fired": {
+   "explore": [
+    1,
+    20
+   ],
+   "go": [
+    1,
+    7
+   ],
+   "fallback": [
+    1,
+    3
+   ]
+  },
+  "meter_cov_min": 1.0
+ },
+ "k_lever": {
+  "per_K": {
+   "512": {
+    "n": 3,
+    "E": 807,
+    "T": 139.0,
+    "tps": 49.7,
+    "acc_vs_full": 96.0,
+    "acc_vs_1024": 95.7,
+    "reward": {
+     "healthy": [
+      0.0843,
+      0.0004
+     ],
+     "mid": [
+      -0.3245,
+      0.0026
+     ],
+     "low": [
+      -0.6282,
+      0.0041
+     ]
+    }
+   },
+   "1024": {
+    "n": 3,
+    "E": 807,
+    "T": 139.5,
+    "tps": 49.1,
+    "acc_vs_full": 100.3,
+    "acc_vs_1024": 100.0,
+    "reward": {
+     "healthy": [
+      0.1066,
+      0.0024
+     ],
+     "mid": [
+      -0.3101,
+      0.0215
+     ],
+     "low": [
+      -0.6199,
+      0.0334
+     ]
+    }
+   },
+   "2048": {
+    "n": 3,
+    "E": 819,
+    "T": 141.5,
+    "tps": 48.1,
+    "acc_vs_full": 101.1,
+    "acc_vs_1024": 100.8,
+    "reward": {
+     "healthy": [
+      0.1045,
+      0.0028
+     ],
+     "mid": [
+      -0.3172,
+      0.0239
+     ],
+     "low": [
+      -0.6307,
+      0.0371
+     ]
+    }
+   },
+   "4096": {
+    "n": 3,
+    "E": 812,
+    "T": 144.4,
+    "tps": 45.3,
+    "acc_vs_full": 102.0,
+    "acc_vs_1024": 101.7,
+    "reward": {
+     "healthy": [
+      0.1017,
+      0.003
+     ],
+     "mid": [
+      -0.3139,
+      0.011
+     ],
+     "low": [
+      -0.6245,
+      0.017
+     ]
+    }
+   }
+  },
+  "full_cache_acc": 41.96,
+  "best": {
+   "healthy": 1024,
+   "mid": 1024,
+   "low": 1024
+  }
+ }
+}
