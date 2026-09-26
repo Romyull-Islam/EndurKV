@@ -25,11 +25,10 @@ clock caps before the vendor's thermal throttle does.
 | `scripts/android/run_*` | The measurement campaigns behind the tables and figures. |
 | `scripts/longbench_score.py`, `eval_pipeline/score_niah_strict.py` | LongBench token-F1 and the needle-in-a-haystack scorer. |
 | `energy_rl/` | Contextual bandit and simulator experiments for the learner. |
-| `figures/master_tables/` | Paper sources, bibliography (`ref_full.bib`, compacted by `compact_bib.py`), figure scripts under `figures/`, and the data they read (`energy_perf_data.py`, `claims_data.py`). `FIGURE_PROVENANCE.md` maps each figure to its campaign. |
+| `figures/master_tables/` | Paper sources, bibliography (`ref_full.bib`, compacted by `compact_bib.py`), figure scripts under `figures/`, and the data they read (`energy_perf_data.py`, `claims_data.py`). Each figure script names its data sources in its header. |
 
-Further notes: `ENV.md` (host environment), `entropy_probe/PLATFORMS.md` (build and run settings
-per device), `docs/EVAL_PROTOCOL.md`, `docs/HARDWARE_STRESS_LIMITS.md`, and
-`scripts/android/README.md` (the on-phone setup).
+Further notes: `scripts/android/README.md` (the on-phone setup), `entropy_probe/PLATFORMS.md`
+(build and run settings per device) and `docs/HARDWARE_STRESS_LIMITS.md`.
 
 ## Build for Android (arm64)
 
@@ -40,6 +39,9 @@ scripts/android/build_llama_android.sh          # llama.cpp, CPU
 scripts/android/build_llama_android_vulkan.sh   # llama.cpp, Adreno GPU through Vulkan
 scripts/android/build_probe_android.sh          # eviction_bench and the probes
 ```
+
+Build the CPU libraries with `-march=armv8.7-a` in the C and C++ flags; without it the
+dot-product and int8 matrix-multiply kernels are left out.
 
 Models are not in the repository. The paper uses Llama-3.2-1B-Instruct, Phi-3-mini-128k-instruct
 and gemma-2-2b-it in Q4_K_M, and the 1-bit Bonsai-8B.

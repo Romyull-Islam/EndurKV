@@ -9,6 +9,8 @@ of column height and two captions, and the CFP counts references inside six page
       multiple of no eviction on the same backend (log axis; the sign flips with the backend).
   (b) cells the allocator actually keeps against the budget asked for, phone GPU: per-head
       policies keep 2.7 to 7.5 times their budget, sequence-level ones keep at most theirs.
+Data: (a) the ratios of Tables 1 and 2, listed in R below; (b) /tmp/claims_data.json, written by
+claims_data.py (summary.realized_cells).
 """
 import json
 import os
@@ -27,14 +29,17 @@ fig, (a, b) = plt.subplots(1, 2, figsize=(3.33, 1.40), gridspec_kw=dict(width_ra
 fig.subplots_adjust(left=0.13, right=0.985, top=0.895, bottom=0.25, wspace=0.62)
 
 # ---- (a) backend inversion: paired dots per policy, CPU and GPU, log x
-R = [("$\\mu$KV", 24.21, 1.19), ("SnapKV", 6.78, 0.16), ("Ada-KV", 6.70, 0.16),
-     ("TOVA", 5.99, 0.22), ("H2O", 5.84, 0.14)]
-CPU_BASE = 5.02
+# (policy, CPU decode speed as a multiple of the full cache, GPU the same), read from the paper's
+# tables: CPU = Table 2's Llama-1B column (muKV against its same-build full cache, 4.35), GPU =
+# Table 1's matched-budget rows. Until 2026-09-25 the muKV CPU point was 24.21 tok/s over the old
+# build's full cache (5.02), a cross-build ratio of 4.82 that Table 2's footnote rules out.
+R = [("$\\mu$KV", 4.35, 1.19), ("SnapKV", 1.35, 0.16), ("Ada-KV", 1.33, 0.16),
+     ("TOVA", 1.19, 0.22), ("H2O", 1.16, 0.14)]
 a.axvspan(0.08, 1.0, color="#f6f2ef", zorder=0)
 a.axvline(1.0, color="#8f8f8f", lw=0.8, ls="--", zorder=1)
 for i, (lab, c, g) in enumerate(R):
     y = len(R) - 1 - i
-    xc = c / CPU_BASE
+    xc = c
     a.plot([g, xc], [y, y], color="#d6d6d6", lw=1.4, zorder=2, solid_capstyle="round")
     a.scatter([g], [y], s=22, marker="X", color=GPU, edgecolor="white", lw=0.6, zorder=4)
     a.scatter([xc], [y], s=22, marker="o", color=CPU, edgecolor="white", lw=0.6, zorder=4)
@@ -46,7 +51,7 @@ a.text(0.93, len(R) - 0.45, "slower than\nthe full cache", fontsize=5.8, color=M
 # direct labels on the top row instead of a legend: nothing left to collide with
 top=len(R)-1
 a.text(R[0][2], top-0.48, "GPU", color=GPU, fontsize=5.6, ha="center", va="top")
-a.text(R[0][1]/CPU_BASE, top-0.48, "CPU", color=CPU, fontsize=5.6, ha="center", va="top")
+a.text(R[0][1], top-0.48, "CPU", color=CPU, fontsize=5.6, ha="center", va="top")
 a.set_title("(a) same policy, two backends", loc="left", fontsize=6.3, color=INK, pad=3)
 a.grid(axis="x", color=GRID, lw=0.5); a.set_axisbelow(True)
 for s in ("top", "right", "left"): a.spines[s].set_visible(False)
