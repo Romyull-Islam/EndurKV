@@ -25,7 +25,8 @@ clock caps before the vendor's thermal throttle does.
 | `scripts/android/run_*` | The measurement campaigns behind the tables and figures. |
 | `scripts/longbench_score.py`, `eval_pipeline/score_niah_strict.py` | LongBench token-F1 and the needle-in-a-haystack scorer. |
 | `energy_rl/` | Contextual bandit and simulator experiments for the learner. |
-| `figures/master_tables/` | Paper sources, bibliography (`ref_full.bib`, compacted by `compact_bib.py`), figure scripts under `figures/`, and the data they read (`energy_perf_data.py`, `claims_data.py`). Each figure script names its data sources in its header. |
+| `figures/master_tables/` | `claims_data.py` and `energy_perf_data.py` collect the measured values behind the paper's tables; `figures/fig_why_col.py`, `fig_three_relations_col.py` and `fig_thermal_col.py` draw its data figures. Each script names its data sources in its header. |
+| `figures/fig_discharge_timeline.py` | Rebuilds the energy of every request in the battery discharge from its raw sensor trace. |
 
 Further notes: `scripts/android/README.md` (the on-phone setup), `entropy_probe/PLATFORMS.md`
 (build and run settings per device) and `docs/HARDWARE_STRESS_LIMITS.md`.

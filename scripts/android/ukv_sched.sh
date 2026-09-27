@@ -1,6 +1,9 @@
 #!/system/bin/sh
 # ============================================================================
 # ukv_sched.sh -- energy-aware scheduler for muKV on the phone: two loops and a lever
+# (2026-09-26, v2.8: a bench stopped by SIGINT or SIGTERM, rc 130 or 143, was interrupted from outside;
+#  nothing is marked gpu=no, learned or re-run. A campaign's kill of one GPU request on 2026-09-22 had
+#  marked Llama-3.2-1B gpu=no, and every later request of that model then ran on the CPU)
 # (2026-09-21, v2.7: --plan P lets run_guarded_bandit.py replace the rule's plan with a measured-better one;
 #  budgets, table learning and both loops are unchanged, and the log records src= and rule=; meter guard:
 #  no table update and no loop action when the power samples cover under 90% of the request)
@@ -229,6 +232,10 @@ sleep $SETTLE
 pkill -f sample_sensors 2>/dev/null
 wait $BPID; RC=$?
 [ "$BACKEND" = gpu ] && gpucap 1200
+# ---- 4a. stopped from outside (v2.8): SIGINT or SIGTERM (rc 130, 143) comes from a harness timeout, a
+# pkill or a campaign being stopped, and says nothing about the backend. The request just ends with that
+# code. SIGKILL (137) stays a failure below, because the low-memory killer also sends it.
+case $RC in 130|143) echo "[sched] bench stopped by a signal (rc=$RC): nothing marked, learned or re-run" >&2; exit $RC;; esac
 # ---- 4b. validity: a backend can fail loudly (rc != 0, no meta.json) or quietly (tokens at full speed
 # from non-finite logits, which decode as runs of "!"). Either way on the GPU: mark the model gpu=no
 # and run this request again on the CPU; nothing is learned from the failed attempt. v2.4.

@@ -16,6 +16,7 @@ Sources (all restored from tmp_archive/ after the 2026-09-20 reboots):
   /tmp/bandit_online/state.json                24 cooled pulls, clock pinned per pull
   /tmp/loop_proof/<tag>/sched_log.txt          13 requests with real disturbances
   /tmp/qres_cpu/llama_{vanilla,mukv}_cur.*     same-build, matched-start cache pair
+  /tmp/sllm_faithful/{v,mukv,sfown}_r{1,2,3}   the GPU rows of Table 1, for their energy
   energy_rl/sched_policy.py                    the scheduler's per-plan cost table
 """
 import csv
@@ -363,6 +364,27 @@ for K in (512, 1024, 2048, 4096):
                    acc_vs_full=round(100 * LBK[K] / LBK["full"], 1), acc_vs_1024=round(100 * q, 1), reward=tiers_k)
 out["k_lever"] = dict(per_K=kres, full_cache_acc=round(LBK["full"], 2),
                       best={t: max(kres, key=lambda K: kres[K]["reward"][t][0]) for t in TW})
+
+# ---------------------------------------------------------------- GPU energy of the Table 1 rows (2026-09-25)
+# /tmp/sllm_faithful (run_streamingllm_faithful.sh): Llama-3.2-1B on the Adreno 840, 9737-token prompt,
+# 4096 generated tokens, f16 KV; every run starts cooled (DDR <= 35 C, battery <= 33 C, charging off);
+# each round runs full cache, muKV and StreamingLLM 4+2000 back to back. Energy is the USB rail plus the
+# battery, windowed to the request, as for every other energy number here.
+SF = "/tmp/sllm_faithful"
+def gpu_request(tag):
+    m = mj(f"{SF}/{tag}/meta.json")
+    total = cell_energy(f"{SF}/{tag}/sensors.csv", m["total_ms"] / 1000) / 1000
+    return total, m["prefill_ms"] / 1000, m["total_ms"] / 1000
+gE = {arm: [gpu_request(f"{arm}_r{r}") for r in (1, 2, 3)] for arm in ("v", "mukv", "sfown")}
+med_full = st.median(x[0] for x in gE["v"])
+out["gpu_energy"] = dict(
+    kJ={arm: [round(x[0], 3) for x in runs] for arm, runs in gE.items()},
+    time_s={arm: [round(x[2]) for x in runs] for arm, runs in gE.items()},
+    median_kJ={arm: round(st.median(x[0] for x in runs), 2) for arm, runs in gE.items()},
+    saving_pct_vs_median_full={arm: round(100 * (1 - st.median(x[0] for x in runs) / med_full), 1)
+                               for arm, runs in gE.items() if arm != "v"},
+    saving_pct_same_round={arm: [round(100 * (1 - a[0] / b[0]), 1) for a, b in zip(runs, gE["v"])]
+                           for arm, runs in gE.items() if arm != "v"})
 
 json.dump(out, open(os.path.join(HERE, "energy_perf_data.json"), "w"), indent=1)
 kl = out["k_lever"]

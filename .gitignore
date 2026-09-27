@@ -67,3 +67,44 @@ figures/master_tables/V1FA2_HEADLINE.md
 figures/master_tables/WAVE11_FILL_IN_PROTOCOL.md
 figures/master_tables/WAVE11_INTERIM.md
 figures/master_tables/WAVE11_LIVE_STORY.md
+
+# 2026-09-25 (late): no paper drafts, bibliography or Overleaf material, no deck or slide builders,
+# and as few figures as possible. Kept: the scripts behind the paper's current figures and the data
+# scripts they read.
+*.tex
+*.bib
+!llama.cpp/**/*.tex
+figures/master_tables/*_regions.json
+figures/master_tables/compact_bib.py
+figures/master_tables/make_*deck*
+figures/master_tables/SECTION_*.md
+figures/master_tables/SUBSECTION_*.md
+figures/master_tables/*_SECTION.md
+figures/master_tables/SUPPLEMENTARY.md
+figures/master_tables/RESEARCH_MAX_EFFICIENCY.md
+figures/master_tables/FIGURE_PROVENANCE.md
+figures/master_tables/PRESENTATION_TABLE.md
+scripts/pptx_*.py
+scripts/*slide*.py
+scripts/android/host_make_summary_slide.py
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.gif
+*.webp
+*.bmp
+!llama.cpp/**/*.png
+!llama.cpp/**/*.jpg
+!llama.cpp/**/*.jpeg
+!llama.cpp/**/*.svg
+!llama.cpp/**/*.gif
+!llama.cpp/**/*.webp
+figures/eval_plots/
+figures/relationship_plots/
+figures/*.py
+!figures/fig_discharge_timeline.py
+figures/master_tables/figures/*
+!figures/master_tables/figures/fig_why_col.py
+!figures/master_tables/figures/fig_three_relations_col.py
+!figures/master_tables/figures/fig_thermal_col.py
