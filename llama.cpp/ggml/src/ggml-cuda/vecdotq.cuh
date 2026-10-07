@@ -106,11 +106,9 @@ static __device__ __forceinline__ uint32_t unpack_ksigns(const uint8_t v) {
 // VDR = vec dot ratio, how many contiguous integers each thread processes when the vec dot kernel is called
 // MMVQ = mul_mat_vec_q, MMQ = mul_mat_q
 
-// --- EndurKV 2026-07-26: Q1_0 (PrismML 1-bit) CUDA support, ported verbatim
-// from PrismML-Eng/llama.cpp (github.com/PrismML-Eng/llama.cpp). Our fork's CUDA
-// backend had ZERO q1_0 support, so Bonsai-8B's 254 one-bit tensors fell back to
-// CPU even at -ngl 99 (prefill 346 s CPU-bound). All q1_0 constants (QK1_0/QR1_0/
-// QI1_0/block_q1_0) already existed in ggml-common.h; only the CUDA kernels were missing.
+// EndurKV: Q1_0 (PrismML 1-bit) CUDA kernels, ported from PrismML-Eng/llama.cpp
+// (github.com/PrismML-Eng/llama.cpp). Without them, the 1-bit tensors of Bonsai-8B
+// fall back to the CPU even with -ngl 99.
 #define VDR_Q1_0_Q8_1_MMVQ 1  // one 32-element chunk at a time
 
 #define VDR_Q4_0_Q8_1_MMVQ 2

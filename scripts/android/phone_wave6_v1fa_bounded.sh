@@ -1,12 +1,7 @@
 #!/system/bin/sh
-# phone_wave6_v1fa_bounded.sh — re-run Phi-3 long-decode workload with NEW
-# v1_FA binary that adds recency-based decode-time cache bounding.
-#
-# Expected: v1_FA now keeps cache bounded (~512 cells) during decode,
-# so peak DDR / CPU should match v1's (54-58 °C) while decode_tps stays
-# close to vanilla's (5-6 tok/s) because FA-on decode is fast.
-#
-# Single cell. Same protocol as Wave-4 long-decode.
+# phone_wave6_v1fa_bounded.sh: Phi-3 long-decode workload with the v1_FA build that
+# bounds the cache during decode by recency (~512 cells). Single cell, same protocol
+# as the Wave-4 long-decode run.
 
 set -u
 

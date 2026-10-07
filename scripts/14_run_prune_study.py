@@ -1,20 +1,8 @@
 #!/usr/bin/env python3
-"""
-Phase E.2 — run prune_probe over a workload and concatenate results.
-
-For each prompt in PROMPTS_PATH (default data/prompts.jsonl), runs prune_probe
-to record entropy + KL(P_full || P_pruned) at K ∈ {16, 64, 256} for each
-decode step. Output: logs/prune/<prompt_id>.csv.
-
-Env vars (same conventions as 10_run_study.py):
-    MODEL_PATH      default Llama-3.2-1B-Instruct-Q4_K_M.gguf
-    PROMPTS_PATH    default data/prompts.jsonl
-    LOG_SUBDIR      default "prune"
-    N_TOKENS        default 32   (per-step prune-and-redecode is heavy, so we keep this short)
-    SEED            default 42
-    KS              default "16,64,256"
-    MAX_PER_TASK    default 0 (unlimited)
-    MAX_PROMPTS     default 0 (unlimited)
+"""Run prune_probe over each prompt and record entropy and KL(P_full || P_pruned) at
+each K in KS per decode step, to logs/<LOG_SUBDIR>/<prompt_id>.csv, then concatenate.
+Env: MODEL_PATH, PROMPTS_PATH (data/prompts.jsonl), LOG_SUBDIR (prune), N_TOKENS (32, short
+because prune-and-redecode is heavy), SEED (42), KS (16,64,256), MAX_PER_TASK, MAX_PROMPTS.
 """
 from __future__ import annotations
 

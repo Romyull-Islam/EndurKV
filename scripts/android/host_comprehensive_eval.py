@@ -1,22 +1,7 @@
 #!/usr/bin/env python3
-"""Comprehensive evaluation: every dataset × every model × top 6 policies.
-
-Captures covered:
-  - LongBench (long context ~8K-10K): 5 paper models
-  - NIAH (4K with needle): 5 paper models
-  - Reasoning (GSM8K/math): R1-distill
-  - Short context (~500-1K): Mistral, Llama-1B, Llama-8B
-  - Long context for Llama family: 1B, 8B
-
-Policies (6):
-  1. v1 (original linear, α=1.3 β=0.6)
-  2. v6 (logistic original, α=1.3 β=0.7)
-  3. v1-sigmoid (NEW, α=1.5 β=0.5 c=0.4 γ=8.0)
-  4. TOVA (per-head, fixed K)
-  5. PyramidKV (per-layer budget × TOVA selection)
-  6. AdaKV (entropy-proportional per-head budget × TOVA selection)
-
-Output: comprehensive_all_contexts_results.csv + stratified ranking.
+"""Simulate v1, v6, v1-sigmoid, TOVA, PyramidKV and AdaKV on every captured dataset and
+model (LongBench, NIAH, reasoning, short and long context).
+Writes comprehensive_all_contexts_results.csv and a ranking per regime.
 """
 import sys, time
 from multiprocessing import Pool, set_start_method
@@ -28,9 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from host_simulate_kv_baselines import load_attn_perhead
 
 
-# ---------------------------------------------------------------------------
 # Capture manifest: (dataset_family, dir, sample_prompt_ids, K_budgets)
-# ---------------------------------------------------------------------------
 LOGS = Path("/home/mislam22/EndurKV_workspace/logs")
 LONG_K = [512, 1024]
 MED_K = [256, 512]
@@ -62,9 +45,7 @@ CELLS = [
 ]
 
 
-# ---------------------------------------------------------------------------
 # Policy implementations (self-contained, no POLICIES dict needed)
-# ---------------------------------------------------------------------------
 
 def policy_tova(attn_ph, K, **kw):
     nh, nk = attn_ph.shape
@@ -107,7 +88,7 @@ def policy_v6_logistic(attn_ph, K, gamma=10.0, c=0.4, alpha_low=0.7, alpha_high=
 
 
 def policy_v1_sigmoid(attn_ph, K, **kw):
-    """NEW best: sigmoid α=1.5, β=0.5, c=0.4, γ=8.0"""
+    """Sigmoid spread gate, α=1.5, β=0.5, c=0.4, γ=8.0."""
     nh, nk = attn_ph.shape
     if nk <= K: return np.ones((nh, nk), dtype=bool)
     m = np.zeros((nh, nk), dtype=bool)
@@ -122,7 +103,7 @@ def policy_v1_sigmoid(attn_ph, K, **kw):
 
 
 def policy_pyramidkv(attn_ph, K, n_layers=32, layer_idx=0, ratio=0.5, **kw):
-    """PyramidKV: linear K_max → K_min across depth, TOVA selection within layer."""
+    """PyramidKV: budget falls linearly from K_max to K_min with depth, TOVA within a layer."""
     if n_layers <= 1:
         K_eff = K
     else:
@@ -168,9 +149,7 @@ POLICIES = {
 }
 
 
-# ---------------------------------------------------------------------------
 # Simulator with per-cell stats
-# ---------------------------------------------------------------------------
 def kl(p, q, eps=1e-12):
     pf = np.clip(p.astype(np.float32, copy=False), eps, 1.0)
     pe = np.clip(q.astype(np.float32, copy=False), eps, 1.0)
@@ -209,9 +188,7 @@ def simulate_policy(attn_ph, n_kv_at, K_nominal, policy_name):
     return out_kl.mean(axis=1), out_K.mean(axis=1), out_mass.mean(axis=1)
 
 
-# ---------------------------------------------------------------------------
-# Global data (preloaded; workers inherit via fork COW)
-# ---------------------------------------------------------------------------
+# Global data, preloaded so forked workers share it copy-on-write
 DATA = {}   # (model, dataset, prompt_id) -> (attn_ph, n_kv_at)
 
 
@@ -239,9 +216,7 @@ def init_data():
                   f"heads={n_head} n_kv={n_kv}", flush=True)
 
 
-# ---------------------------------------------------------------------------
 # Worker
-# ---------------------------------------------------------------------------
 def worker(task):
     model, dataset, pid, K_nominal, policy_name = task
     attn_ph, n_kv_at = DATA[(model, dataset, pid)]
@@ -307,7 +282,7 @@ def main():
     }
     df["regime"] = df["dataset"].map(regime_map).fillna(df["dataset"])
 
-    print("\n=== OVERALL ranking (all cells) ===")
+    print("OVERALL ranking (all cells)")
     overall = (df.groupby("policy")
                  .agg(mean_kl=("kl_mean","mean"),
                       mean_cache=("cache_ratio_vs_tova","mean"),
@@ -318,7 +293,7 @@ def main():
                  .reset_index().sort_values("mean_vs_tova"))
     print(overall.to_string(index=False))
 
-    print("\n=== PER-REGIME ranking ===")
+    print("PER-REGIME ranking")
     for regime in df.regime.unique():
         sub = df[df.regime==regime]
         agg = (sub.groupby("policy")
@@ -328,7 +303,7 @@ def main():
                        mean_mass=("mass_pct","mean"),
                        n=("kl_mean","count"))
                   .reset_index().sort_values("mean_vs_tova"))
-        print(f"\n--- regime: {regime} (n_cells={len(sub)//6}) ---")
+        print(f"regime: {regime} (n_cells={len(sub)//6})")
         print(agg.to_string(index=False))
     return 0
 

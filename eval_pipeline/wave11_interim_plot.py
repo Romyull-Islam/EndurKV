@@ -1,48 +1,8 @@
 #!/usr/bin/env python3
-"""
-wave11_interim_plot.py - Host-side INTERIM plotter for Wave-11 evals.
+"""Interim status for the wave11_eval_* runs on the phone.
 
-While the phone is grinding through the 30 (model x policy x bench) cells of
-the Wave-11 Tier-1 manifest, this script gives you an at-a-glance status
-snapshot WITHOUT waiting for the full run to finish.
-
-What it does
-------------
-1. Pull /data/local/tmp/endurkv/logs/wave11_eval_*/ from the phone to
-   <workspace>/phone-logs/, but only if the on-device tree is newer than the
-   local copy (mtime comparison via `adb_resilient.sh`'s adb_safe_shell).
-   If adb is unavailable, we silently fall back to whatever is already local
-   so the script remains useful offline.
-
-2. Walk every (model, policy, benchmark) cell directory under the most-recent
-   wave11_eval_*/ run and classify it as complete / partial / pending using
-   the wave11_cells.json manifest as ground truth for per-cell-group counts
-   (8 PPL chunks + 8 NIAH stimuli per (model, policy)).
-
-3. For PPL cell-groups: aggregate completed chunks, compute mean PPL and a
-   1000-sample percentile bootstrap 95% CI.
-
-4. For NIAH cell-groups: count gen.txt files and rule-grade them by
-   case-insensitive substring "sandwich at dolores park".
-
-5. Emit:
-     figures/eval_plots/wave11_interim_ppl.png
-         bar chart per (model, policy) of mean PPL +/- 95% CI.
-     figures/eval_plots/wave11_interim_niah.png
-         bar chart per (model, policy) of rule-based NIAH accuracy.
-     figures/master_tables/WAVE11_INTERIM.md
-         markdown table:  model | policy | bench |
-             cells_complete | cells_pending | mean_ppl | niah_acc
-
-6. Print a progress summary line:
-     "X of 30 cells complete, ETA Yh"
-
-Idempotent: safe to call repeatedly. Each invocation overwrites its outputs
-in place. If the phone is offline / unauthorised / not connected the script
-still works on the local mirror.
-
-Stdlib + matplotlib only.
-"""
+Pulls newer run dirs into phone-logs/ when a device is online, aggregates PPL (bootstrap 95% CI)
+and NIAH accuracy per (model, policy), and writes two PNGs, a markdown table and an ETA line."""
 
 from __future__ import annotations
 
@@ -67,17 +27,12 @@ matplotlib.use("Agg")  # headless
 import matplotlib.pyplot as plt
 
 
-# --------------------------------------------------------------------------- #
 # Constants
-# --------------------------------------------------------------------------- #
 
 PHONE_LOG_ROOT = "/data/local/tmp/endurkv/logs"
 NEEDLE_KEY = "sandwich at dolores park"   # case-insensitive substring
 
-# How long each cell takes (used for ETA estimate). The wave11 manifest has
-# a per-cell estimate but for the interim ETA we just use a flat average
-# (total_expected_minutes / total_cells) so we don't have to re-key into the
-# manifest for every (model, policy, bench, idx) lookup.
+# The ETA uses a flat per-cell average (total_expected_minutes / total_cells).
 DEFAULT_TOTAL_CELLS = 30           # 3 models x 5 policies x 2 benches
 DEFAULT_CHUNKS_PER_CELL = 8        # 8 PPL chunks / 8 NIAH stimuli per cell
 
@@ -87,9 +42,7 @@ NIAH_PNG = "figures/eval_plots/wave11_interim_niah.png"
 MD_TABLE = "figures/master_tables/WAVE11_INTERIM.md"
 
 
-# --------------------------------------------------------------------------- #
 # Path resolution
-# --------------------------------------------------------------------------- #
 
 def default_endurkv_root() -> Path:
     """<workspace>/EndurKV, derived from this file's location."""
@@ -100,9 +53,7 @@ def default_workspace_root() -> Path:
     return default_endurkv_root().parent
 
 
-# --------------------------------------------------------------------------- #
 # adb_resilient.sh wrappers
-# --------------------------------------------------------------------------- #
 
 def _adb_script_path(endurkv_root: Path) -> Path:
     return endurkv_root / "scripts" / "android" / "adb_resilient.sh"
@@ -110,12 +61,8 @@ def _adb_script_path(endurkv_root: Path) -> Path:
 
 def _run_adb_helper(endurkv_root: Path, helper: str, *args: str,
                     timeout: int = 600) -> Tuple[int, str, str]:
-    """
-    Source adb_resilient.sh and invoke one of its helpers. Returns
-    (returncode, stdout, stderr). All errors are caught and reported as a
-    non-zero rc; we never raise from here so the caller can fall back to the
-    existing local mirror.
-    """
+    """Run one adb_resilient.sh helper and return (rc, stdout, stderr).
+    Never raises, so the caller can fall back to the local mirror."""
     script = _adb_script_path(endurkv_root)
     if not script.is_file():
         return 1, "", f"adb_resilient.sh not found at {script}"
@@ -151,10 +98,7 @@ def adb_device_online(endurkv_root: Path) -> bool:
 
 
 def adb_remote_mtime(endurkv_root: Path, remote_path: str) -> Optional[int]:
-    """
-    Return the mtime (epoch seconds) of remote_path on the phone, or None
-    if it doesn't exist / we can't query it.
-    """
+    """mtime (epoch seconds) of remote_path on the phone, or None if unavailable."""
     rc, out, _ = _run_adb_helper(
         endurkv_root,
         "adb_safe_shell",
@@ -172,10 +116,7 @@ def adb_remote_mtime(endurkv_root: Path, remote_path: str) -> Optional[int]:
 
 
 def adb_list_wave11_runs(endurkv_root: Path) -> List[str]:
-    """
-    List wave11_eval_* directory names under PHONE_LOG_ROOT on the phone.
-    Returns [] if the phone is offline or no runs exist.
-    """
+    """wave11_eval_* directory names under PHONE_LOG_ROOT, or [] if none or offline."""
     rc, out, _ = _run_adb_helper(
         endurkv_root,
         "adb_safe_shell",
@@ -187,11 +128,7 @@ def adb_list_wave11_runs(endurkv_root: Path) -> List[str]:
 
 
 def adb_pull_run(endurkv_root: Path, run_name: str, local_dest: Path) -> bool:
-    """
-    Pull /data/local/tmp/endurkv/logs/<run_name> into local_dest/<run_name>.
-    Returns True on success. Idempotent: the resilient pull will retry under
-    USB drops and overwrite local files with the newer phone copies.
-    """
+    """Pull PHONE_LOG_ROOT/<run_name> into local_dest/<run_name>. True on success."""
     local_dest.mkdir(parents=True, exist_ok=True)
     remote = f"{PHONE_LOG_ROOT}/{run_name}"
     rc, _out, _err = _run_adb_helper(
@@ -205,11 +142,8 @@ def adb_pull_run(endurkv_root: Path, run_name: str, local_dest: Path) -> bool:
 
 
 def maybe_sync_from_phone(endurkv_root: Path, phone_logs_root: Path) -> None:
-    """
-    For each wave11_eval_* run on the phone, pull it locally IF the phone-side
-    mtime is newer than the local copy (or the local copy is missing).
-    Silently skips everything if no device is online.
-    """
+    """Pull each wave11_eval_* run whose phone copy is newer than the local one.
+    Does nothing if no device is online."""
     if not adb_device_online(endurkv_root):
         print("[sync] no adb device online; skipping phone pull")
         return
@@ -224,7 +158,7 @@ def maybe_sync_from_phone(endurkv_root: Path, phone_logs_root: Path) -> None:
         remote_mtime = adb_remote_mtime(endurkv_root, remote)
         local_mtime = int(local.stat().st_mtime) if local.exists() else 0
         if remote_mtime is None:
-            # Phone glitch; pull anyway to be safe.
+            # mtime query failed, pull anyway.
             print(f"[sync] mtime unknown for {run}; pulling")
             ok = adb_pull_run(endurkv_root, run, phone_logs_root)
         elif remote_mtime > local_mtime:
@@ -238,15 +172,10 @@ def maybe_sync_from_phone(endurkv_root: Path, phone_logs_root: Path) -> None:
             print(f"[sync] warning: failed to pull {run}; using stale local copy")
 
 
-# --------------------------------------------------------------------------- #
 # Manifest
-# --------------------------------------------------------------------------- #
 
 def load_manifest(endurkv_root: Path) -> Dict:
-    """
-    Load wave11_cells.json. The interim plotter only needs the high-level
-    counts and the per-cell expected runtime; everything else is informational.
-    """
+    """Load eval_pipeline/wave11_cells.json, or defaults if it is missing."""
     p = endurkv_root / "eval_pipeline" / "wave11_cells.json"
     if not p.is_file():
         print(f"[warn] manifest missing: {p}; using defaults")
@@ -264,15 +193,10 @@ def load_manifest(endurkv_root: Path) -> Dict:
         return json.load(f)
 
 
-# --------------------------------------------------------------------------- #
 # Wave-11 layout discovery
-# --------------------------------------------------------------------------- #
 
 def latest_wave11_run(phone_logs_root: Path) -> Optional[Path]:
-    """
-    Pick the most-recent local wave11_eval_*/ directory (by mtime). Falls back
-    to wave11_smoke_* if there's no _eval_ run yet (useful early in the cycle).
-    """
+    """Newest local wave11_eval_* dir by mtime, else the newest wave11_smoke_* dir."""
     candidates = sorted(
         phone_logs_root.glob("wave11_eval_*"),
         key=lambda p: p.stat().st_mtime,
@@ -280,7 +204,6 @@ def latest_wave11_run(phone_logs_root: Path) -> Optional[Path]:
     )
     if candidates:
         return candidates[0]
-    # Fallback: smoke test, so the script still produces something to look at.
     smoke = sorted(
         phone_logs_root.glob("wave11_smoke_*"),
         key=lambda p: p.stat().st_mtime,
@@ -290,10 +213,7 @@ def latest_wave11_run(phone_logs_root: Path) -> Optional[Path]:
 
 
 def walk_cells(run_dir: Path) -> Dict[Tuple[str, str, str], Path]:
-    """
-    Walk run_dir/<model>/<policy>/<bench>/ and return a map
-    (model, policy, bench) -> Path to that bench directory.
-    """
+    """Map (model, policy, bench) to run_dir/<model>/<policy>/<bench>/."""
     out: Dict[Tuple[str, str, str], Path] = {}
     if not run_dir or not run_dir.is_dir():
         return out
@@ -307,13 +227,10 @@ def walk_cells(run_dir: Path) -> Dict[Tuple[str, str, str], Path]:
     return out
 
 
-# --------------------------------------------------------------------------- #
 # PPL aggregation
-# --------------------------------------------------------------------------- #
 
 def _read_ppl(meta_path: Path) -> Optional[float]:
-    # eviction_bench writes bareword `inf` for non-finite decode_tps; tolerate
-    # by patching to the json-permissive token before parsing.
+    # eviction_bench can write a bare `inf` for decode_tps, so patch it to Infinity on parse failure.
     try:
         with open(meta_path) as f:
             raw = f.read()
@@ -344,11 +261,8 @@ def _read_ppl(meta_path: Path) -> Optional[float]:
 
 
 def aggregate_ppl_cell(bench_dir: Path) -> Tuple[List[float], int]:
-    """
-    Returns (ppl_values, n_iter_dirs). n_iter_dirs counts every iter*/
-    directory even if its meta.json hasn't been written yet (which is the
-    "in-flight" signal).
-    """
+    """Return (ppl_values, n_iter_dirs). n_iter_dirs also counts iter*/ dirs
+    whose meta.json is not written yet (in flight)."""
     if not bench_dir.is_dir():
         return [], 0
     iter_dirs = sorted(p for p in bench_dir.iterdir()
@@ -388,15 +302,10 @@ def bootstrap_ci(xs: List[float], n_samples: int = 1000,
     return samples[lo], samples[hi]
 
 
-# --------------------------------------------------------------------------- #
 # NIAH aggregation
-# --------------------------------------------------------------------------- #
 
 def aggregate_niah_cell(bench_dir: Path) -> Tuple[int, int]:
-    """
-    Returns (n_correct, n_gen_files). A trial is "correct" iff the
-    rule-based substring is present in gen.txt.
-    """
+    """Return (n_correct, n_gen_files). Correct means NEEDLE_KEY appears in gen.txt."""
     if not bench_dir.is_dir():
         return 0, 0
     gen_files = sorted(bench_dir.glob("**/gen.txt"))
@@ -412,20 +321,12 @@ def aggregate_niah_cell(bench_dir: Path) -> Tuple[int, int]:
     return n_correct, n_total
 
 
-# --------------------------------------------------------------------------- #
 # Cell-level summary (one row per (model, policy, bench))
-# --------------------------------------------------------------------------- #
 
 def summarise_cells(run_dir: Optional[Path], manifest: Dict
                     ) -> List[Dict]:
-    """
-    For each (model, policy, bench) cell, return a dict:
-      model, policy, bench,
-      chunks_done, chunks_started, chunks_expected,
-      status (complete / partial / pending),
-      mean_ppl, ci_low, ci_high,        (ppl cells only; NaN otherwise)
-      niah_correct, niah_total, niah_acc (niah cells only)
-    """
+    """One dict per (model, policy, bench): chunk counts, status, PPL mean and CI
+    (ppl cells) and NIAH counts and accuracy (niah cells)."""
     bench_dirs = walk_cells(run_dir) if run_dir else {}
     models = manifest.get("models") or sorted({m for (m, _, _) in bench_dirs.keys()})
     policies = manifest.get("policies") or sorted({p for (_, p, _) in bench_dirs.keys()})
@@ -436,15 +337,11 @@ def summarise_cells(run_dir: Optional[Path], manifest: Dict
     rng = random.Random(0)
     rows: List[Dict] = []
 
-    # We have to be tolerant about model-name conventions: the manifest says
-    # "phi3" / "llama1b" / "gemma2b", but the on-device dir names are the
-    # gguf-stems ("Llama-3.2-1B", "Phi-3-mini-...", "gemma-2-2b-it"). Match by
-    # the tag the on-device runner actually emits.
+    # Manifest model tags (phi3, llama1b) can differ from on-device dir names
+    # (gguf stems), so fall back to the on-disk names when none match.
     on_disk_models = sorted({m for (m, _, _) in bench_dirs.keys()})
     if not models:
         models = on_disk_models
-    # If manifest models don't match on-disk, prefer on-disk (we report what
-    # exists, not what was planned).
     elif set(models).isdisjoint(set(on_disk_models)) and on_disk_models:
         models = on_disk_models
 
@@ -500,9 +397,7 @@ def summarise_cells(run_dir: Optional[Path], manifest: Dict
     return rows
 
 
-# --------------------------------------------------------------------------- #
 # Rendering
-# --------------------------------------------------------------------------- #
 
 def _label(model: str, policy: str) -> str:
     return f"{model}\n{policy}"
@@ -599,15 +494,8 @@ def render_niah_plot(rows: List[Dict], out_path: Path) -> None:
 
 
 def _placeholder(out_path: Path, message: str) -> None:
-    """Skip placeholder PNG generation.
-
-    Earlier versions of this script wrote a faux figure showing the message
-    string when no data was available. Those placeholder PNGs were
-    indistinguishable from real figures at thumbnail size and led reviewers
-    to mistake them for results. We now refuse to write them and emit a
-    diagnostic to stderr instead — `figures/eval_plots/` will be empty
-    until real data lands on disk.
-    """
+    """Write nothing and log to stderr. Placeholder PNGs are easily mistaken
+    for real results."""
     import sys as _sys
     _sys.stderr.write(
         f"[skip] {message}; not writing placeholder PNG to {out_path}\n"
@@ -639,9 +527,6 @@ def render_markdown(rows: List[Dict], out_path: Path,
                  "| chunks_done/expected | mean_ppl | niah_acc | status |")
     lines.append("|---|---|---|---:|---:|---:|---:|---:|---|")
 
-    # Roll up cells_complete / cells_pending per (model, policy):
-    # there are two benches; we report both rows but include the cross-bench
-    # rollup at the model/policy level too.
     rows_sorted = sorted(rows, key=lambda r: (r["model"], r["policy"], r["bench"]))
     for r in rows_sorted:
         complete = 1 if r["status"] == "complete" else 0
@@ -665,9 +550,7 @@ def render_markdown(rows: List[Dict], out_path: Path,
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
 
-# --------------------------------------------------------------------------- #
 # Progress / ETA
-# --------------------------------------------------------------------------- #
 
 def compute_progress(rows: List[Dict], manifest: Dict,
                      total_cells: int) -> Dict:
@@ -679,15 +562,13 @@ def compute_progress(rows: List[Dict], manifest: Dict,
     total_minutes = float(manifest.get("total_expected_minutes")
                           or (total_cells *
                               DEFAULT_CHUNKS_PER_CELL * 5.0))
-    # Manifest expresses total over 240 chunk-runs but we report at the
-    # cell-group level (30 cells = 30 (model, policy, bench)). The per-cell
-    # estimate is total_minutes / total_cells_in_manifest.
+    # The manifest total covers chunk-runs, but progress is per
+    # (model, policy, bench) cell, so convert chunk-runs to cells.
     cells_in_manifest = max(
         1, len(manifest.get("cells", [])) // max(1, manifest.get(
             "n_ppl_chunks_per_cell_group", DEFAULT_CHUNKS_PER_CELL)),
     ) if manifest.get("cells") else n_total
-    # Defensive: fall back to spec-level total_cells if cells_in_manifest is
-    # implausible.
+    # Fall back to the row count if the manifest count is implausible.
     if cells_in_manifest < 1 or cells_in_manifest > 10 * n_total:
         cells_in_manifest = n_total
 
@@ -706,9 +587,7 @@ def compute_progress(rows: List[Dict], manifest: Dict,
     }
 
 
-# --------------------------------------------------------------------------- #
 # Main
-# --------------------------------------------------------------------------- #
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
@@ -749,7 +628,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     rows = summarise_cells(run_dir, manifest)
     if not rows:
-        # Synthesize empty rows so the table & plots have something to render.
+        # Empty pending rows so the table still renders.
         models = manifest.get("models") or ["phi3", "llama1b", "gemma2b"]
         policies = manifest.get("policies") or [
             "vanilla", "v1", "tova", "h2o", "v1_fa2_stack"]
@@ -783,7 +662,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"[ok] wrote {niah_out}")
     print(f"[ok] wrote {md_out}")
 
-    # Progress summary line (the contract).
+    # Progress summary line.
     eta = progress["eta_hours"]
     eta_str = f"{eta:.1f}h" if math.isfinite(eta) else "n/a"
     print(f"{progress['cells_complete']} of {progress['cells_total']} "

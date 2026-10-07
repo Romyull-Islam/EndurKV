@@ -1,31 +1,8 @@
 #!/usr/bin/env python3
-"""Score the phone needle grid, strictly. (2026-09-20)
-
-WHY THIS EXISTS. The campaign runner counts a hit with
-
-    grep -qiE 'mango sorbet|bi-rite'
-
-and the needle is "The best ice-cream flavor in San Francisco is mango sorbet
-from Bi-Rite." The "bi-rite" half of that alternation matches answers that name
-the shop and then say, in words, that the flavor is not in the passage:
-
-    gemma2b/mukv/L8K_d33  "Bi-Rite is the best ice cream place ... It does not,
-                           however, specify a particular flavor."
-    llama1b/h2o/L8K_d17   "Bi-Rite is a popular ice cream shop ... However, it
-                           does not provide information on which flavor is best"
-
-Those are misses. The question asks for the flavor. Worse, the published table
-scored some cells one way and some the other, which flattered muKV on gemma
-(11 instead of 10), flattered H2O on Llama (8 instead of 7), and scored
-StreamingLLM's gemma cell strictly at 2. A reviewer re-scoring uniformly gets a
-different table either way, so the grid is rescored here under one rule.
-
-THE RULE. A hit names the flavor: "mango sorbet", or "mango" and "sorbet"
-close together. An answer that also disclaims knowing it is a miss, because a
-self-contradicted answer is not a retrieval. Naming only the shop is a miss.
-
-Reports per model and policy, and the mean live cache, so the table can be
-rebuilt from one place.
+"""Strict scorer for the phone needle grid. A hit names the flavor (mango) in the answer span
+and does not then disclaim it. Naming only the shop (Bi-Rite) is a miss, unlike the runner's
+loose 'mango sorbet|bi-rite' grep. Prints hits per model and policy, mean live cache, and disagreements.
+Usage: score_niah_strict.py [ROOT]
 """
 import json
 import os
@@ -36,18 +13,14 @@ from collections import defaultdict
 ROOT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/niah_tableC_k1024_ctx16384"
 MODELS = ("phi3", "llama1b", "gemma2b", "bonsai8b")
 POLICIES = ("vanilla", "mukv", "snapkv", "adakv", "tova", "h2o", "streamingllm", "keydiff",
-            # the published-budget re-runs (2026-09-21): StreamingLLM 4+2000, Ada-KV and TOVA
-            # at 2048, H2O at 20% of each stimulus's prompt
+            # published budgets: StreamingLLM 4+2000, Ada-KV and TOVA 2048, H2O 20% of the prompt
             "sllm2004", "adakv2048", "tova2048", "h2opub")
 
-# --ignore-eos forces 64 tokens, so every model answers, emits its turn terminator,
-# and then keeps generating unrelated commentary. Only the span before the first
-# terminator is the answer; scoring the whole buffer is what made the loose regex
-# both over- and under-count.
+# --ignore-eos makes models keep generating after their turn terminator, so only the
+# span before the first terminator is scored as the answer.
 END = re.compile(r"<end_of_turn>|<\|eot_id\|>|<\|end\|>|<\|im_end\|>|<\|endoftext\|>|<pad>", re.I)
 FLAVOR = re.compile(r"mango", re.I)
-# a disclaimer INSIDE the answer span: the model names the shop, or nothing, and
-# says the passage does not give the flavor. A self-contradicted answer is a miss.
+# disclaimer inside the answer span (the passage "does not specify" the flavor), counted as a miss
 DISCLAIM = re.compile(
     r"(does not|doesn't|didn't|do not)\s+\w{0,12}\s*(specify|mention|say|state|provide|give|indicate|contain)"
     r"|trick question",
@@ -71,9 +44,8 @@ def verdict(text):
     return True, "hit"
 
 
-# meta.json's head_dim is n_embd / n_head. Gemma-2 sets its head size explicitly (256, not
-# 2304 / 8 = 288), so without this every gemma cell count comes out 256/288 = 11% low; with it the
-# full cache's cells equal its prompt length, as on the other three models.
+# meta.json's head_dim is n_embd / n_head, but Gemma-2 sets its head size to 256 (not 288),
+# which would make its cell counts 11% low.
 HEAD_DIM = {"gemma2b": 256}
 
 
@@ -96,8 +68,7 @@ for d in sorted(os.listdir(ROOT)):
         continue
     model, policy = parts[0], parts[1]
     gen = os.path.join(ROOT, d, "gen.txt")
-    # a cell counts only once it finished: meta.json is written last, so a cell cut
-    # off mid-run (the phone dropped off USB on 2026-09-22) is not scored
+    # meta.json is written last, so cells cut off mid-run are not scored
     if not (os.path.exists(gen) and os.path.exists(os.path.join(ROOT, d, "meta.json"))):
         continue
     text = open(gen, errors="ignore").read()
@@ -105,7 +76,7 @@ for d in sorted(os.listdir(ROOT)):
     total[(model, policy)] += 1
     if ok:
         hits[(model, policy)] += 1
-    # anything the loose regex would have called a hit but this does not, and vice versa
+    # cells where the loose regex and the strict rule disagree
     loose = bool(re.search(r"mango sorbet|bi-rite", text, re.I))
     if loose != ok:
         flagged.append((d, "loose=HIT strict=miss" if loose else "loose=miss strict=HIT", why,

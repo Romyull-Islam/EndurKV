@@ -1,22 +1,8 @@
 #!/usr/bin/env python3
-# ============================================================================
-# longbench_score.py -- official LongBench token-F1 scorer.  (2026-08-02)
-#
-# WHY THIS EXISTS. The draft reported "preliminary sample-0 F1" from an ad-hoc
-# string comparison. Reviewers of a KV-eviction paper compare against SnapKV /
-# Ada-KV / PyramidKV LongBench tables, and those are computed with LongBench's
-# own metrics.py (qa_f1_score): normalize -> lowercase, strip punctuation, drop
-# articles, collapse whitespace; then token-level F1; then MAX over the multiple
-# gold answers. Anything else is not comparable and would be argued with.
-# This file is a faithful re-implementation of that function.
-#
-# One deliberate addition: --strip-prefix. Instruction-tuned models sometimes
-# emit "Answer: X" or a leading newline even when told not to. LongBench does
-# not strip that, so it is OFF by default; the flag exists only so the effect
-# can be quantified, and it is applied identically to every policy or not at all.
-#
+# LongBench token-F1 scorer, a re-implementation of qa_f1_score in LongBench's metrics.py
+# (normalize, token F1, max over gold answers). --strip-prefix removes a leading
+# "Answer:" and is off by default because LongBench does not do it.
 # Usage: longbench_score.py --runs /tmp/lb_out --gold .../gold.json
-# ============================================================================
 import os, re, json, string, argparse
 from collections import Counter
 
@@ -52,21 +38,15 @@ def qa_f1_score(prediction, ground_truths):
     return max((f1_score(prediction, gt) for gt in ground_truths), default=0.0)
 
 
-# eviction_bench writes raw detokenized text, so chat/EOS control tokens survive
-# into gen.txt. LongBench's own pred.py decodes with skip_special_tokens=True and
-# therefore never sees them; leaving them in would add junk tokens to the F1
-# denominator and understate EVERY policy equally but unfairly. Strip them so our
-# numbers sit on the same scale as the published tables. (2026-08-02)
+# eviction_bench writes raw text, so chat/EOS control tokens reach gen.txt. LongBench's
+# pred.py decodes with skip_special_tokens=True, so remove them to stay on its scale.
 SPECIAL = re.compile(r'<\|eot_id\|>|<\|end\|>|<\|endoftext\|>|<\|im_end\|>|'
                      r'<\|assistant\|>|<\|user\|>|</s>|<end_of_turn>|<bos>|<eos>')
 
 
 def clean(pred, strip_prefix):
-    # CUT at the first special token rather than substituting for it. Substituting
-    # a space here replaced the "\n" that ends the answer line, so the newline
-    # truncation below then had nothing to cut at and swept the model's trailing
-    # commentary into the prediction. That roughly halved F1 for every policy
-    # equally, which is why it was easy to miss. (fixed 2026-09-01)
+    # Cut at the first special token instead of replacing it, so the newline that ends
+    # the answer line survives for the truncation below.
     m = SPECIAL.search(pred)
     if m:
         pred = pred[:m.start()]
@@ -93,12 +73,8 @@ if __name__ == "__main__":
         g = os.path.join(a.runs, d, "gen.txt")
         if not os.path.exists(g):
             continue
-        # A cell that CRASHED (CUDA OOM, context-alloc failure, timeout) still leaves
-        # an empty gen.txt behind but no meta.json. Scoring that empty string as a
-        # prediction yields F1=0 and silently drags the policy's mean down -- an
-        # infrastructure failure masquerading as a quality result. Require meta.json,
-        # which is only written on a successful run. (2026-08-02: this turned 8-way
-        # GPU contention into an apparent 0.00 F1 for Gemma-2B muKV.)
+        # A crashed cell leaves an empty gen.txt but no meta.json. Skip it instead of
+        # scoring F1=0, since meta.json is only written on success.
         if not os.path.exists(os.path.join(a.runs, d, "meta.json")):
             skipped.append(d)
             continue

@@ -1,40 +1,8 @@
 #!/usr/bin/env python3
-"""
-Phase E.1 — offline analysis of the LongBench study.
-
-Reads:
-    logs/study_full.csv           per-step entropy + chosen-token stats
-    logs/study/<id>.attn.bin      per-step per-layer per-source attention
-
-Writes:
-    figures/study_01_entropy_by_task.{pdf,png}
-        violin plot, H_nats grouped by task. Kruskal-Wallis test across tasks.
-    figures/study_02_entropy_over_time.{pdf,png}
-        H_nats vs step_index for 2 prompts per task (8 total) — shows that
-        entropy varies *within* a single decode, justifying per-step gating.
-    figures/study_03_entropy_autocorrelation.{pdf,png}
-        Auto-correlation of H_nats at lags 1–10, averaged within task. Tells
-        us whether entropy at step t predicts entropy at step t+k — a
-        precondition for using entropy as a control signal.
-    figures/study_04_entropy_vs_attention_entropy.{pdf,png}
-        Scatter: output entropy (H_nats) vs. attention entropy (entropy of
-        the source-token attention distribution, averaged over layers and
-        heads). If high output entropy correlates with diffuse attention,
-        the model's "uncertainty" is consistent across both signals.
-    figures/study_05_attention_concentration_vs_entropy.{pdf,png}
-        Scatter: H_nats vs. top-1 attention probability and vs. recent-16
-        attention mass. Tests whether the safety-gate intuition is visible
-        analytically (sharp attention -> safe to prune; diffuse -> unsafe).
-    figures/study_06_heavy_hitters_by_task.{pdf,png}
-        H2O-style heavy-hitter plots per task, averaged over prompts in that
-        task. Shows which source-token positions stay "hot" across decode
-        steps.
-    figures/study_summary.json
-        all numerical stats (means, p-values, correlations) in one place.
-
-Usage:
-    python3 scripts/11_analyze.py
-"""
+"""Offline analysis of the LongBench entropy study. Reads logs/study_full.csv and
+logs/study/<id>.attn.bin, writes figures/study_01..06 (entropy by task, over time,
+autocorrelation, vs attention entropy and concentration, heavy hitters) and study_summary.json.
+Usage: python3 scripts/11_analyze.py"""
 from __future__ import annotations
 
 import json
@@ -82,9 +50,7 @@ def make_palette(task_names):
 PALETTE: dict = {}  # populated in main()
 
 
-# --------------------------------------------------------------------------- #
-# attention sidecar loader                                                    #
-# --------------------------------------------------------------------------- #
+# attention sidecar loader
 def load_attn_bin(path: Path):
     with open(path, "rb") as f:
         magic = f.read(4)
@@ -122,15 +88,11 @@ def step_attention_summary(layers_for_step: list[np.ndarray]):
     return {"attn_H": H, "attn_top1": top1, "attn_recent16": recent_mass, "n_kv": int(n_kv), "p": p}
 
 
-# --------------------------------------------------------------------------- #
-# main analysis                                                               #
-# --------------------------------------------------------------------------- #
+# main analysis
 def main() -> int:
     FIG_DIR.mkdir(exist_ok=True)
 
-    # Load per-prompt CSVs directly (more robust than relying on the global
-    # study_full.csv which can be truncated if a single row in any per-prompt
-    # CSV has a parse oddity).
+    # Load per-prompt CSVs directly, since one bad row can truncate study_full.csv.
     prompts_jsonl = Path(os.environ.get("PROMPTS_PATH",
                                         ROOT / "data" / "prompts.jsonl"))
     task_by_id: dict[str, str] = {}
@@ -145,9 +107,8 @@ def main() -> int:
         print(f"warn: {prompts_jsonl} not found — will derive task from prompt_id prefix", file=sys.stderr)
 
     def task_from_prompt_id(pid: str) -> str:
-        """Fallback when prompts.jsonl doesn't list this prompt_id.
-        Our prompt_id naming is `<task>_<NNN>` or `<task>_lc_<NN>`, so strip the trailing
-        digits and any '_lc' suffix to recover the task name."""
+        """Fallback when prompts.jsonl lacks this id: strip the trailing digits and any '_lc'
+        from `<task>_<NNN>` or `<task>_lc_<NN>`."""
         if pid in task_by_id:
             return task_by_id[pid]
         s = pid
@@ -187,7 +148,7 @@ def main() -> int:
     global PALETTE
     PALETTE = make_palette(df["task"].unique().tolist())
 
-    # --- Per-step attention features (joined onto df) -------------------------
+    # Per-step attention features (joined onto df)
     print("loading attention sidecars...")
     attn_features = []
     per_task_avg_attn = defaultdict(list)  # task -> list of per-step prob vectors (variable length)
@@ -234,9 +195,7 @@ def main() -> int:
             "attn_top1_mean": float(sub["attn_top1"].mean(skipna=True)) if sub["attn_top1"].notna().any() else None,
         }
 
-    # ===================================================================== #
-    # 01 — entropy distribution by task (violin) + Kruskal-Wallis            #
-    # ===================================================================== #
+    # 01: entropy distribution by task (violin) + Kruskal-Wallis
     print("plot 01: entropy by task ...")
     fig, ax = plt.subplots(figsize=(max(7, 0.7 * df["task"].nunique() + 2), 4.5))
     sns.violinplot(data=df, x="task", y="H_nats", hue="task", ax=ax,
@@ -257,9 +216,7 @@ def main() -> int:
     fig.savefig(FIG_DIR / "study_01_entropy_by_task.png", dpi=200)
     plt.close(fig)
 
-    # ===================================================================== #
-    # 02 — entropy over time (2 prompts per task)                            #
-    # ===================================================================== #
+    # 02: entropy over time (2 prompts per task)
     print("plot 02: entropy over time ...")
     n_tasks = len(summary["tasks"])
     n_cols = min(4, n_tasks)
@@ -284,9 +241,7 @@ def main() -> int:
     fig.savefig(FIG_DIR / "study_02_entropy_over_time.png", dpi=200)
     plt.close(fig)
 
-    # ===================================================================== #
-    # 03 — entropy auto-correlation by task                                  #
-    # ===================================================================== #
+    # 03: entropy auto-correlation by task
     print("plot 03: entropy auto-correlation ...")
     lags = [1, 2, 5, 10]
     autocorr_by_task: dict[str, dict[int, float]] = {}
@@ -325,9 +280,7 @@ def main() -> int:
     fig.savefig(FIG_DIR / "study_03_entropy_autocorrelation.png", dpi=200)
     plt.close(fig)
 
-    # ===================================================================== #
-    # 04 — output entropy vs. attention entropy                              #
-    # ===================================================================== #
+    # 04: output entropy vs. attention entropy
     print("plot 04: entropy vs. attention entropy ...")
     sub = df.dropna(subset=["attn_H"])
     if len(sub) >= 5:
@@ -357,9 +310,7 @@ def main() -> int:
         fig.savefig(FIG_DIR / "study_04_entropy_vs_attention_entropy.png", dpi=200)
         plt.close(fig)
 
-    # ===================================================================== #
-    # 05 — attention concentration vs. output entropy                        #
-    # ===================================================================== #
+    # 05: attention concentration vs. output entropy
     print("plot 05: attention concentration vs. entropy ...")
     sub = df.dropna(subset=["attn_top1", "attn_recent16"])
     if len(sub) >= 5:
@@ -385,9 +336,7 @@ def main() -> int:
         fig.savefig(FIG_DIR / "study_05_attention_concentration_vs_entropy.png", dpi=200)
         plt.close(fig)
 
-    # ===================================================================== #
-    # 06 — H2O-style heavy-hitter aggregate per task                         #
-    # ===================================================================== #
+    # 06: H2O-style heavy-hitter aggregate per task
     print("plot 06: heavy hitters by task ...")
     n_tasks = len(summary["tasks"])
     n_cols = min(4, n_tasks)
@@ -420,16 +369,14 @@ def main() -> int:
     fig.savefig(FIG_DIR / "study_06_heavy_hitters_by_task.png", dpi=200)
     plt.close(fig)
 
-    # --- write summary json ---
+    # write summary json
     with open(SUMMARY, "w") as f:
         json.dump(summary, f, indent=2)
     print(f"wrote {SUMMARY}")
 
-    # --- print a short text summary so the user sees the headline numbers ---
+    # short text summary of the headline numbers
     print()
-    print("=" * 72)
     print("HEADLINE NUMBERS")
-    print("=" * 72)
     for t, s in summary["by_task"].items():
         print(f"  {t:<20}  n={s['n_rows']:>4}  "
               f"H mean={s['H_nats_mean']:.3f}  median={s['H_nats_median']:.3f}  std={s['H_nats_std']:.3f}  "
@@ -448,8 +395,8 @@ def main() -> int:
         e = summary["entropy_vs_attn_recent16"]
         print(f"  H vs. recent-16 attn mass:  ρ={e['spearman_rho']:.3f} (p={e['p_value']:.1e})")
 
-    # Per-task correlations — these are usually stronger than the aggregate
-    # because aggregate Spearman is diluted by between-task variation.
+    # Per-task correlations, usually stronger than the aggregate because between-task
+    # variation dilutes the aggregate Spearman.
     print()
     print("PER-TASK Spearman correlation  H_nats  vs  attn_top1   (the safety-gate signal):")
     per_task_rho: dict[str, dict] = {}
@@ -464,7 +411,6 @@ def main() -> int:
     summary["entropy_vs_attn_top1_by_task"] = per_task_rho
     with open(SUMMARY, "w") as f:
         json.dump(summary, f, indent=2)
-    print("=" * 72)
     print(f"figures in {FIG_DIR}/")
     return 0
 

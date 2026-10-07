@@ -1,47 +1,14 @@
 #!/bin/bash
-# ============================================================================
-# Phone GPU (Adreno 840) -- FULL 16K CONTEXT, WikiText  (2026-08-02)
+# Phone GPU (Adreno 840), full 16K context on WikiText: 12K prompt plus 4096 generated.
+# A 256-token decode leaves prefill at ~95% of the run, which hides any decode gain.
 #
-# WHY THIS EXISTS (and why it is not run_phone_gpu_matrix.sh).
-# That matrix decoded only 256 tokens: 12K prompt + 256 gen. On Adreno prefill
-# is ~95% of such a run (Phi-3: 610s prefill vs 35s decode), so a 2.12x DECODE
-# win showed up as 0.99x wall. Eviction cannot shrink prefill -- it needs a
-# long generation to pay off. This script fills the context instead:
-#   12K WikiText prompt + 4096 generated tokens = 16384 = the full ctx.
-# That is the regime the CPU WikiText table already reports, so the phone GPU
-# becomes directly comparable to the phone CPU and to the RTX max-workload set.
+# Arms per model: vanilla, muKV with compaction on (--force-defrag) and off (--no-defrag),
+# and canonical SnapKV (window 16, avgpool 5). Only the muKV arms run the GPU watchdog
+# (gpu_watchdog_v5_real.sh). Llama-1B and Phi-3 only: gemma2b and bonsai8b hit
+# vk::DeviceLostError under FA-on on this driver for vanilla and muKV alike.
 #
-# FOUR ARMS PER MODEL (the middle two are the compaction A/B the draft needs):
-#   vanilla     full cache, NO watchdog
-#   mukv_dfg    frozen muKV + --force-defrag  (compaction ON)  + GPU watchdog v5
-#   mukv_nodfg  frozen muKV + --no-defrag     (compaction OFF) + GPU watchdog v5
-#   snapkv      canonical SnapKV (window 16, avgpool-5), NO watchdog
-# The watchdog is muKV-ONLY by design -- thermal-aware inference is muKV's own
-# mechanism; handing it to a baseline would be lending it our eviction.
-# GPU watchdog = gpu_watchdog_v5_real.sh (07-20). v3/v4 misanchored at idle-warm
-# temps and capped the clock to 826 MHz for nothing; v5 anchors at the measured
-# deep-throttle trigger and stays dormant at 1200 MHz on a cool run. This run
-# therefore also produces the v5 GPU row the draft is still missing.
-#
-# MODELS: llama1b + phi3 only. gemma2b and bonsai8b abort under FA-on on this
-# driver ("vk::DeviceLostError: vk::Queue::submit") for BOTH vanilla and muKV --
-# a driver/kernel fault, not a policy or capacity effect. They are excluded here
-# rather than reported as a muKV failure. Tracked separately.
-#
-# CORRECTED 2026-08-04: f16 KV, not q8_0. Quantized KV is NUMERICALLY BROKEN on
-# this Adreno/Vulkan build: with --cache-type q8_0 the model emits random tokens
-# ("Observ Observ ... Alley Alley Bundy Bundy" for a prompt whose answer is
-# "Miller v. California"), and teacher-forced NLL is 12.18 against ln(vocab)=11.76
-# -- i.e. worse than uniform. The SAME binary, model, prompt and seed at f16
-# answers correctly, so the backend is fine and the quantized-KV path is not.
-# This invalidated the first pass in the most confusing possible way: vanilla and
-# muKV ran q8_0 (garbage) while SnapKV was forced to f16 by the FA-off path
-# (valid), so every ratio divided a good run by a bad one. f16 everywhere is both
-# correct AND quantization-matched, like the LongBench table.
-#
-# Cool gate before EVERY cell: DDR<=35C, battery<=33C, charging OFF while
-# cooling. A failed gate SKIPS the cell -- it never runs hot.
-# ============================================================================
+# KV is f16 because q8_0 KV produces garbage tokens on this Adreno/Vulkan build.
+# Cool gate before every cell (DDR<=35C, battery<=33C, charging off). A failed gate skips it.
 set -u
 for _p in ${ADB_PORTS:-5152 5037 5151}; do
   (exec 3<>/dev/tcp/127.0.0.1/$_p) 2>/dev/null || continue   # dead port + adb = squatting server that breaks ssh -R

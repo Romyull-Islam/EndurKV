@@ -3222,7 +3222,7 @@ bool llama_memory_seq_rm(
     return mem->seq_rm(seq_id, p0, p1);
 }
 
-// EndurKV (2026-07-25): cell-index eviction for M-RoPE/vision caches — see llama.h.
+// EndurKV: cell-index eviction for M-RoPE caches (see llama.h).
 uint32_t llama_endurkv_seq_rm_cells(
         llama_memory_t mem,
           llama_seq_id seq_id,
@@ -3241,9 +3241,7 @@ uint32_t llama_endurkv_seq_rm_cells(
     return kv->endurkv_rm_cells(seq_id, keep, n);
 }
 
-// EndurKV (2026-08-07): in-place chunked compaction — see llama.h and
-// llama_kv_cache::endurkv_compact_seq for why this exists alongside the
-// state round-trip.
+// EndurKV: in-place chunked compaction (see llama.h).
 uint32_t llama_endurkv_compact_seq(
         llama_memory_t mem,
           llama_seq_id seq_id,
@@ -3260,7 +3258,7 @@ uint32_t llama_endurkv_compact_seq(
     return kv->endurkv_compact_seq(seq_id, chunk_cells);
 }
 
-// EndurKV (2026-08-31): madvise tail reclaim — see llama.h.
+// EndurKV: madvise tail reclaim (see llama.h).
 size_t llama_endurkv_reclaim_tail(
         llama_memory_t mem,
           llama_seq_id seq_id) {
@@ -3276,7 +3274,7 @@ size_t llama_endurkv_reclaim_tail(
     return kv->endurkv_reclaim_tail(seq_id);
 }
 
-// EndurKV (2026-08-16): KeyDiff key-diversity scores — see llama.h.
+// EndurKV: KeyDiff scores (see llama.h).
 uint32_t llama_endurkv_keydiff_scores(
         llama_memory_t mem,
           llama_seq_id seq_id,

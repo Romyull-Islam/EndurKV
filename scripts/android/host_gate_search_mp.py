@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
-"""Multiprocess gate-shape + hyperparameter search.
-
-16 parallel workers via multiprocessing.Pool. Workers inherit pre-loaded
-attention data from the parent via Linux fork() copy-on-write — no actual
-memory duplication when we only read.
-
-Expected wall time on i9-14900K (32 threads): ~30 min for 69 configs.
+"""Gate-shape and hyperparameter search over 16 multiprocessing workers.
+Workers share the parent's loaded attention data through fork() copy-on-write.
 """
 import sys, time
 from itertools import product
@@ -18,9 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from host_simulate_kv_baselines import load_attn_perhead, simulate, POLICIES
 
 
-# ---------------------------------------------------------------------------
 # Gate-shape policy factories (same as host_gate_search.py)
-# ---------------------------------------------------------------------------
 
 def lin_clip(a, max_a, alpha, beta, tl, th):
     denom = max(th - tl, 1e-6)
@@ -77,12 +70,10 @@ def make_policy(gate, params):
     return policy
 
 
-# ---------------------------------------------------------------------------
 # Configs
-# ---------------------------------------------------------------------------
 
 CONFIGS = []
-# (A) Linear-clipped — 35 configs
+# (A) Linear-clipped - 35 configs
 for alpha, beta in [(1.2, 0.8), (1.25, 0.75), (1.3, 0.7), (1.3, 0.8), (1.4, 0.6)]:
     for tl, th in [(0.3, 0.6), (0.3, 0.7), (0.3, 0.8), (0.4, 0.7), (0.4, 0.8),
                    (0.5, 0.8), (0.2, 0.6)]:
@@ -91,7 +82,7 @@ for alpha, beta in [(1.2, 0.8), (1.25, 0.75), (1.3, 0.7), (1.3, 0.8), (1.4, 0.6)
             "gate": "linear-clipped",
             "params": dict(alpha=alpha, beta=beta, tl=tl, th=th),
         })
-# (B) Sigmoid — 15
+# (B) Sigmoid - 15
 for alpha, beta in [(1.3, 0.7), (1.4, 0.6), (1.5, 0.5)]:
     for c, gamma in [(0.4, 8.0), (0.4, 12.0), (0.5, 8.0), (0.5, 12.0), (0.6, 8.0)]:
         CONFIGS.append({
@@ -99,7 +90,7 @@ for alpha, beta in [(1.3, 0.7), (1.4, 0.6), (1.5, 0.5)]:
             "gate": "sigmoid",
             "params": dict(alpha=alpha, beta=beta, c=c, gamma=gamma),
         })
-# (C) Quadratic — 6
+# (C) Quadratic - 6
 for alpha, beta in [(1.3, 0.7), (1.4, 0.6), (1.5, 0.5)]:
     for tl, th in [(0.3, 0.7), (0.4, 0.8)]:
         CONFIGS.append({
@@ -107,7 +98,7 @@ for alpha, beta in [(1.3, 0.7), (1.4, 0.6), (1.5, 0.5)]:
             "gate": "quadratic",
             "params": dict(alpha=alpha, beta=beta, tl=tl, th=th),
         })
-# (D) Inverse quadratic — 4
+# (D) Inverse quadratic - 4
 for alpha, beta in [(1.3, 0.7), (1.4, 0.6)]:
     for tl, th in [(0.3, 0.7), (0.4, 0.8)]:
         CONFIGS.append({
@@ -115,7 +106,7 @@ for alpha, beta in [(1.3, 0.7), (1.4, 0.6)]:
             "gate": "inv-quadratic",
             "params": dict(alpha=alpha, beta=beta, tl=tl, th=th),
         })
-# (E) Step — 9
+# (E) Step - 9
 for alpha, beta in [(1.5, 0.5), (1.4, 0.6), (1.3, 0.7)]:
     for c in [0.4, 0.5, 0.6]:
         CONFIGS.append({
@@ -137,7 +128,7 @@ DIRS = [
 BUDGETS = [512, 1024]
 
 
-# Global state populated in parent before fork — workers see this via COW
+# Global state populated in parent before fork - workers see this via COW
 ATTN_PER_MODEL = {}
 TOVA_REF = {}
 
@@ -220,12 +211,12 @@ def main():
     agg = agg.sort_values("cache_adj")
     agg.to_csv(out_dir / "gate_search_mp_ranking.csv", index=False)
 
-    print("\n=== TOP 15 by cache-adjusted Δ TOVA (lower = better) ===")
+    print("TOP 15 by cache-adjusted Δ TOVA (lower = better)")
     print(agg.head(15)[['config_tag','gate','mean_delta_tova','mean_cache','cache_adj']].to_string(index=False))
-    print("\n=== Cache-neutral (cache ≤ 1.01) sorted by raw Δ TOVA ===")
+    print("Cache-neutral (cache ≤ 1.01) sorted by raw Δ TOVA")
     neutral = agg[agg.mean_cache <= 1.01].sort_values("mean_delta_tova")
     print(neutral.head(10)[['config_tag','gate','mean_delta_tova','mean_cache','cache_adj']].to_string(index=False))
-    print("\n=== Best at ≥10% gain — sorted by lowest cache overshoot ===")
+    print("Best at ≥10% gain — sorted by lowest cache overshoot")
     big_gain = agg[agg.mean_delta_tova <= -10.0].sort_values("cache_pp_over")
     print(big_gain.head(10)[['config_tag','gate','mean_delta_tova','mean_cache','cache_adj']].to_string(index=False))
     return 0

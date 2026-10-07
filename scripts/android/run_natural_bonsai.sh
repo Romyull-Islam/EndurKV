@@ -1,29 +1,15 @@
 #!/bin/bash
-# ============================================================================
-# NATURAL-DVFS CPU campaign (HotMobile, correct protocol -- 2026-07-18).
-#
-# CHANGE vs run_definitive_cpu.sh: NO artificial 1632 cap. The 1632 cap was an
-# experimental sub-cap below the vendor's own limits; the vendor.oplus.ha perf
-# daemon raised scaling_max back to 2438 under load, so some cells "breached" it.
-# The kernel's REAL sustained thermal limit is ~1.6 GHz (it clamps big cores from
-# the 2438 boost ceiling down to ~1.5-1.6 GHz once the phone heats), so we let the
-# vendor DVFS + thermal engine govern EVERY cell identically from a cold start.
-# This is realistic, comparable, and captures muKV's "finishes before throttle"
-# advantage instead of hiding it.
-#
-# Build: bin_cpu_v87 = NEW armv8.7-a build (i8mm/dotprod/repack kernels; matches
-# Bonsai). All prior /tmp/def_cpu data was armv8-a -> NOT comparable, hence a
-# clean full re-run of all 9 policies here.
-# Baselines: canonical, native DVFS, NO watchdog. muKV: native DVFS + surface-aware
-# watchdog v2 (muKV-only; glides clock down before the kernel cliff).
-# WikiText 9737-tok prompt + 4096 decode, ctx 16384, Llama-3.2-1B Q4_K_M, k=1024.
-# ============================================================================
+# Natural-DVFS CPU campaign for Bonsai-8B (Q1_0): no artificial big-core cap, so the vendor
+# DVFS and thermal engine govern every cell the same way from a cold start.
+# Build bin_cpu_v87 (armv8.7-a, i8mm/dotprod kernels), not comparable with armv8-a builds.
+# Baselines run with no watchdog. muKV runs with watchdog v2, which is muKV-only.
+# WikiText 9737-token prompt + 4096 decode, ctx 16384, k=1024, then a PPL pass.
 set -u; export ANDROID_ADB_SERVER_PORT=5151
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 OUT_HOST=/tmp/nat_bonsai; mkdir -p "$OUT_HOST"
 TS=$(date +%Y%m%d_%H%M%S); OUT=/data/local/tmp/endurkv/logs/natbonsai_$TS
 adb_safe_shell "mkdir -p $OUT" < /dev/null
-SCR=/tmp/claude-1001/-home-mislam22-EndurKV-workspace/1d283ef2-8bcb-4a99-8b56-fd8d8af9f80d/scratchpad
+SCR="${SCR:-$(cd "$(dirname "$0")/../.." && pwd)/eval_corpora}"
 adb push "$SCR/wikitext_16k_p12k_d4k.txt" "$OUT/prompt.txt" < /dev/null >/dev/null 2>&1
 adb push "$SCR/wiki_eval_disjoint.txt" "$OUT/eval.txt" < /dev/null >/dev/null 2>&1
 adb push /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/preempt_throttle_watchdog_v2.sh \
@@ -44,8 +30,8 @@ while true; do
 done
 adb_safe_shell "su -c 'echo 0 > /sys/class/oplus_chg/battery/mmi_charging_enable'" < /dev/null
 
-# NATURAL DVFS: undo any leftover experimental cap by restoring scaling_max to the
-# vendor ceiling (writing cpuinfo_max is clamped to 2438 by the vendor). NO 1632.
+# Natural DVFS: restore scaling_max to the vendor ceiling (the vendor clamps it to 2438)
+# to undo any leftover cap.
 platform_natural(){ adb_safe_shell "su -c 'pkill -9 -f eviction_bench 2>/dev/null; pkill -9 -f sample_sensors 2>/dev/null; touch $WD_STOP; for c in cpu6 cpu7; do cat /sys/devices/system/cpu/\$c/cpufreq/cpuinfo_max_freq > /sys/devices/system/cpu/\$c/cpufreq/scaling_max_freq; done'" < /dev/null; }
 start_wd(){ adb_safe_shell "su -c 'rm -f $WD_STOP; nohup sh /data/local/tmp/preempt_throttle_watchdog_v2.sh /data/local/tmp/cpu_wd_$1.log $WD_STOP >/dev/null 2>&1 &'" < /dev/null; }
 stop_wd(){ adb_safe_shell "su -c 'touch $WD_STOP'" < /dev/null; }
@@ -83,7 +69,7 @@ run(){ local CELL=$1 WD=$2; shift 2; local PD=$OUT/$CELL
   echo "  [done $CELL] gen=$(grep -oE 'decode_tps=[0-9.]+' "$OUT_HOST/$CELL/gen.err" 2>/dev/null|head -1) ppl=$(grep -oiE 'ppl[= ][0-9.]+|perplexity[= :]+[0-9.]+' "$OUT_HOST/$CELL/ppl.err" 2>/dev/null|head -1)"
 }
 MU="--policy v1_fa2 --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70"
-# all 9 policies, one consistent build + natural DVFS
+# All 9 policies, one build, natural DVFS.
 run mukv_faon     1 $MU --fa-on-evict
 run vanilla       0 --policy vanilla
 run snapkv        0 --policy snapkv --obs-window 64 --n-sink 0

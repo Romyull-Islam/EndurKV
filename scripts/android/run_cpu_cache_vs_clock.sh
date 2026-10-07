@@ -1,35 +1,15 @@
 #!/bin/bash
-# ============================================================================
-# run_cpu_cache_vs_clock.sh -- CPU proof of the two levers. (2026-08-11)
-#
-# THE CLAIM UNDER TEST, on CPU this time:
-#   CACHE lever  -- shrinking K cuts DRAM traffic per token, so it cuts POWER without
-#                   costing time. Measured on the GPU: 6.38 -> 5.58 -> 4.75 W (-26%).
-#   CLOCK lever  -- capping frequency cuts power too, but buys it all back in runtime,
-#                   so energy per request barely moves. Predicted from this phone's own
-#                   CPU power law: dynamic power goes as f^1.10 (voltage is pinned at
-#                   Vmin, so the textbook V^2 term never scales), hence E = P*t ~ f^0.10.
-#                   A 40% clock cut should save ~5% energy and cost ~67% more time.
-# Both are asserted from GPU data and a CPU power-law fit; neither has been measured
-# end-to-end on the CPU. This measures both, on the same device, same model, same prompt.
-#
-# ARMS
-#   A. cache: vanilla, then muKV at k-pct 20 / 10 / 5, CPU governor untouched.
-#   B. clock: muKV held at k-pct 20, prime cores capped to a descending ladder.
-# Only one variable moves per arm, so the two levers can be compared directly.
-#
-# ENERGY = USB rail + battery pack (rail alone undercounts 4-36%; the pack silently
-# supplements it whenever SoC draw exceeds what USB delivers).
-# 1024 generated tokens, not 4096: CPU decode is slow enough that 4096 would make each
-# cell ~30 min. Rates (tok/s, W, mJ/token) are unaffected by the token count.
-# ============================================================================
+# Cache lever vs clock lever on the phone CPU, Llama-3.2-1B.
+#   A. cache: vanilla, then muKV at k-pct 20/10/5, governor untouched.
+#   B. clock: muKV at k-pct 20, prime cores capped to a descending ladder.
+#   C. teacher-forced PPL per cache tier on the disjoint slice.
+# Energy is USB rail plus battery pack, since the pack covers draw beyond what
+# USB delivers. 1024 generated tokens keeps CPU cells short. Rates per token
+# do not depend on the token count.
 set -u
-# FIXED 2026-08-11: use adb_safe_pull, never bare `adb pull`. adb_resilient.sh exports
-# ANDROID_ADB_SERVER_PORT after probing for the device, which conflicts with an
-# ADB_SERVER_SOCKET set by the caller -- so adb_safe_shell reached the phone and ran the
-# benchmark while every bare `adb pull` silently retrieved nothing. The first cell of the
-# tier sweep looked FAILED for exactly this reason although the run had completed on-device
-# (decode_tps=33.0, meta.json present). adb_safe_pull uses the resolved port and retries.
+# Pull with adb_safe_pull, not bare `adb pull`. adb_resilient.sh sets
+# ANDROID_ADB_SERVER_PORT, which can conflict with a caller's ADB_SERVER_SOCKET
+# and make a bare pull silently fetch nothing.
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 BIN=/data/local/tmp/ukv
 M=/data/local/tmp/endurkv/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
@@ -81,17 +61,17 @@ cell(){ # tag  flags  freq_khz(0 = leave governor alone)  [mode: gen|ppl]
   python3 /home/mislam22/EndurKV_workspace/EndurKV/scripts/clock_cell_report.py "$D" "$TAG" 2>/dev/null || echo "  [$TAG] FAILED"
 }
 
-echo "=== ARM A: CACHE lever (governor untouched) ==="
+echo "ARM A: CACHE lever (governor untouched)"
 cell cpu_vanilla "--policy vanilla" 0
 cell cpu_pct20   "$MU --k-pct 20"   0
 cell cpu_pct10   "$MU --k-pct 10"   0
 cell cpu_pct5    "$MU --k-pct 5"    0
-echo "=== ARM B: CLOCK lever (muKV fixed at k-pct 20) ==="
+echo "ARM B: CLOCK lever (muKV fixed at k-pct 20)"
 cell cpu_clk_full "$MU --k-pct 20" 0
 cell cpu_clk_2438 "$MU --k-pct 20" 2438400
 cell cpu_clk_1996 "$MU --k-pct 20" 1996800
 cell cpu_clk_1500 "$MU --k-pct 20" 1500000
-echo "=== ARM C: QUALITY per cache tier (CPU, teacher-forced on the disjoint slice) ==="
+echo "ARM C: QUALITY per cache tier (CPU, teacher-forced on the disjoint slice)"
 cell cpu_ppl_vanilla "--policy vanilla" 0 ppl
 cell cpu_ppl_pct20   "$MU --k-pct 20"   0 ppl
 cell cpu_ppl_pct10   "$MU --k-pct 10"   0 ppl

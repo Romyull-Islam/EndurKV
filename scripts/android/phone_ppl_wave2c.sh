@@ -1,25 +1,8 @@
 #!/bin/bash
-# phone_ppl_wave2c.sh — CORRECTED PPL evaluation.
-#
-# Wave-2  used 9-token seed + 1K eval → no eviction pressure → all tied
-# Wave-2b used 3K seed + 1K eval but text was sliced at byte boundary across
-#            different WT2 articles → vanilla PPL inflated, results unusable
-#
-# Wave-2c fixes both:
-#   - short seed (9 tokens, just sets up the cb_eval path)
-#   - long CONTINUOUS eval text (~16K tokens from a single WT2 region)
-#   - K-sweep over {1024, 1500, 2200} to find the eviction curve
-#
-# How eviction engages naturally:
-#   - First ~K eval tokens scored with vanilla-equivalent cache (no eviction)
-#   - As cache grows past K_nominal, eviction triggers per step
-#   - Subsequent tokens are scored under eviction pressure
-#   - vanilla baseline PPL matches canonical llama-perplexity (~7-8 on Llama-1B)
-#   - eviction policies start to diverge as cache hits K threshold
-#
-# Per-step CSV is written by the patched binary (each step records log_prob,
-# n_kv_cells), so we can plot the PPL trajectory and see exactly when each
-# policy starts degrading.
+# phone_ppl_wave2c.sh: teacher-forced PPL on the phone CPU for vanilla, v1 and TOVA over
+# K budgets. A 9-token seed prompt is followed by a long continuous WikiText-2 eval text,
+# so eviction starts once the cache passes K and later tokens are scored under eviction.
+# The per-step CSV (log_prob, n_kv_cells) shows when each policy starts to degrade.
 
 set -e
 export PATH=/home/mislam22/tools/platform-tools:$PATH
@@ -42,7 +25,7 @@ OUT_BASE_HOST="/home/mislam22/EndurKV_workspace/phone-logs/$(basename $OUT_BASE_
 mkdir -p "$OUT_BASE_HOST"
 PROG_LOG="$OUT_BASE_HOST/progress.log"
 
-# Count cells: 3 models × 3 policies × 3 K values × 1 rep = 27
+# Count cells
 total=0
 for _ in "${MODELS[@]}"; do for p in $POLICIES; do for k in $K_BUDGETS; do
     for pid in $PROMPT_IDS; do for r in $(seq 1 $N_REPLICATES); do
@@ -63,7 +46,7 @@ run_count=0
 for MODEL_ENTRY in "${MODELS[@]}"; do
     IFS='|' read -r MODEL MODEL_TAG NGL NBATCH UB CTX <<< "$MODEL_ENTRY"
     echo "" | tee -a "$PROG_LOG"
-    echo "===== $MODEL_TAG  ctx=$CTX =====" | tee -a "$PROG_LOG"
+    echo "$MODEL_TAG  ctx=$CTX" | tee -a "$PROG_LOG"
 
     for r in $(seq 1 $N_REPLICATES); do
     for PROMPT_ID in $PROMPT_IDS; do

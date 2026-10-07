@@ -1,24 +1,8 @@
 #!/usr/bin/env python3
-"""Every number in the energy/performance deck, pulled from the raw phone campaigns.
+"""Collect the numbers in the energy/performance deck from the raw phone campaigns.
 
-The deck answers three questions the supervisor set:
-  Q1  how energy affects performance      (real battery discharge)
-  Q2  how performance affects energy      (24-pull clock ladder + the scheduler's cost table)
-  Q3  how learning affects the two loops  (provoked loops, discharge prediction error, bandit)
-
-make_energy_perf_deck.js reads the JSON this writes and draws native charts from it, so a
-number on a slide can be traced to one campaign directory. Nothing here is typed in by hand
-except the tier constants, which are the scheduler's own settings (ukv_sched.sh) and the
-rule-versus-bandit utilities, which are the paper's appendix table.
-
-Sources (all restored from tmp_archive/ after the 2026-09-20 reboots):
-  /tmp/discharge_final/discharge/timeline.csv  real discharge 2026-09-05/06, Llama-3.2-1B
-  /tmp/bandit_online/state.json                24 cooled pulls, clock pinned per pull
-  /tmp/loop_proof/<tag>/sched_log.txt          13 requests with real disturbances
-  /tmp/qres_cpu/llama_{vanilla,mukv}_cur.*     same-build, matched-start cache pair
-  /tmp/sllm_faithful/{v,mukv,sfown}_r{1,2,3}   the GPU rows of Table 1, for their energy
-  energy_rl/sched_policy.py                    the scheduler's per-plan cost table
-"""
+Writes energy_perf_data.json, which make_energy_perf_deck.js reads. Inputs are the /tmp
+campaign dirs named below (restore them from tmp_archive/ after a reboot)."""
 import csv
 import glob
 import json
@@ -35,7 +19,7 @@ sys.path.insert(0, os.path.join(ROOT, "scripts", "android", "phone_queue"))
 
 out = {}
 
-# ---------------------------------------------------------------- Q1: discharge
+# Q1: discharge
 rows = list(csv.DictReader(open("/tmp/discharge_final/discharge/timeline.csv")))
 bat = [r for r in rows if r["usb_powered"] == "false"]
 f = lambda P, k: st.mean(float(r[k]) for r in P)
@@ -71,7 +55,7 @@ out["discharge"] = dict(
                  for i, r in enumerate(bat)],
 )
 
-# ---------------------------------------------------------------- Q2: clock ladder
+# Q2: clock ladder
 hist = json.load(open("/tmp/bandit_online/state.json"))["history"]
 by = defaultdict(list)
 for p in hist:
@@ -97,10 +81,8 @@ for a, b in ((ladder[0], ladder[1]), (ladder[1], ladder[2])):
                       ddr_delta=round(b["ddr_peak"] - a["ddr_peak"], 1)))
 out["ladder"] = dict(points=ladder, steps=steps, pulls=len(hist))
 
-# ---- Q2b: the finer ladder, 2026-09-22. Five clocks measured in ONE session, n=3 each, same runner
-# and settings as the 24-pull ladder (cool gate, CPU pinned, K=1024, 9737-token prompt, 1024 out).
-# Reported on its own because a clock curve must come from one session: the coarse ladder's session
-# sat about 5% lower in absolute joules, so mixing the two would fake a step.
+# Q2b: finer ladder, five clocks in one session, n=3 each, same settings as the 24-pull ladder.
+# Kept separate because a clock curve must come from a single session.
 FINE = "/home/mislam22/EndurKV_workspace/campaigns/clock_fine_20260921"
 fine = []
 if os.path.exists(FINE + "/state.json"):
@@ -127,8 +109,7 @@ if os.path.exists(FINE + "/state.json"):
         f["vs_top_time_pct"] = round(100 * (f["time_s"] / top["time_s"] - 1), 1)
     out["ladder_fine"] = dict(
         points=fine, steps=fsteps, pulls=sum(f["n"] for f in fine),
-        # what the rule picks when every GPU row comes from this one session (dry runs on the phone,
-        # 2026-09-22; the live table was restored afterwards)
+        # what the rule picks when every GPU row comes from this session (phone dry runs)
         rule_with_fine_rungs=dict(healthy="gpu1200", mid="gpu967", low="gpu902"),
         dominated=826)
 
@@ -145,8 +126,7 @@ for a, b, lab in (("gpu1200_k1024", "gpu1200d902_k1024", "Cap the decode clock a
     dT = 100 * (Tb / Ta - 1); dE = 100 * (1 - Eb / Ea)
     cost_steps.append(dict(label=lab, time_cost=round(dT, 1), energy_saved=round(dE, 1),
                            rate=round(dE / dT, 2)))
-# the scheduler's own tier settings (ukv_sched.sh)
-# slack is 0.03 + 0.37(1-L), floored at the loops' own 5% tolerance, so healthy walks with 5 not 3
+# Tier settings from ukv_sched.sh. Slack is 0.03 + 0.37(1-L), floored at the loops' 5% tolerance.
 TIER = {"healthy": dict(lam=1.5, slack=5), "mid": dict(lam=0.8, slack=21), "low": dict(lam=0.5, slack=40)}
 for s in cost_steps:
     s["decision"] = {}
@@ -159,7 +139,7 @@ for s in cost_steps:
             s["decision"][t] = "yes"
 out["cost_table"] = dict(steps=cost_steps, tiers=TIER)
 
-# ---------------------------------------------------------------- the cache lever, same tokens
+# the cache lever, same tokens
 def cell(tag):
     m = json.loads(re.sub(r":\s*-?nan\b", ": NaN", open(f"/tmp/qres_cpu/{tag}.json").read()))
     rs = list(csv.DictReader(open(f"/tmp/qres_cpu/{tag}.sensors.csv")))
@@ -184,7 +164,7 @@ out["cache_lever"] = dict(full=full, mukv=mu,
                           J_per_token_full=round(full["energy_kJ"] * 1000 / full["tokens"], 2),
                           J_per_token_mukv=round(mu["energy_kJ"] * 1000 / mu["tokens"], 2))
 
-# ---------------------------------------------------------------- Q3a: provoked loops
+# Q3a: provoked loops
 LP = "/tmp/loop_proof"
 def lp(tag, label, disturbance):
     s = open(f"{LP}/{tag}/sched_log.txt").read().strip().splitlines()[-1]
@@ -197,11 +177,8 @@ def lp(tag, label, disturbance):
                 time_over=round(100 * (float(kv["meas_s"]) / float(kv["tbud"]) - 1), 1),
                 energy_over=round(100 * (float(kv["meas_J"]) / float(kv["ebud"]) - 1), 1),
                 action=action)
-# labels say what was done to the phone during the request (run_loop_proof.sh):
-#   normal      no disturbance
-#   busy app    four spare CPU cores kept spinning for the whole request, as another app would
-#   GPU capped  12 s in, the GPU is forced down to 726 MHz, as the vendor thermal limiter does
-#   recovery    a clean request after the disturbance has stopped
+# Labels (run_loop_proof.sh): normal, busy app (four spare CPU cores spinning all request),
+# GPU capped (forced to 726 MHz 12 s in, like the vendor thermal limiter), recovery (clean request after).
 out["loops_mid"] = [lp("mid_1", "normal", "none"), lp("mid_burn_1", "busy app 1", "4 cores spinning"),
                     lp("mid_burn_2", "busy app 2", "4 cores spinning"), lp("mid_after_1", "recovery 1", "none"),
                     lp("mid_after_2", "recovery 2", "none")]
@@ -209,7 +186,7 @@ out["loops_low"] = [lp("low_1", "normal", "none"), lp("low_cap_1", "GPU capped 1
                     lp("low_cap_2", "GPU capped 2", "726 MHz cap at 12 s"), lp("low_cap_3", "GPU capped 3", "726 MHz cap at 12 s"),
                     lp("low_after_1", "recovery 1", "none"), lp("low_after_2", "recovery 2", "none")]
 
-# ---------------------------------------------------------------- Q3b: bandit
+# Q3b: bandit
 Q = defaultdict(lambda: defaultdict(list))
 for p in hist:
     Q[p["tier"]][p["mhz"]].append(p["r"])
@@ -230,11 +207,9 @@ out["bandit"] = dict(
     loops_during_run=False,                        # log.txt has no loop or bias events: one fixed arm per pull
 )
 
-# ---------------------------------------------------------------- accuracy: muKV against its own full cache
-# Performance is time AND accuracy. Accuracy here is LongBench token-F1, five tasks, the paper's
-# four-model table (tab:longbench-cuda, RTX 4500 Ada, f16 KV, K=1024). Which cells muKV keeps, and so
-# the answer, is a property of the model and the budget, not of the device, so accuracy comes from
-# that table while energy and time come from the phone.
+# Accuracy: muKV against its own full cache, LongBench token-F1 over five tasks from the paper's
+# four-model table (tab:longbench-cuda, RTX 4500 Ada, f16 KV, K=1024). The kept cells depend on model
+# and budget, not device, so accuracy comes from that table and energy and time from the phone.
 LB = {  # model: (full cache avg F1, muKV avg F1, share of cells muKV keeps)
     "Llama-3.2-1B": (41.96, 42.08, 13.0), "Phi-3-mini": (54.44, 54.43, 12.2),
     "gemma-2-2b": (50.06, 47.31, 13.0), "Bonsai-8B": (48.64, 44.97, 12.6)}
@@ -303,9 +278,8 @@ out["accuracy"] = dict(
                    "K4096": {"hotpotqa": round(100 * 44.35 / 43.89, 1), "qasper": round(100 * 38.58 / 39.40, 1)}},
 )
 
-# ---------------------------------------------------------------- the guarded bandit, loops on (2026-09-21)
-# campaigns/guarded_bandit_20260921 (run_guarded_bandit.py): 30 cooled requests on the phone GPU, tiers
-# cycled through --force-soc, the scheduler executing every plan with both loops and its table live.
+# Guarded bandit with loops on: campaigns/guarded_bandit_20260921 (run_guarded_bandit.py), 30 cooled
+# requests on the phone GPU, tiers cycled with --force-soc, both loops and the cost table live.
 import math
 GB = json.load(open("/home/mislam22/EndurKV_workspace/campaigns/guarded_bandit_20260921/state.json"))
 gstats, ghist = GB["stats"], GB["history"]
@@ -343,7 +317,7 @@ out["guarded_bandit"] = dict(
     meter_cov_min=min(h["meter_cov"] for h in ghist),
 )
 
-# ---------------------------------------------------------------- the cache budget K, both sides (2026-09-21)
+# Cache budget K.
 # accuracy: campaigns/lb_ksweep_llama (RTX 4500, LongBench 5 tasks x 50, Llama-3.2-1B, muKV)
 # energy/time: campaigns/k_energy_gpu_20260921 (phone GPU, 1200 MHz, 1024 output tokens, 3 runs per K)
 KS = json.load(open("/home/mislam22/EndurKV_workspace/campaigns/k_energy_gpu_20260921/state.json"))["runs"]
@@ -365,11 +339,9 @@ for K in (512, 1024, 2048, 4096):
 out["k_lever"] = dict(per_K=kres, full_cache_acc=round(LBK["full"], 2),
                       best={t: max(kres, key=lambda K: kres[K]["reward"][t][0]) for t in TW})
 
-# ---------------------------------------------------------------- GPU energy of the Table 1 rows (2026-09-25)
-# /tmp/sllm_faithful (run_streamingllm_faithful.sh): Llama-3.2-1B on the Adreno 840, 9737-token prompt,
-# 4096 generated tokens, f16 KV; every run starts cooled (DDR <= 35 C, battery <= 33 C, charging off);
-# each round runs full cache, muKV and StreamingLLM 4+2000 back to back. Energy is the USB rail plus the
-# battery, windowed to the request, as for every other energy number here.
+# GPU energy of the Table 1 rows: /tmp/sllm_faithful (run_streamingllm_faithful.sh), Llama-3.2-1B on
+# Adreno 840, 9737-token prompt, 4096 tokens, cooled start. Each round runs full cache, muKV and
+# StreamingLLM 4+2000 back to back. Energy is USB rail plus battery, windowed to the request.
 SF = "/tmp/sllm_faithful"
 def gpu_request(tag):
     m = mj(f"{SF}/{tag}/meta.json")
@@ -400,7 +372,7 @@ for a in acc:
           f"decode x{a['decode_x']}  buy back +{a['buy_back_energy_pct']}% energy")
 print("below 1024:", out["accuracy"]["below_1024"])
 
-# ---------------------------------------------------------------- print for the record
+# summary printout
 d = out["discharge"]
 print(f"discharge: {d['n_battery']} battery requests, {d['soc_start']} to {d['soc_end']}%")
 for t, v in d["tiers"].items():

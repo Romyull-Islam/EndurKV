@@ -1,30 +1,10 @@
 #!/bin/bash
-# ============================================================================
-# run_longbench_phone_parity.sh -- phone-CPU LongBench parity subset (2026-08-02)
-#
-# WHY A SUBSET, AND WHY CPU.
-# LongBench F1 is a property of (model, policy), not of silicon, so the full
-# 4-model x 7-policy x 100-prompt grid is measured on the RTX at ~2s/cell. This
-# script exists to prove the PHONE agrees with those numbers -- the same role the
-# Jetson-vs-phone equivalence check plays for the eviction selection (14/14, alpha
-# identical to 3 d.p.). A disagreement here would mean the RTX grid cannot stand
-# in for the device, and we need to know that.
-#
-# CPU, not GPU, on measured grounds:
-#   - Adreno gives no prefill advantage: 70.6 vs 67.6 tok/s on Llama-1B (noise),
-#     and 18.3 vs 25.6 tok/s on Phi-3 -- i.e. the GPU is 29% SLOWER there.
-#   - The phone GPU only runs 2 of our 4 models; Gemma-2B and Bonsai-8B abort
-#     under FA-on with vk::DeviceLostError.
-#   - LongBench generates <=128 tokens, so it is prefill-dominated and decode --
-#     the only axis on which the GPU or eviction wins -- barely registers.
-# The phone CPU is also where the 392-cell NIAH quality table was measured, so
-# this subset lands in the same place as the rest of our quality evidence.
-#
-# NO COOL GATE, deliberately: this is a quality cell, greedy + fixed seed, so
-# thermal state changes how fast a token appears, never which token. Nothing
-# timed is reported from these cells. (Every timed/energy cell elsewhere keeps
-# the DDR<=35C / batt<=33C gate.)  NO watchdog on any policy for the same reason.
-# ============================================================================
+# run_longbench_phone_parity.sh: small LongBench subset on the phone CPU, to check that the
+# phone gives the same F1 as the full grid measured on the RTX host.
+# CPU because LongBench is prefill-dominated (128 tokens or fewer generated), where the Adreno
+# GPU gives no advantage, and the GPU cannot run every model.
+# No cool gate and no watchdog: greedy decoding with a fixed seed makes the tokens independent
+# of thermal state, and nothing timed is reported from these cells.
 set -u
 for _p in ${ADB_PORTS:-5152 5037 5151}; do
   (exec 3<>/dev/tcp/127.0.0.1/$_p) 2>/dev/null || continue
@@ -35,12 +15,8 @@ echo "[adb] port ${ANDROID_ADB_SERVER_PORT:-unset}"
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 
 LB=/home/mislam22/EndurKV_workspace/EndurKV/benchmarks/longbench
-# 2026-08-02: v87 -> v88. v87 predates the 08-01 SnapKV window/kernel wiring and
-# rejects --snapkv-kernel outright, which killed every SnapKV cell. v88 is the same
-# armv8.7-a config (i8mm/dotprod) rebuilt from current source, pushed WITH all five
-# .so deps (incl. the newly-required libmtmd.so) -- pushing a binary against stale
-# libs is what produced 12 empty bin_vulkan cells previously. Fresh OUT_HOST so no
-# v87 cell is ever mixed with a v88 cell in one table.
+# bin_cpu_v88 is an armv8.7-a build (i8mm, dotprod) that accepts --snapkv-kernel. Push it with
+# all its .so files, a binary against stale libs gives empty cells. Separate OUT_HOST per build.
 CB=/data/local/tmp/endurkv/bin_cpu_v88
 OUT_HOST=/tmp/lb_phone_v88; mkdir -p "$OUT_HOST"
 OUT=/data/local/tmp/endurkv/logs/lbphone_$(date +%Y%m%d_%H%M%S)

@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
-"""Summarize the phone-resident CPU StreamingLLM cells (cpu_sllm_published.sh).
-
-Energy = USB rail + battery pack, exactly as scripts/energy_cell_report.py computes it: the rail is
-sum(|V * I| * dt) over the sensor samples (dt capped at 5 s), and the pack is the drop in
-bat_charge_uah times the mean bat_voltage_now_uv. Rail-only undercounts whenever the pack
-supplements the cable, which it does with charging disabled. DDR peak from ddr_temp_mc.
-Prints per-model decode and energy ratios of StreamingLLM against the same-build full cache.
+"""Summarize the CPU StreamingLLM cells from cpu_sllm_published.sh: decode and energy ratios
+against the same-build full cache, per model. Energy is USB rail (dt capped at 5 s) plus the
+battery pack drop, as in scripts/energy_cell_report.py, since the pack supplements the cable.
 """
 import csv, json, os, re, sys
 

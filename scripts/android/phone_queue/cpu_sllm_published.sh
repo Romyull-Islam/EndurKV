@@ -1,9 +1,8 @@
 #!/system/bin/sh
-# E2c/E2d, phone-resident: StreamingLLM at its published budget (4 sinks + 2000) on the phone CPU with
-# the fused kernel and in-place compaction (the reference implementation concatenates survivors).
-# The July binary cannot run it that way (it forces FA off for StreamingLLM and has no compaction flag),
-# so both StreamingLLM and a same-build full-cache run use bin_cpu_cur; ratios are taken within the build.
-# Same prompt, threads and generation length as the July CPU table; cooled per cell, charging off, 5 Hz sensors.
+# E2c/E2d, runs on the phone: StreamingLLM at its published budget (4 sinks + 2000) on the CPU
+# with the fused kernel and in-place compaction, plus a full-cache run, both on bin_cpu_cur so
+# ratios are within one build (the July binary forces FA off for StreamingLLM and cannot compact).
+# Same prompt, threads and length as the July CPU table. Cooled per cell, charging off, 5 Hz sensors.
 RES=/data/local/tmp/endurkv/qres_cpu; mkdir -p $RES; LOG=$RES/cpu.log
 CB=/data/local/tmp/endurkv/bin_cpu_cur
 P=/data/local/tmp/endurkv/logs/natcpu_20260718_085317/prompt.txt

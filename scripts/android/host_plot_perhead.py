@@ -1,17 +1,6 @@
-"""Per-head Pareto plotter.
-
-Reads a `<study>_perhead/pareto_summary.csv` from host_simulate_eviction_perhead.py
-and produces:
-
-  1. `perhead_pareto.png`  — KL vs avg_actual_K curves for all per-head policies
-                              (highlights v1 + endurkv variants vs baselines)
-  2. `perhead_matched_K.png` — bar chart of mean_KL at the K_nominal closest to
-                                a target budget, grouped by policy family
-                                (per-head TOVA family, AdaKV family, EndurKV family)
-  3. `perhead_summary.csv` — pivot table of mean_KL by (policy, K_nominal)
-
-Usage:
-  python host_plot_perhead.py <perhead_dir> [--target-K 128]
+"""Plots <study>_perhead/pareto_summary.csv: perhead_pareto.png (KL vs avg_actual_K),
+perhead_matched_K.png (mean KL near a target K, by policy family) and perhead_summary.csv.
+Usage: python host_plot_perhead.py <perhead_dir> [--target-K 128]
 """
 from __future__ import annotations
 import argparse
@@ -56,7 +45,7 @@ def main() -> int:
         if c not in df.columns:
             print(f"ERROR: column {c!r} missing from {summary_csv}"); return 1
 
-    # ============ Plot 1: Pareto curve =============
+    # Plot 1: Pareto curve
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -85,7 +74,7 @@ def main() -> int:
     print(f"wrote {out_png}")
     plt.close(fig)
 
-    # ============ Plot 2: Matched-K bar chart =============
+    # Plot 2: Matched-K bar chart
     target = args.target_K
     closest_K = df["K_nominal"].iloc[(df["K_nominal"] - target).abs().argsort()[:1]].iloc[0]
     sub = df[df["K_nominal"] == closest_K].copy()
@@ -113,7 +102,7 @@ def main() -> int:
     print(f"wrote {out_bar}")
     plt.close(fig)
 
-    # ============ CSV pivot for paper inclusion =============
+    # CSV pivot for paper inclusion
     pivot = df.pivot_table(index="policy", columns="K_nominal",
                            values=["mean_kl", "avg_actual_K"],
                            aggfunc="mean")
@@ -121,7 +110,7 @@ def main() -> int:
     print(f"wrote {d / 'perhead_pivot.csv'}")
 
     # Headline numbers
-    print(f"\n=== matched-K (K_nominal={closest_K}) ranking ===")
+    print(f"matched-K (K_nominal={closest_K}) ranking")
     for _, r in sub.iterrows():
         lbl = PALETTE.get(r["policy"], (None, None, None, r["policy"]))[3]
         print(f"  {lbl:<32}  KL={r['mean_kl']:.3f}  avg_K={r['avg_actual_K']:.1f}")

@@ -1,16 +1,9 @@
 #!/system/bin/sh
-# phone_wave9_v1fa2_thermal_stack.sh — Wave-9: thermal-aware v1_FA² selective.
-#
-# Stack (from thermal-research workflow):
-#   1. INT8 K cache quantization (--cache-type-k q8_0): cuts K-read DRAM bandwidth ~50%
-#      → ~2.5 °C cooler DDR. V stays f16 due to state-swap layout constraint.
-#   2. Preemptive CPU max-freq capping (watchdog reads DDR temp, throttles
-#      proactively before kernel mitigation fires).
-#   3. Closed-loop K controller (between iters): DDR-temp-driven K_nominal
-#      modulation with 5°C hysteresis: cool→512, warm→384, hot→256.
-#   4. Memory-pressure gate (inherited Wave-8 fix): MemAvailable >= 4 GB.
-#
-# Target (per Wave-9 plan): peak DDR 68-70°C, 6.2-6.9 tok/s, PPL <= 3.64, 0 forced throttles.
+# v1_fa2 with a thermal stack:
+#   1. q8_0 K cache to cut K-read DRAM bandwidth. V stays f16 for the state-swap layout.
+#   2. Preemptive CPU max-freq watchdog that reads DDR temp and caps before kernel mitigation.
+#   3. Between iters, K_nominal from DDR temp with 5 C hysteresis: cool 512, warm 384, hot 256.
+#   4. Memory-pressure gate: MemAvailable >= 4 GB.
 
 set -u
 
@@ -111,7 +104,7 @@ run_v1fa2_stack() {
         K_NOW=$(pick_k_adaptive)
         DDR_NOW=$(ddr_temp_c)
         MFR_NOW=$(mem_free_gb)
-        # If K changes, recompute recent_budget to keep total = K + n_sink-ish
+        # recompute the recent budget when K changes
         REC_BUDGET=$(( K_NOW - 32 - 4 ))  # K - anchor_top_k - n_sink
 
         LD_LIBRARY_PATH=$WORKDIR/bin_cpu $WORKDIR/bin_cpu/eviction_bench \

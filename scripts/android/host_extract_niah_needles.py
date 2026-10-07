@@ -1,15 +1,7 @@
 #!/usr/bin/env python3
-"""Extract per-prompt needle positions from NIAH JSONL prompts.
-
-Output schema (one JSON record per line):
-  {"prompt_id": ..., "needle_char_offset": int, "prompt_chars": int,
-   "needle_fraction": float in [0,1], "needle_phrase": str}
-
-The downstream simulator multiplies `needle_fraction` by the captured n_kv
-(from the .attn.bin sidecar header) to get the absolute KV index, giving
-~1-2% char-vs-token positional accuracy. That's well within the granularity
-needed for K-budget eviction hit-rate analysis (eviction operates on
-positions, not subwords).
+"""Extract needle positions from NIAH JSONL prompts, one JSON record per line with prompt_id,
+needle_char_offset, prompt_chars, needle_fraction (0..1) and needle_phrase.
+The simulator multiplies needle_fraction by the captured n_kv to get an approximate KV index.
 """
 import argparse
 import json

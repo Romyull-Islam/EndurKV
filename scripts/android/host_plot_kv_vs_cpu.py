@@ -1,31 +1,8 @@
 #!/usr/bin/env python3
-"""
-PLOT 13 - KV cache growth vs CPU temperature (Wave-8 race-to-idle finding).
+"""Plot 13: KV cache size vs CPU temperature, wave10 K-sweep (K256/K384/K1024).
 
-Two-panel figure built from the wave10 K-sweep (K256 / K384 / K1024), where
-the only knob varied between cells is the eviction budget K -- everything
-else (model, dataset, hardware pinning, watchdog) is identical.
-
-Top panel  : time-series. Cache size (n_kv_cells, per-decode-step) over wall
-             time overlaid with the big-core CPU temperature for each policy.
-Bottom panel: scatter of CPU temp (C) versus the live cache size (cells)
-              with a linear regression line and R^2 per policy plus an
-              all-data fit.
-
-CPU sensor column choice
-------------------------
-Per task spec, CPU temp is the per-row MAX across the big-core cluster:
-    cpu-1-0-0_temp_mc, cpu-1-0-1_temp_mc,
-    cpu-1-1-0_temp_mc, cpu-1-1-1_temp_mc,
-    cpullc-1-0_temp_mc, cpullc-1-1_temp_mc
-Single best column for plotting is cpu-1-0-0_temp_mc (prime-core sensor that
-tracks decoding load); we plot that one as the line on the top panel and use
-the per-row MAX for the scatter so the relationship is robust to which
-big-core happens to be loaded.
-
-Output
-------
-    EndurKV/figures/relationship_plots/13_kv_cache_vs_cpu_temp.png
+Top: cache size and prime-core temp over time. Bottom: max big-core temp vs live
+cache size with linear fits. Output: figures/relationship_plots/13_kv_cache_vs_cpu_temp.png
 """
 
 from __future__ import annotations
@@ -41,7 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-# ----------------------------- config -----------------------------------------
+# config
 
 WAVE10_DIR = Path(
     "/home/mislam22/EndurKV_workspace/phone-logs/wave10_ksweep_1780815847"
@@ -52,14 +29,14 @@ OUT_PATH = Path(
 )
 
 # Policy cells: (dir_name, display_label, color)
-# Smaller K = more aggressive eviction -> smaller cache -> faster decode.
+# Smaller K means more aggressive eviction.
 POLICIES = [
     ("K256",  "K=256  (aggressive eviction)",   "#d62728"),  # red
     ("K384",  "K=384  (moderate)",              "#1f77b4"),  # blue
     ("K1024", "K=1024 (loose, near-vanilla)",   "#2ca02c"),  # green
 ]
 
-# Big-core CPU temperature columns (per task spec).
+# Big-core CPU temperature columns
 CPU_BIG_COLS = [
     "cpu-1-0-0_temp_mc",
     "cpu-1-0-1_temp_mc",
@@ -71,7 +48,7 @@ CPU_BIG_COLS = [
 CPU_PRIMARY_COL = "cpu-1-0-0_temp_mc"
 
 
-# ---------------------------- helpers -----------------------------------------
+# helpers
 
 def _to_float(x):
     try:
@@ -128,12 +105,8 @@ def load_iter_starts(cell_dir: Path):
 
 
 def load_cache_series(cell_dir: Path):
-    """Return (t_arr_s, n_kv_arr) concatenated across iters, sorted by time.
-
-    steps.csv wall_us is microseconds since iter's prefill start.
-    stress.csv t_elapsed_s gives iter start relative to run start (same
-    reference as sensors monotonic_s - monotonic_s[0]).
-    """
+    """Return (t_s, n_kv) across iters, sorted by time.
+    Time is the iter start from stress.csv plus steps.csv wall_us."""
     iter_start = load_iter_starts(cell_dir)
     t_all, kv_all = [], []
     for it, t_iter in sorted(iter_start.items()):
@@ -182,7 +155,7 @@ def linreg(x: np.ndarray, y: np.ndarray):
     return float(slope), float(intercept), float(r2), int(xs.size)
 
 
-# ------------------------------ plot ------------------------------------------
+# plot
 
 def main() -> int:
     if not WAVE10_DIR.exists():
@@ -231,14 +204,14 @@ def main() -> int:
     for ln in stats_lines:
         print(ln)
 
-    # ---------------- figure ----------------
+    # figure
     fig, axes = plt.subplots(
         2, 1, figsize=(11, 9.8),
         gridspec_kw={"hspace": 0.30, "height_ratios": [1.0, 1.05]},
     )
     ax_ts, ax_sc = axes
 
-    # ============ TOP: time-series ============
+    # TOP: time-series
     ax_ts_cpu = ax_ts.twinx()
     for cell, d in data.items():
         c, lbl = d["color"], d["label"]
@@ -269,7 +242,7 @@ def main() -> int:
     ax_ts.legend(h1 + h2, l1 + l2, loc="lower right",
                  fontsize=8.5, framealpha=0.9, ncol=2)
 
-    # ============ BOTTOM: scatter + regression ============
+    # BOTTOM: scatter + regression
     all_x, all_y = [], []
     for cell, d in data.items():
         c, lbl = d["color"], d["label"]

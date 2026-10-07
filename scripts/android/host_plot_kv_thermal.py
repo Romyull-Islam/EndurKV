@@ -1,16 +1,7 @@
 #!/usr/bin/env python3
-"""
-Plot the relationship between KV cache size, memory utilization, DRAM heat,
-and SoC (CPU) heat across all measured cells.
-
-Pulls per-cell aggregates from sensors.csv + stress.csv across:
-  - Wave-3 Phi-3 narrativeqa (5 policies)
-  - Wave-3 Llama-1B (vanilla)
-  - Wave-4 Phi-3 long-decode (3 policies)
-  - Wave-5 Phi-3 narrativeqa v1_FA file-backed
-  - Wave-6 Phi-3 long-decode v1_FA bounded (partial)
-
-Output: figures/kv_thermal_relations.png
+"""KV cache size vs memory use, DDR and CPU temperature across the Wave-3 to Wave-6
+phone cells, from per-cell sensors.csv and stress.csv.
+Writes figures/kv_thermal_relations.png.
 """
 
 import os

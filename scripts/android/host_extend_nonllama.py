@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
-"""Extend the comprehensive eval to 2 prompts per non-Llama (model, dataset) cell.
-Then merge with the Llama-wide sweep for a single unified results table.
-
-Coverage after this:
-  - 5 paper models (phi3, mistral, qwen2, gemma2, r1distill) × 2 prompts each
-    × LongBench, NIAH, + reasoning(r1distill only)
-  - Mistral × short × 2 prompts
-  - Llama-1B + Llama-8B from llama_wide_results.csv (60 prompts × 2 K)
+"""Run 2 prompts per non-Llama (model, dataset) cell (phi3, mistral, qwen2, gemma2, r1distill)
+and merge with llama_wide_results.csv into one results table.
 """
 import sys, time
 from multiprocessing import Pool, set_start_method
@@ -27,7 +21,7 @@ from host_llama_wide_sweep import (
 )
 
 
-# Capture cells (model, dataset) → directory + prompt list + K budgets
+# capture cells: (model, dataset) to directory, prompt list and K budgets
 LOGS = Path("/home/mislam22/EndurKV_workspace/logs")
 LONG_K = [512, 1024]
 MED_K = [256, 512]

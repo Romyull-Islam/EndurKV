@@ -1,18 +1,8 @@
 #!/usr/bin/env python3
-"""
-host_v1_vs_v1fa_summary.py — quantitative summary of v1 vs v1_fa thermal A/B.
+"""Markdown summary of the v1 vs v1_fa thermal A/B: peak DDR per decode iteration, mean decode
+tok/s and quality (perplexity, mean_nll) per policy.
 
-For each policy cell (v1, v1_fa) the experiment runs N iterations of
-prefill+decode. We need to extract:
-  - Peak DDR during each iteration's decode (where FA-on benefit shows)
-  - Mean decode tok/s
-  - Quality (perplexity / mean_nll)
-
-Outputs a markdown table and prints it.
-
-Usage:
-  python host_v1_vs_v1fa_summary.py <v1_vs_v1fa_dir>
-"""
+Usage: python host_v1_vs_v1fa_summary.py <v1_vs_v1fa_dir>"""
 import sys, csv, json
 from pathlib import Path
 

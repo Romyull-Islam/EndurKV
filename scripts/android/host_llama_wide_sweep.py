@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
-"""Wider Llama-1B and Llama-8B sweep — 15 prompts per regime × 4 regimes = 60.
-
-Confirms whether v1_linear's robustness holds across many prompts and benchmarks,
-not just the 1 prompt each we used in the comprehensive eval.
-
-Output:
-  EndurKV/figures/llama_wide_results.csv
-  EndurKV/figures/llama_wide_ranking.csv
+"""Llama-1B and Llama-8B sweep, 15 prompts x 4 regimes, to check v1_linear across many prompts.
+Writes EndurKV/figures/llama_wide_results.csv and llama_wide_ranking.csv.
 """
 import sys, time
 from multiprocessing import Pool, set_start_method
@@ -63,9 +57,7 @@ K_BY_REGIME = {
 }
 
 
-# ---------------------------------------------------------------------------
 # Policies (copied from comprehensive_eval to keep this script standalone)
-# ---------------------------------------------------------------------------
 def policy_tova(attn_ph, K, **kw):
     nh, nk = attn_ph.shape
     if nk <= K: return np.ones((nh, nk), dtype=bool)
@@ -195,9 +187,7 @@ def simulate_policy(attn_ph, n_kv_at, K_nominal, policy_name):
     return out_kl.mean(axis=1), out_K.mean(axis=1), out_mass.mean(axis=1)
 
 
-# ---------------------------------------------------------------------------
 # Main
-# ---------------------------------------------------------------------------
 DATA = {}
 
 def init_data():
@@ -273,7 +263,7 @@ def main():
     df.to_csv(out_dir / "llama_wide_results.csv", index=False)
     print(f"\n[llama-wide] wrote {len(df)} rows in {time.time()-t0:.0f}s")
 
-    print("\n=== PER-REGIME RANKING ===")
+    print("PER-REGIME RANKING")
     for regime in ["llama1b_short","llama1b_long","llama8b_short","llama8b_long"]:
         sub = df[df.regime==regime]
         agg = (sub.groupby("policy")
@@ -283,10 +273,10 @@ def main():
                        mean_mass=("mass_pct","mean"),
                        n=("kl_mean","count"))
                   .reset_index().sort_values("mean_vs_tova"))
-        print(f"\n--- {regime} (n_cells = {len(sub)}) ---")
+        print(f"{regime} (n_cells = {len(sub)})")
         print(agg.to_string(index=False))
 
-    print("\n=== OVERALL ranking (60 prompts × 2 K × 6 policies = 720 cells) ===")
+    print("OVERALL ranking (60 prompts × 2 K × 6 policies = 720 cells)")
     overall = (df.groupby("policy")
                  .agg(mean_kl=("kl_mean","mean"),
                       mean_cache=("cache_ratio_vs_tova","mean"),

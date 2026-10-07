@@ -1,30 +1,12 @@
 #!/bin/bash
-# ============================================================================
-# run_gemma_gpu_mitigate.sh -- can the gemma Adreno failure be worked around?
-# (2026-09-20)
-#
-# What run_gemma_gpu_diag.sh established:
-#   gemma, 223-token prompt, ctx 4096   -> runs, but emits "<pad>" tokens
-#   gemma, 6382-token prompt, ctx 8192  -> vk::DeviceLostError on queue submit
-#   Llama, 6401-token prompt, ctx 8192  -> correct text, 34.9 tok/s, same build
-# So the device, the driver, the build, the prompt length and the context are
-# all fine. Only gemma-2 fails, and it fails two different ways.
-#
-# Before the paper says gemma cannot run here, try the things a reviewer would
-# ask about. Each cell generates 16 tokens, so the whole sweep is minutes.
-#
-#   M1 ubatch16   smaller submissions: if the device is lost on a big dispatch,
-#                 a 16-token micro-batch should survive it.
-#   M2 partial    half the layers on the GPU: isolates whether one offloaded
-#                 op is the trigger.
-#   M3 mid2k      a 2000-token prompt at the same ctx: is there a size
-#                 threshold between 223 and 6382 where it flips?
-#   M4 cpu_tiny   THE CONTROL FOR THE "<pad>" OUTPUT. The same 223-token prompt
-#                 on the CPU. If the CPU also emits <pad>, that output is gemma
-#                 answering a truncated prompt, not a GPU defect, and only the
-#                 device loss is a real failure. Without this the M1/M2 results
-#                 cannot be read at all.
-# ============================================================================
+# run_gemma_gpu_mitigate.sh: workarounds for Gemma-2 failing on the Adreno GPU. It emits
+# "<pad>" on a 223-token prompt and hits vk::DeviceLostError on a 6382-token one, while
+# Llama runs on the same build. 16 tokens per cell:
+#   M1 ubatch16   smaller dispatches (n-ubatch 16)
+#   M2 partial    half the layers on the GPU, to isolate one offloaded op
+#   M3 mid2k      a ~2000-token prompt, to look for a size threshold
+#   M4 cpu_tiny   control: the 223-token prompt on the CPU. If it also emits <pad>,
+#                 that output is not a GPU defect.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 LOG(){ echo "[$(date +%F' '%H:%M:%S)] $*"; }

@@ -1,21 +1,8 @@
 #!/usr/bin/env python3
-"""Unified runner: every attention-only published KV-eviction baseline implemented
-in this codebase, on the same 5 long-context dirs × 1 prompt × K ∈ {512, 1024}.
-
-Strategy:
-  - Per-head policies (TOVA-perhead, AdaKV, HeadKV, DuoAttention, our v1..v7,
-    KVzip-approx) plug straight into the per-head simulator.
-  - Global policies (H2O, SnapKV, StreamingLLM, Scissorhands, LWKD, AhaKV,
-    LazyEviction) produce one 1-D mask per layer; we broadcast to all heads
-    (same as their deployed form).
-  - Per-layer budget allocators (PyramidKV, CAKE) just choose K_h per layer
-    then defer to TOVA selection inside each layer.
-
-Honest caveats baked into table at end:
-  - KVzip-approx ≠ full KVzip (no reconstruction-prefill pass).
-  - R-KV / KeyDiff / LaProx need K/V captures we don't have on these dirs
-    → would silently fall back to TOVA → not listed.
-"""
+"""Run the attention-only KV-eviction baselines in this codebase on 5 long-context dirs x 1 prompt
+x K in {512, 1024}. Per-head policies use the per-head simulator, global policies broadcast one
+mask per layer to all heads, and PyramidKV/CAKE pick K per layer then select with TOVA.
+KVzip-approx skips KVzip's reconstruction prefill. R-KV, KeyDiff, LaProx need K/V captures, so are omitted."""
 import sys, time
 from pathlib import Path
 import numpy as np
@@ -34,12 +21,9 @@ DIRS = [
 BUDGETS = [512, 1024]
 
 
-# ---------------------------------------------------------------------------
-# Inline policy implementations (copied/adapted from the three existing
-# simulator files so this script is self-contained)
-# ---------------------------------------------------------------------------
+# Policy implementations, adapted from the simulator files so this script is self-contained.
 
-# -- Per-head policies ------------------------------------------------------
+# Per-head policies
 
 def policy_tova_ph(attn_ph, K, **kw):
     nh, nk = attn_ph.shape
@@ -168,7 +152,7 @@ def policy_kvzip_approx(attn_ph, K, attn_cum_max=None, **kw):
     return m
 
 
-# -- Global policies (1D mask per layer; broadcast to all heads) -----------
+# Global policies (1D mask per layer, broadcast to all heads)
 
 def _hh_norec_mask(n_kv, K, accum, recent_frac):
     if n_kv <= K: return np.ones(n_kv, dtype=bool)
@@ -245,7 +229,7 @@ def policy_ahakv(attn_ph, K, recent_accum_layer=None, **kw):
     return np.broadcast_to(m1d, (nh, nk)).copy()
 
 
-# -- Per-layer budget allocators (PyramidKV, CAKE) -----------
+# Per-layer budget allocators (PyramidKV, CAKE)
 
 def make_pyramidkv(n_layers, ratio=0.5):
     def policy(attn_ph, K, layer_idx=0, **kw):
@@ -269,9 +253,7 @@ def make_cake(n_layers, ratio=0.5):
     return policy
 
 
-# ---------------------------------------------------------------------------
 # Simulator (stateful: maintains attn_cum_max, attn_cum_sum, snapkv_score)
-# ---------------------------------------------------------------------------
 
 def kl(p, q):
     p = np.asarray(p, dtype=np.float64); q = np.asarray(q, dtype=np.float64)
@@ -330,9 +312,7 @@ def simulate(attn_ph, n_kv_at, policy_fn, K_nominal, *, needs_layer_idx=False):
     return out_kl.mean(axis=1), out_K.mean(axis=1), out_mass.mean(axis=1)
 
 
-# ---------------------------------------------------------------------------
 # Registry & runner
-# ---------------------------------------------------------------------------
 
 POLICIES = {
     # Ours
@@ -412,7 +392,7 @@ def main():
                       mean_vs_tova=("pct_vs_tova","mean"))
                  .reset_index()
                  .sort_values("mean_vs_tova"))
-    print("\n=== OVERALL RANKING (lower mean_vs_tova = better) ===")
+    print("OVERALL RANKING (lower mean_vs_tova = better)")
     print(overall.to_string(index=False))
     overall.to_csv(out_dir / "unified_baselines_ranking.csv", index=False)
     return 0

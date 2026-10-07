@@ -1,29 +1,8 @@
 #!/usr/bin/env python3
-"""
-Phase B' — load the entropy CSV and the attention sidecar, produce slide plots:
-  figures/attn_demo_entropy.{pdf,png}   line plot of H_nats over decode steps
-  figures/attn_demo_heatmap.{pdf,png}   per-decode-step attention heatmap
-                                        (x=source token position, y=decode step,
-                                         color=attention mass summed over layers and heads),
-                                        H2O-style heavy-hitter visualization.
+"""Plot entropy over decode steps and an attention heatmap with H2O-style heavy-hitter scores
+from <stem>.csv and the head-averaged ATTN sidecar <stem>.attn.bin (see attention_probe.cpp).
 
-Usage:
-    source .venv/bin/activate
-    python3 scripts/08_plot_attention.py logs/attention/attn_demo
-        ^ pass the prompt-id stem (without .csv / .attn.bin)
-
-Files expected:
-    <stem>.csv         entropy_probe-format CSV
-    <stem>.attn.bin    binary sidecar written by attention_probe
-
-Sidecar binary format (little-endian host order):
-    magic [4] = b'ATTN'
-    u32 n_steps, u32 n_layers, u32 n_head
-    for each step:
-        for each layer:
-            u32 n_kv
-            n_kv * float32 (per-source-token attention, head-averaged)
-"""
+Usage: python3 scripts/08_plot_attention.py logs/attention/attn_demo   (stem, no extension)"""
 from __future__ import annotations
 
 import os
@@ -79,7 +58,7 @@ def main() -> int:
     out_dir.mkdir(exist_ok=True)
     prompt_id = df["prompt_id"].iloc[0] if len(df) else stem.stem
 
-    # ---------- entropy line plot --------------------------------------------
+    # entropy line plot
     fig, ax = plt.subplots(figsize=(6, 3.2))
     ax.plot(df["step_index"][:n_steps], df["H_nats"][:n_steps],
             marker="o", linewidth=1.4, markersize=4)
@@ -93,9 +72,8 @@ def main() -> int:
     plt.close(fig)
     print(f"wrote {out_dir / (prompt_id + '_entropy.pdf')}")
 
-    # ---------- attention heatmap --------------------------------------------
-    # For each step, sum attention over layers (head-averaged, layer-summed).
-    # Pad to max n_kv so we get a rectangular [step, src] matrix.
+    # attention heatmap
+    # Mean over layers per step, NaN-padded to max n_kv for a [step, src] matrix.
     max_kv = max(int(layers[0].shape[0]) if layers and layers[0].size else 0
                  for layers in attn[:n_steps]) if n_steps else 0
     H = np.full((n_steps, max_kv), np.nan, dtype=np.float32)
@@ -109,7 +87,6 @@ def main() -> int:
             if arr.size != n_kv:
                 continue
             sum_layers += arr
-        # report per-layer-mean for a probability-like scale in [0,1]
         sum_layers /= max(1, len(layers))
         H[s, :n_kv] = sum_layers
 
@@ -127,7 +104,7 @@ def main() -> int:
     plt.close(fig)
     print(f"wrote {out_dir / (prompt_id + '_attn_heatmap.pdf')}")
 
-    # ---------- accumulated heavy-hitter score (H2O-style) -------------------
+    # accumulated heavy-hitter score (H2O-style)
     acc = np.nansum(H, axis=0)  # over decode steps
     fig, ax = plt.subplots(figsize=(8, 3.2))
     ax.bar(np.arange(acc.size), acc, color="#444", width=1.0)

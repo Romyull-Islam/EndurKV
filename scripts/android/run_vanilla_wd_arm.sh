@@ -1,16 +1,7 @@
 #!/bin/bash
-# ============================================================================
-# run_vanilla_wd_arm.sh -- 5th soak arm: VANILLA + vendor-anchored glide.
-# The decisive watchdog demonstration: vanilla is the only arm that actually
-# enters the cliff run-up (battery 48C, peak DDR 68.3C -- ABOVE the 65C kernel
-# cliff). muKV arms can only show the ladder dormant; this one shows it bending
-# a genuinely cliff-bound temperature curve, gradually, before the vendor trips.
-# Two validated ladder anchors exist (matching the GPU soak's wd-early /
-# wd-vendor pair): vendor-anchored (battery 47.0+, skin 50.0+) glides only in
-# the cliff run-up; EARLY (battery 35.0+, skin 39.5+) glides during workloads
-# that never near the cliff, so BOTH sensors demonstrably act. Same staircase,
-# same code, only the anchor shifted via env (BAT_L0/SKIN_L0).
-# ============================================================================
+# CPU soak arm: vanilla with the CPU watchdog, 6 back-to-back 4096-token generations, no cooling
+# between them. Vanilla is the arm that heats toward the kernel throttle point, so it shows the
+# watchdog stepping the clock down. Runs after the early-anchor arm (/tmp/wd_early_DONE).
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 LOG(){ echo "[$(date +%H:%M:%S)] $*"; }

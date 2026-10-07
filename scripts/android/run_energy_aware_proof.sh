@@ -1,32 +1,12 @@
 #!/bin/bash
-# ============================================================================
-# run_energy_aware_proof.sh -- does the energy-aware controller actually work?
-# (2026-08-11)
-#
-# THE QUESTION IS NOT "does a smaller cache use less energy" -- that is already measured.
-# It is "does muKV READ THE BATTERY AND ADAPT, and does the adaptation show up in joules".
-# So each arm runs the IDENTICAL command line; the only thing that differs is the battery
-# state the controller sees. Nothing else is passed. If the arms differ in K, in energy,
-# and in throughput, the loop is real and closed.
-#
-# HOW A BATTERY LEVEL IS SIMULATED WITHOUT DRAINING THE PHONE. The controller compares the
-# measured state of charge against two thresholds. Moving the thresholds is exactly
-# equivalent to moving the SoC across them, and it is the only way to exercise the low-SoC
-# path on a phone sitting at 98%. The controller still READS the real battery every time --
-# the reported soc is genuine -- only the tier boundaries move.
-#     healthy  : thresholds 50/20  -> real SoC 98% is above both  -> level 0
-#     mid      : thresholds 99/20  -> real SoC 98% falls between  -> level 1
-#     low      : thresholds 99/99  -> real SoC 98% is below both  -> level 2
-#
-# BACKEND-AWARE, so both are measured: on GPU the tiers descend 20 -> 10 -> 5 because the
-# GPU optimum is 20% and going lower costs throughput; on CPU all tiers sit at 5% because
-# the CPU optimum IS the floor (24.02 tok/s at k-pct 5, monotonically better than 20%).
-# The CPU arms should therefore show NO adaptation -- that is the correct behaviour, and
-# showing it is the point: an energy-aware controller that degrades a backend which gains
-# nothing from degrading would be a bug, not a feature.
-#
-# Cool gate + settle before every cell; energy = USB rail + coulomb counter.
-# ============================================================================
+# Energy-aware controller test. Every arm runs the same command line and only the
+# battery tier the controller sees differs. The controller reads the real SoC
+# and compares it to two thresholds, so moving the thresholds moves the tier
+# without draining the phone (at about 98% SoC):
+#     healthy: 50/20 gives level 0, mid: 99/20 gives level 1, low: 99/99 gives level 2
+# On GPU the tiers step k-pct 20 to 10 to 5. On CPU every tier is already at the
+# 5% floor, so the CPU arms should not adapt.
+# Cool gate and settle before every cell. Energy = USB rail + coulomb counter.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 BIN=/data/local/tmp/ukv
@@ -70,11 +50,11 @@ cell(){ # tag  ngl  thresholds  maxtok
   [ -f "$D/meta.json" ] && python3 /home/mislam22/EndurKV_workspace/EndurKV/scripts/clock_cell_report.py "$D" "$TAG" 2>/dev/null || echo "  [$TAG] FAILED"
 }
 
-echo "=== GPU: identical command line, only the battery state the controller sees differs ==="
+echo "GPU: identical command line, only the battery state the controller sees differs"
 cell gpu_healthy 99 "--ea-soc-hi 50 --ea-soc-lo 20" 4096
 cell gpu_mid     99 "--ea-soc-hi 99 --ea-soc-lo 20" 4096
 cell gpu_low     99 "--ea-soc-hi 99 --ea-soc-lo 99" 4096
-echo "=== CPU: same three battery states (expect NO adaptation -- the CPU optimum is the floor) ==="
+echo "CPU: same three battery states (expect NO adaptation -- the CPU optimum is the floor)"
 cell cpu_healthy  0 "--ea-soc-hi 50 --ea-soc-lo 20" 1024
 cell cpu_low      0 "--ea-soc-hi 99 --ea-soc-lo 99" 1024
 echo EAPROOF_DONE

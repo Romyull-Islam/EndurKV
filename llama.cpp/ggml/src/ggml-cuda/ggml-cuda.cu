@@ -4785,9 +4785,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 switch (a->type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
-                    // EndurKV 2026-07-26: Q1_0 (PrismML 1-bit), kernels ported
-                    // from PrismML-Eng/llama.cpp — without this the 254 one-bit
-                    // tensors of Bonsai-8B stay on CPU even at -ngl 99.
+                    // EndurKV: Q1_0 (PrismML 1-bit), kernels ported from
+                    // PrismML-Eng/llama.cpp.
                     case GGML_TYPE_Q1_0:
                     case GGML_TYPE_Q4_0:
                     case GGML_TYPE_Q4_1:

@@ -1,29 +1,9 @@
 #!/bin/bash
-# ============================================================================
-# run_longbench_wide.sh -- widen Table 3: 4 LongBench tasks, n=25. (2026-08-30)
-#
-# WHY. Table 3 currently reports 2 tasks at n=15, and at that size it cannot
-# resolve a winner. Scored per sample against vanilla on hotpotqa, muKV is
-# 13 ties / 1 win / 1 loss (sign test p=1.00); SnapKV, Ada-KV, TOVA and H2O are
-# each 13/2/0 (p=0.50) -- which is also why they score ABOVE the full cache, an
-# impossibility that is the tell for noise. Every SE (6.5-12.0 F1) is larger than
-# every gap in the table.
-#
-# Full significance is not reachable here: per-sample SD is ~45 F1 on hotpotqa,
-# so resolving a 6-point gap at p<0.05 needs n~225 per policy per task, which is
-# ~500 h of device time. What IS reachable is breadth plus pooling: 4 tasks at
-# n=25 gives n=100 per policy pooled, enough to support an overall statement even
-# though no single task-level cell will be individually significant.
-#
-# TASK CHOICE. multifieldqa_en has 52 stimuli but ZERO gold answers in gold.json,
-# so it cannot be scored and is excluded. 2wikimqa (multi-hop, 50 gold) and
-# triviaqa (few-shot QA, 50 gold) are the two that can be. Prompts come from
-# benchmarks/longbench/<task>/prompt_NNN.txt, verified byte-identical to the
-# source lb_native used, so indices align with gold.json.
-#
-# Joins /tmp/lb_native: existing cells are skipped, so this only runs what is
-# missing (hotpotqa/qasper 015-024, and 2wikimqa/triviaqa 000-024).
-# ============================================================================
+# run_longbench_wide.sh: LongBench on the phone CPU, 4 tasks (hotpotqa, qasper, 2wikimqa,
+# triviaqa) at n=25 per task, so results can be pooled across tasks.
+# multifieldqa_en is excluded because gold.json has no answers for it.
+# Prompts come from benchmarks/longbench/<task>/prompt_NNN.txt, indices align with gold.json.
+# Writes into /tmp/lb_native and skips cells that already exist there.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 LOG(){ echo "[$(date +%H:%M:%S)] $*"; }
@@ -44,13 +24,9 @@ trap cleanup EXIT INT TERM
 
 TASKS="hotpotqa qasper 2wikimqa triviaqa"
 
-# PROMPT SELECTION (fixed 2026-08-31). The previous version took the first N
-# prompts BY INDEX. Past index 014 many prompts exceed the 16384-token context
-# (hotpotqa prompt_017 is 81,811 chars), so those cells hung until the timeout.
-# Measured on 32 completed vanilla cells, these prompts run 3.70 to 5.15 bytes
-# per token. Using the worst case, a 58,000-byte file is at most 15,676 tokens,
-# which leaves room for the 128-token generation inside 16384. So: filter by
-# size, then take the first N that pass.
+# Take the first N prompts under MAXBYTES. Many prompts exceed the 16384-token context.
+# At the worst measured 3.70 bytes per token, 58,000 bytes is at most 15,676 tokens,
+# which leaves room for the 128-token generation.
 MAXBYTES=${MAXBYTES:-58000}
 pick_prompts(){   # task -> prints up to N indices whose prompt fits
   local task=$1 c=0
@@ -107,8 +83,7 @@ import json,re,os
 p='$HOST/vanilla_${task}_${idx}/meta.json'
 print(json.loads(re.sub(r':\s*-?nan\b',': NaN',open(p).read())).get('n_prompt_tokens',0) if os.path.exists(p) else 0)" 2>/dev/null)
     [ "${NP:-0}" -lt 100 ] && { LOG "  skip ${task}_${idx}: no vanilla token count"; continue; }
-    # exact guard: vanilla measured the real token count, so use it rather than
-    # the byte estimate before committing to six more runs on this prompt.
+    # Exact guard from the token count vanilla measured.
     if [ "$NP" -gt $((16384 - $(mg $task) - 64)) ]; then
       LOG "  skip ${task}_${idx}: $NP tokens + $(mg $task) gen does not fit 16384"; continue
     fi

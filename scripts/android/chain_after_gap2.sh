@@ -1,12 +1,7 @@
 #!/bin/bash
-# Sequencer for the 2026-09-20 gap-closure work. One campaign owns the phone at a time.
-#
-# run_gap_closure2.sh ends by launching the 9-hour needle campaign itself. The gemma
-# GPU diagnostic is GPU-only and must not overlap that CPU campaign, or both cells'
-# power and timing are contaminated. So: wait for the gap-closure flag, stop the
-# needle campaign it just started, run the 5-minute diagnostic, then start the needle
-# campaign again. run_niah_keydiff.sh skips any cell whose meta.json exists, so
-# stopping and restarting it costs nothing.
+# After run_gap_closure2.sh, pause the needle campaign it launches, run the gemma GPU
+# diagnostic alone (overlap would contaminate power and timing), then restart the campaign.
+# run_niah_keydiff.sh skips finished cells, so the restart loses nothing.
 set -u
 LOG(){ echo "[$(date +%F' '%H:%M:%S)] $*"; }
 export ANDROID_ADB_SERVER_PORT=5161 ADB_PORTS=5161 ADB_CALL_TIMEOUT=1500

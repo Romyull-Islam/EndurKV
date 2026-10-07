@@ -1,9 +1,6 @@
 #!/system/bin/sh
-# phone_wave5_v1fa_filebacked.sh — re-run Phi-3 narrativeqa v1_FA cell with the
-# file-backed state-swap binary, to measure the spillover reduction vs Wave-3's
-# 528 MB swap-out baseline.
-#
-# Single cell only. Same protocol as Wave-3 v2.
+# Single cell: Phi-3 narrativeqa v1_FA with the file-backed state-swap binary, to measure
+# swap-out compared with the earlier in-memory state-swap run under the same protocol.
 
 set -u
 

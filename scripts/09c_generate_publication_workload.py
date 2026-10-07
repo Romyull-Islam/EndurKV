@@ -1,29 +1,8 @@
 #!/usr/bin/env python3
-"""
-Phase C-pub — publication-quality workload generator.
-
-Builds the prompt sets for the cross-architecture / publication evaluation
-(ASPLOS / NeurIPS / MLSys tier). Three output files:
-
-  prompts/prompts_pub_longbench.jsonl  — N=30 per task × 14 LongBench English
-                                          tasks, full-length (no truncation),
-                                          stratified across token-length bins.
-  prompts/prompts_pub_niah.jsonl       — Needle-in-a-Haystack, 7 depths
-                                          {0%,17%,33%,50%,67%,83%,100%} ×
-                                          4 lengths {4K,8K,16K,32K} = 28 prompts.
-  prompts/prompts_pub_reasoning.jsonl  — 100 GSM8K + 30 AIME-2024, with
-                                          ground_truth for pass@1 scoring.
-
-For each LongBench item the ORIGINAL prompt text is preserved verbatim (truncated
-only at a hard 32K-char safety cap to prevent the on-phone 12 GB OOM). This
-matches the evaluation protocol of SnapKV, CAKE, PyramidKV, LazyEviction,
-KeyDiff, AhaKV, MixedDimKV, LaProx — every recent KV eviction paper since 2024.
-
-Datasets and citations:
-  LongBench    : zai-org/LongBench   (Bai et al., ICLR 2024)
-  GSM8K        : openai/gsm8k        (Cobbe et al., 2021)
-  AIME-2024    : HuggingFaceH4/aime_2024
-  NIAH         : self-generated (Greg Kamradt protocol)
+"""Generate the publication prompt sets in prompts/: LongBench (14 English tasks,
+length-stratified, kept verbatim up to a 32K-char cap to avoid phone OOM), NIAH
+(7 depths x 4 lengths) and reasoning (100 GSM8K + 30 AIME-2024 with ground truth).
+Sources: zai-org/LongBench, openai/gsm8k, HuggingFaceH4/aime_2024, NIAH self-generated.
 """
 from __future__ import annotations
 
@@ -50,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = ROOT / "prompts"
 OUT_DIR.mkdir(exist_ok=True)
 
-# ----- LongBench config -----------------------------------------------------
+# LongBench config
 LONGBENCH_TASKS = [
     # (name, ctx_field, input_field, template)
     ("narrativeqa",     "context", "input",
@@ -118,8 +97,7 @@ def _load_lb_items(name: str) -> list[dict]:
 
 
 def _stratified_sample(items: list[dict], n: int) -> list[dict]:
-    """Return n items stratified across `length` quartiles (so we get short,
-    medium-short, medium-long, long examples). Filters out items above the
+    """Pick n items stratified over `length` quartiles, skipping items above the
     token cap. Deterministic via SEED."""
     rng = random.Random(SEED)
     eligible = [it for it in items
@@ -151,7 +129,7 @@ def gen_longbench() -> int:
     out_path = OUT_DIR / "prompts_pub_longbench.jsonl"
     rows = []
     failures = []
-    print("=" * 60); print("LongBench (publication tier)"); print("=" * 60)
+    print("LongBench (publication tier)");
     for name, ctx_f, in_f, tmpl in LONGBENCH_TASKS:
         try:
             items = _load_lb_items(name)
@@ -195,7 +173,7 @@ def gen_longbench() -> int:
     return len(rows)
 
 
-# ----- NIAH (Needle in a Haystack) -----------------------------------------
+# NIAH (Needle in a Haystack)
 NEEDLE_PHRASES = [
     ("The best ice-cream flavor in San Francisco is mango sorbet from Bi-Rite.",
      "What is the best ice-cream flavor in San Francisco?",
@@ -217,9 +195,8 @@ NIAH_TEMPLATE = (
 
 
 def _paul_graham_haystack(target_chars: int) -> str:
-    """Concatenate a public-domain text repeatedly until we hit target length.
-    Uses a long Paul-Graham-style filler; if HF dataset 'pg_essays' isn't
-    installed we fall back to LongBench gov_report context as filler."""
+    """Repeat LongBench gov_report context (or a fixed sentence if that fails)
+    up to target_chars."""
     try:
         items = _load_lb_items("gov_report")
         filler = " ".join((it.get("context") or "")[:5000] for it in items[:8])
@@ -236,7 +213,7 @@ def _paul_graham_haystack(target_chars: int) -> str:
 def gen_niah() -> int:
     out_path = OUT_DIR / "prompts_pub_niah.jsonl"
     rows = []
-    print("=" * 60); print("Needle in a Haystack"); print("=" * 60)
+    print("Needle in a Haystack");
     for length_tok in NIAH_LENGTHS_TOKENS:
         if length_tok > HARD_TOKEN_CAP:
             print(f"  skip length={length_tok} (above HARD_TOKEN_CAP={HARD_TOKEN_CAP})")
@@ -273,7 +250,7 @@ def gen_niah() -> int:
     return len(rows)
 
 
-# ----- Reasoning (GSM8K + AIME-24) ------------------------------------------
+# Reasoning (GSM8K + AIME-24)
 GSM8K_N = int(os.environ.get("GSM8K_N", "100"))
 AIME_N  = int(os.environ.get("AIME_N", "30"))
 REASONING_SUFFIX = " Please reason step by step, and put your final answer within \\boxed{}."
@@ -282,7 +259,7 @@ REASONING_SUFFIX = " Please reason step by step, and put your final answer withi
 def gen_reasoning() -> int:
     out_path = OUT_DIR / "prompts_pub_reasoning.jsonl"
     rows = []
-    print("=" * 60); print("Reasoning (GSM8K + AIME-24)"); print("=" * 60)
+    print("Reasoning (GSM8K + AIME-24)");
     from datasets import load_dataset
     # GSM8K
     try:
@@ -341,7 +318,7 @@ def main() -> int:
     n_niah = gen_niah()
     n_rsn  = gen_reasoning()
     print()
-    print("=" * 60); print("Publication-quality workload SUMMARY"); print("=" * 60)
+    print("Publication-quality workload SUMMARY");
     print(f"  LongBench:  {n_lb} prompts")
     print(f"  NIAH:       {n_niah} prompts")
     print(f"  Reasoning:  {n_rsn} prompts")

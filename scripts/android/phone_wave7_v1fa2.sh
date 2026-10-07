@@ -1,18 +1,8 @@
 #!/system/bin/sh
-# phone_wave7_v1fa2.sh — v1_FA² validation on Wave-4 long-decode protocol.
-#
-# v1_FA² combines:
-#   * FA-off prefill with v1 spread-gate eviction → n_anchored attention-aware positions
-#   * State-swap to FA-on decode
-#   * TIERED decode-time eviction: preserves anchored positions, drops oldest decode-generated
-#   * Recent window protects newly generated tokens
-#
-# Compared to Wave-6 v1_fa bounded (recency only), v1_fa2 should:
-#   - Preserve PPL better (prompt context survives across decode)
-#   - Similar throughput
-#   - Similar thermal (same K)
-#
-# Optional: --adaptive-k (sets K based on DDR temp between iters).
+# v1_fa2 on the Wave-4 long-decode protocol (Phi-3). v1_fa2 runs FA-off prefill with
+# spread-gate eviction, state-swaps to FA-on decode, and evicts the oldest generated
+# tokens during decode while keeping the anchored positions and a recent window.
+# ADAPTIVE_K=1 sets K from the DDR temperature between iterations.
 
 set -u
 
@@ -31,7 +21,7 @@ echo "[$(date)] wave7 v1_FA² START -> $OUT_DIR adaptive_k=$ADAPTIVE_K" > "$PROG
 MODEL=$WORKDIR/models/Phi-3-mini-128k-instruct-Q4_K_M.gguf
 PROMPT=$WORKDIR/prompts_chat/Phi-3-128k/longgen_prompt.txt
 
-# Find DDR thermal zone (look for one with type matching ddr)
+# DDR thermal zone, found by type
 DDR_ZONE=""
 for z in /sys/class/thermal/thermal_zone*; do
     if [ -f "$z/type" ]; then

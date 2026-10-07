@@ -27,13 +27,13 @@ def kept(errpath):
 
 D = {'new': {}, 'published': {}}
 
-# ---- new: the phone queue ----
+# new: the phone queue
 for j in sorted(glob.glob('/tmp/qres/*.json')):
     tag = os.path.basename(j)[:-5]
     if tag == 'queue': continue
     m = meta(j); m['kept'] = kept(j[:-5] + '.err'); D['new'][tag] = m
 
-# ---- published GPU rows (Llama-3.2-1B, 9737 prompt, 4096 generated) ----
+# published GPU rows (Llama-3.2-1B, 9737 prompt, 4096 generated)
 P = D['published']
 def add(tag, jpath, errpath=None):
     if os.path.exists(jpath):
@@ -56,7 +56,7 @@ for a in ('v_ppl', 'mukv_ppl', 'sfown_ppl'):
 for pol in ('vanilla', 'snapkv', 'adakv', 'h2o', 'tova', 'mukv_faon'):
     add('cpu_' + pol, f'/tmp/nat_cpu/{pol}/gen.json', f'/tmp/nat_cpu/{pol}/gen.err')
 
-# ---- derived ----
+# derived
 def med(keys, src):
     v = [src[k]['tps'] for k in keys if k in src and src[k]['tps'] > 0]
     return (st.median(v), len(v)) if v else (None, 0)
@@ -79,8 +79,8 @@ if _sk: S['realized_cells']['sllm_k2004'] = int(_st2.median(_sk))   # StreamingL
 _sn = [v for v in [P.get('snapkv_aug05', {}).get('kept')] + [D['new'][k].get('kept') for k in D['new'] if re.fullmatch(r'snapkv_r\d', k)] if v]
 if _sn: S['realized_cells']['snapkv_k1024'] = int(_st2.median(_sn))   # median of the two campaigns, as in the papers
 S['own_budget_gpu'] = {k: D['new'][k]['tps'] for k in D['new'] if k.endswith('_own')}
-# CPU own-budget retention: LongBench prompts on the phone CPU, each policy at its published budget,
-# retained_kv_bytes against the vanilla run of the same prompt, mean of the per-prompt ratio (the papers' number; /tmp/lb_native)
+# CPU retention at each policy's published budget (/tmp/lb_native): mean over LongBench prompts
+# of retained_kv_bytes divided by the vanilla run of the same prompt.
 import glob, statistics
 _lb = {}
 for m in glob.glob('/tmp/lb_native/*/meta.json'):
@@ -93,8 +93,8 @@ for pol in ('snapkv', 'adakv', 'h2o', 'tova', 'streamingllm'):
     if r: S['own_budget_cpu_retention'][pol] = (statistics.mean(r), len(r))
 S['own_budget_gpu_cells'] = {k: D['new'][k].get('kept') for k in D['new'] if k.endswith('_own')}
 S['sllm_nocompact'] = {k: D['new'][k]['tps'] for k in D['new'] if k.startswith('sllm_nocompact')}   # published budget, fused kernel on, --no-defrag
-# Phi-3-mini on the Adreno, gated campaign (run_phi3_gpu_complete.sh, /tmp/phi3_gpu_complete): every policy runs on the
-# fused kernel here (SnapKV and Ada-KV promoted to the side node by the driver gate), so the rows isolate cache size.
+# Phi-3-mini on the Adreno (run_phi3_gpu_complete.sh, /tmp/phi3_gpu_complete). Every policy runs on the fused
+# kernel (SnapKV and Ada-KV use the side node), so the rows differ only in cache size.
 PHI3_BYTES_PER_CELL = 32 * 32 * 96 * 2 * 2   # 32 layers, 32 kv heads, head_dim 96, f16 K and V
 S['phi3_gpu'] = {}
 for pol in ('vanilla', 'streamingllm', 'mukv', 'adakv', 'snapkv'):

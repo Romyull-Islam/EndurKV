@@ -1,16 +1,7 @@
 #!/usr/bin/env python3
-"""Direct accuracy scoring for phone-pulled `gen.txt` outputs of eviction_bench.
-
-For each run directory (containing meta.json + gen.txt), computes:
-  - F1 (token-overlap, LongBench-standard)
-  - Exact-Match (case-insensitive, post-normalization)
-  - ROUGE-L (longest common subsequence)
-  - Needle-recall (NIAH-specific)
-
-Ground truth comes from the LongBench/NIAH jsonl on host.
-
-Usage:
-    host_score_phone_runs.py --runs-dir <pulled-phone-logs> [--out-csv path]
+"""Score phone-pulled eviction_bench gen.txt outputs (F1, exact match, ROUGE-L, needle recall)
+against the LongBench/NIAH jsonl ground truth on the host.
+Usage: host_score_phone_runs.py --runs-dir <pulled-phone-logs> [--out-csv path]
 """
 import argparse, json, re, string
 from pathlib import Path
@@ -120,7 +111,7 @@ def main():
     print(f"wrote {args.out_csv} ({len(df)} rows, {df.policy.nunique()} policies)")
 
     # Per-policy headline
-    print("\n=== ACCURACY by policy (mean across prompts) ===")
+    print("ACCURACY by policy (mean across prompts)")
     agg = df.groupby('policy').agg(
         n=('prompt_id','count'),
         mean_f1=('f1','mean'),
@@ -133,7 +124,7 @@ def main():
     print(agg.to_string(index=False))
 
     # Per-(prompt, K) breakdown
-    print("\n=== Per-(prompt, K) side-by-side ===")
+    print("Per-(prompt, K) side-by-side")
     for key, grp in df.groupby(['prompt_id','k_nominal']):
         pid, k = key
         print(f"\n  {pid} K={k}:")

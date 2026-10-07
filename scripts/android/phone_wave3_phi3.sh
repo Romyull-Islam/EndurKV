@@ -1,13 +1,7 @@
 #!/system/bin/sh
-# phone_wave3_phi3.sh — sustained-stress on Phi-3-mini-128k with the corrected
-# 5-policy set: vanilla, v1, v1_FA, TOVA-layer (paper-faithful), llama.cpp.
-#
-# Phi-3 has ~14× larger KV cache per token than Llama-1B → biggest cache-pressure
-# scenario → strongest expected eviction thermal benefit. Per the dissertation
-# bandwidth-scaling argument.
-#
-# 60 min per cell (Phi-3 prefill is ~14 min/iter on 4-thread CPU at 1.63 GHz;
-# this allows ~3 iters per cell).
+# Sustained stress on Phi-3-mini-128k for 5 policies: vanilla, v1, v1_FA, TOVA-layer, llama.cpp.
+# Phi-3 has about 14x the KV cache per token of Llama-1B, so cache pressure is highest here.
+# 60 min per cell, about 3 iterations at ~14 min of prefill each (4 threads, 1.63 GHz).
 
 set -u
 

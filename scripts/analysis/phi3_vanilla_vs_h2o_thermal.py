@@ -135,7 +135,7 @@ def main():
         cells_by[name] = collect_cell(local, remote)
         print(f"[{name}] cells: {len(cells_by[name])}")
 
-    # ---------- Per-cell summaries ----------
+    # Per-cell summaries
     rows = []
     for name, cells in cells_by.items():
         for c in cells:
@@ -147,7 +147,7 @@ def main():
     summary = pd.DataFrame(rows)
     print(summary[["arm","iter","peak_ddr_c","mean_ddr_decode_c","peak_cpu_c","swap_mb_total","min_mem_avail_gb","perplexity","peak_kv_cells","evicted_total_decode"]].to_string(index=False))
 
-    # ---------- Comparison tables ----------
+    # Comparison tables
     agg = summary.groupby("arm").agg(
         n_cells=("iter","count"),
         peak_ddr_c=("peak_ddr_c","max"),
@@ -161,10 +161,10 @@ def main():
         mean_peak_kv_cells=("peak_kv_cells","mean"),
         mean_evicted=("evicted_total_decode","mean"),
     ).reset_index()
-    print("\n=== Per-arm aggregate ===")
+    print("Per-arm aggregate")
     print(agg.to_string(index=False))
 
-    # ---------- Plot ----------
+    # Plot
     fig, axes = plt.subplots(2, 1, figsize=(11, 8), sharex=True)
     colors = {"vanilla":"#1f77b4", "h2o":"#2ca02c"}
 
@@ -206,7 +206,7 @@ def main():
     plt.savefig(OUT_PNG, dpi=150)
     print(f"\nSaved: {OUT_PNG}")
 
-    # ---------- Schema ----------
+    # Schema
     def jsonable(o):
         if isinstance(o, (np.floating, np.integer)):
             return o.item()
@@ -231,10 +231,10 @@ def main():
         json.dump(out, f, indent=2, default=jsonable)
     print(f"Saved: {OUT_JSON}")
 
-    # ---------- Headline ----------
+    # Headline
     v = agg[agg["arm"]=="vanilla"].iloc[0]
     h = agg[agg["arm"]=="h2o"].iloc[0]
-    print("\n=== HEADLINE ===")
+    print("HEADLINE")
     print(f"vanilla peak DDR={v.peak_ddr_c:.1f}C, mean-decode DDR={v.mean_ddr_decode_c:.2f}C, n_cells={int(v.n_cells)}")
     print(f"h2o     peak DDR={h.peak_ddr_c:.1f}C, mean-decode DDR={h.mean_ddr_decode_c:.2f}C, n_cells={int(h.n_cells)} (partial)")
     print(f"DELTA peak DDR (h2o - vanilla)         = {h.peak_ddr_c - v.peak_ddr_c:+.1f}C")

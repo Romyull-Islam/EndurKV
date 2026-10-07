@@ -1,45 +1,8 @@
 #!/usr/bin/env python3
-"""
-Llama-3.2-1B Wave-3 relationship scatter for the supervisor.
-
-Source: /home/mislam22/EndurKV_workspace/phone-logs/wave3_real_1780680903/
-Cells:  vanilla / v1_K2048 / v1_K512 / v1_fa_K512   (4 cells, ~5 iters each)
-
-We aggregate one row per (cell, iter) and plot how the effective live KV
-cache budget per iteration covaries with three thermal/memory channels:
-
-  * DDR (memory) temperature
-  * Big-core CPU temperature
-  * Process RSS
-
-Definition of `cache_size_cells` per iter
------------------------------------------
-For the v1 / v1_fa policies the per-position attention budget is exactly
-K_nominal positions plus the n_sink protected tokens, and the decode loop
-may grow it transiently by n_decode_steps before the next eviction pass:
-
-    cache_size_cells = K_nominal + n_sink + n_decode_steps        (v1, v1_fa)
-    cache_size_cells = peak_kv_cells                              (vanilla)
-
-This matches the supervisor's narrative that K=2048 "sustains" a ~2k working
-set while K=512 "caps" at a few hundred, with vanilla acting as the
-no-eviction reference (full 8k prompt + decode).
-
-Three-panel figure (single column, stacked):
-  Top    : cache_size_cells vs DDR temp (C)   scatter + linear fit + R^2
-  Middle : cache_size_cells vs CPU temp (C)   scatter + linear fit + R^2
-  Bottom : cache_size_cells vs RSS (GB)       scatter + linear fit + R^2
-
-CPU temp is the per-iter mean of the per-row MAX across the big-core
-cluster (cpu-1-0-[01], cpu-1-1-[01], cpullc-1-[01]), matching the
-race-to-idle CPU figure (13).
-
-Output:
-  /home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/
-      21_llama1b_relations.png
-  /home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/
-      21_llama1b_relations.schema.json
-"""
+"""Llama-3.2-1B scatter of live cache size per iter against DDR temp, big-core CPU temp
+and RSS, for four cells in phone-logs/wave3_real_1780680903 (vanilla, v1_K2048, v1_K512,
+v1_fa_K512). Cache size is K_nominal + n_sink + n_decode_steps, or peak_kv_cells for vanilla.
+Writes figures/relationship_plots/21_llama1b_relations.png and .schema.json."""
 from __future__ import annotations
 
 import csv
@@ -54,7 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-# ----------------------------- config -----------------------------------------
+# config
 
 WAVE_DIR = Path(
     "/home/mislam22/EndurKV_workspace/phone-logs/wave3_real_1780680903"
@@ -85,7 +48,7 @@ CPU_BIG_COLS = [
 COL_MONO_S = "monotonic_s"
 
 
-# ---------------------------- helpers -----------------------------------------
+# helpers
 
 def _f(x) -> float:
     try:
@@ -168,11 +131,7 @@ def iter_temp_window(sensor: dict, t_start: float, t_end: float
 
 
 def compute_cache_size(meta: dict, peak_kv: int) -> float:
-    """Effective live cache budget per iter.
-
-    v1 / v1_fa: K_nominal + n_sink + n_decode_steps
-    vanilla   : peak_kv_cells
-    """
+    """Live cache size per iter: K_nominal + n_sink + n_decode_steps, or peak_kv_cells for vanilla."""
     pol = str(meta.get("policy", "")).lower()
     if pol == "vanilla":
         return float(peak_kv)
@@ -183,7 +142,7 @@ def compute_cache_size(meta: dict, peak_kv: int) -> float:
 
 
 def linreg(x: np.ndarray, y: np.ndarray):
-    """Return (slope, intercept, r2, n) — finite-only."""
+    """Return (slope, intercept, r2, n) over finite points only."""
     m = np.isfinite(x) & np.isfinite(y)
     xs, ys = x[m], y[m]
     if xs.size < 3 or float(np.var(xs)) == 0.0:
@@ -196,7 +155,7 @@ def linreg(x: np.ndarray, y: np.ndarray):
     return float(slope), float(intercept), float(r2), int(xs.size)
 
 
-# ------------------------------ main ------------------------------------------
+# main
 
 def main() -> int:
     if not WAVE_DIR.exists():
@@ -224,8 +183,7 @@ def main() -> int:
             peak_rss_kb = float(meta.get("peak_rss_kb", float("nan")))
             cache_cells = compute_cache_size(meta, peak_kv)
 
-            # Define the iter's wall-time window for averaging temps.
-            # End = start of next iter, or start + total_ms/1000 for the last.
+            # Temp-averaging window ends at the next iter's start, or start + total_ms for the last.
             if idx + 1 < len(iters_sorted):
                 t_end = iters_sorted[idx + 1][1]
             else:
@@ -276,7 +234,7 @@ def main() -> int:
     rss = np.array([r["rss_GB"] for r in rows], dtype=float)
     colors = [r["color"] for r in rows]
 
-    print(f"=== aggregated {len(rows)} (cell, iter) rows ===")
+    print(f"aggregated {len(rows)} (cell, iter) rows")
     for s in per_cell_summary:
         print(
             f"  {s['cell']:12s}  n={s['n_iter']}  "
@@ -293,7 +251,7 @@ def main() -> int:
     print(f"[fit cpu] slope={fit_cpu[0]:.6g}  R2={fit_cpu[2]:.3f}  n={fit_cpu[3]}")
     print(f"[fit rss] slope={fit_rss[0]:.6g}  R2={fit_rss[2]:.3f}  n={fit_rss[3]}")
 
-    # ----------------------------- figure -------------------------------------
+    # figure
     fig, axes = plt.subplots(
         3, 1, figsize=(10.0, 12.5),
         gridspec_kw={"hspace": 0.34},
@@ -328,8 +286,7 @@ def main() -> int:
             )
         seen_labels |= {r["label"] for r in rows}
 
-    # Reset seen so each axis can re-add legend handles; we add legend per axis
-    # but only need one handle per policy — we'll rebuild from unique labels.
+    # Each axis gets its own legend, rebuilt below from unique labels.
 
     for ax, y_vec, fit, title, ylabel, unit in panels:
         slope, intercept, r2, n_pts = fit
@@ -378,7 +335,7 @@ def main() -> int:
     plt.close(fig)
     print(f"[ok] wrote {OUT_PATH} ({os.path.getsize(OUT_PATH)/1024:.1f} KB)")
 
-    # ------------------------------- RES_SCHEMA -------------------------------
+    # RES_SCHEMA
     schema = {
         "kind": "RES_SCHEMA",
         "version": 1,

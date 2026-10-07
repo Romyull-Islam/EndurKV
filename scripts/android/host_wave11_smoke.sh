@@ -1,60 +1,21 @@
 #!/bin/bash
-# host_wave11_smoke.sh — host-side end-to-end smoke test of phone_wave11_eval.sh.
-#
-# Goal:
-#   Validate that the full Wave-11 launcher (preflight, cool gate, per-cell run,
-#   sensors, watchdog, sweep logic, deliverables) works correctly with a tiny
-#   restricted matrix in under 15 wall-clock minutes.
-#
-# Matrix (6 cells, not 30):
-#   MODELS   = Llama-3.2-1B
-#   POLICIES = vanilla v1 v1_fa2_stack
-#   BENCHES  = ppl niah
-#   PPL_N_CHUNKS    = 1   (single 2048-token chunk)
-#   NIAH_N_STIMULI  = 1   (single Tier-1 stimulus)
-#   COOL_MAX_S      = 60  (short cool gate so timeouts don't dominate)
-#
-# Validation gates (every check must pass to report PASS):
-#   PRE-FLIGHT
-#     * ADB device online.
-#     * /data/local/tmp/endurkv/eval_data/wiki.test.raw.chunk0 present
-#       (chunks 0..7 confirmed).
-#     * NIAH stimuli present at /data/local/tmp/endurkv/eval_data/niah/
-#       and at least one staged as niah_stimulus_00.txt for the launcher.
-#     * On-device eviction_bench sha256 matches the host build at
-#       entropy_probe/build-android/eviction_bench (current build proof).
-#   RUNTIME
-#     * Launcher invoked with WAVE11_FOREGROUND=1 so it runs synchronously.
-#     * progress.log streamed to stdout while the launcher executes.
-#   POST-RUN
-#     (a) 6 "CELL DONE" markers in progress.log (matches the user's
-#         "cell exit" criterion — the launcher emits "CELL DONE" lines).
-#     (b) Every ppl cell's stress.csv has a non-zero ppl column.
-#     (c) Every niah cell's gen.txt is > 50 bytes.
-#     (d) watchdog.log exists ONLY under v1_fa2_stack cells.
-#     (e) No leftover preempt_throttle_watchdog or sample_sensors processes.
-#
-# Exit codes:
-#   0  PASS — all gates green.
-#   1  FAIL — at least one gate failed. The script prints the exact reason.
-#   2  ABORTED — environment / preflight unrecoverable (e.g., no device).
-#
-# Usage:
-#   bash /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/host_wave11_smoke.sh
+# End-to-end smoke test of phone_wave11_eval.sh on a 6-cell matrix: Llama-3.2-1B,
+# policies vanilla/v1/v1_fa2_stack, benches ppl/niah, 1 chunk, 1 stimulus, 60 s cool gate.
+# Preflight checks device, eval data and that the phone binary sha256 matches the host
+# build. After the run it checks 6 CELL DONE lines, nonzero ppl, niah gen.txt > 50 B,
+# watchdog.log only under v1_fa2_stack, and no leftover watchdog/sampler processes.
+# Exit: 0 pass, 1 a gate failed, 2 aborted (no device).
+# Usage: bash scripts/android/host_wave11_smoke.sh
 
 set -u
 set -o pipefail
 
-# ---------------------------------------------------------------------------
 # Resilient ADB helpers
-# ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=adb_resilient.sh
 source "$SCRIPT_DIR/adb_resilient.sh"
 
-# ---------------------------------------------------------------------------
 # Constants
-# ---------------------------------------------------------------------------
 PHONE_WORKDIR="/data/local/tmp/endurkv"
 PHONE_BIN="$PHONE_WORKDIR/bin_cpu/eviction_bench"
 PHONE_LAUNCHER="$PHONE_WORKDIR/scripts/phone_wave11_eval.sh"
@@ -65,8 +26,7 @@ PHONE_EVAL_DATA="$PHONE_WORKDIR/eval_data"
 PHONE_NIAH_DIR="$PHONE_EVAL_DATA/niah"
 PHONE_PPL_CHUNK0="$PHONE_EVAL_DATA/wiki.test.raw.chunk0"
 
-# Smoke output goes to a dedicated, timestamped directory so it never
-# collides with a real Wave-11 sweep.
+# Timestamped output dir so it never collides with a real sweep.
 SMOKE_TS="$(date +%Y%m%d_%H%M%S)"
 PHONE_OUT_DIR="$PHONE_WORKDIR/logs/wave11_smoke_$SMOKE_TS"
 HOST_PULL_DIR="/tmp/wave11_smoke_$SMOKE_TS"
@@ -89,31 +49,26 @@ SMOKE_COOL_MAX_S=60
 
 EXPECTED_CELLS=6   # 1 model x 3 policies x 2 benches
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 say()  { printf '[smoke %s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 fail() { printf '[smoke FAIL] %s\n' "$*" >&2; FAIL_REASONS+=("$*"); }
 note() { printf '[smoke note] %s\n' "$*"; }
 
 FAIL_REASONS=()
 
-# Print a section header so the log is readable.
 section() { printf '\n========== %s ==========\n' "$*"; }
 
-# Return the value of FAIL_REASONS as a single string. POSIX-safe.
+# Join FAIL_REASONS into one string.
 join_fails() {
     local IFS='; '
     printf '%s' "${FAIL_REASONS[*]}"
 }
 
-# ---------------------------------------------------------------------------
 # Gate 0: ADB device online
-# ---------------------------------------------------------------------------
 section "GATE 0 — ADB device"
 if ! adb get-state 2>/dev/null | grep -q '^device$'; then
     say "no device online; waiting up to 60s via adb_wait..."
-    # adb_wait blocks indefinitely; bound it ourselves.
+    # adb_wait blocks indefinitely, so bound it here.
     ( adb_wait ) &
     WAIT_PID=$!
     waited=0
@@ -129,9 +84,7 @@ if ! adb get-state 2>/dev/null | grep -q '^device$'; then
 fi
 say "device online: $(adb get-serialno 2>/dev/null)"
 
-# ---------------------------------------------------------------------------
 # Gate 1: PPL chunk0 (and chunks 0..7) present
-# ---------------------------------------------------------------------------
 section "GATE 1 — PPL chunk presence"
 if ! adb_safe_shell "test -f $PHONE_PPL_CHUNK0 && echo OK" | grep -q OK; then
     fail "missing $PHONE_PPL_CHUNK0"
@@ -139,7 +92,7 @@ else
     say "OK: $PHONE_PPL_CHUNK0 exists"
 fi
 
-# Spot-check chunks 0..7 (user said 8 were pushed)
+# Spot-check chunks 0..7
 missing_chunks=""
 for i in 0 1 2 3 4 5 6 7; do
     if ! adb_safe_shell "test -f $PHONE_EVAL_DATA/wiki.test.raw.chunk${i} && echo OK" | grep -q OK; then
@@ -152,9 +105,7 @@ else
     say "OK: PPL chunks 0..7 present"
 fi
 
-# ---------------------------------------------------------------------------
 # Gate 2: NIAH stimuli present (and stage 1 with launcher-expected name)
-# ---------------------------------------------------------------------------
 section "GATE 2 — NIAH stimuli"
 NIAH_COUNT=$(adb_safe_shell "ls $PHONE_NIAH_DIR/*.txt 2>/dev/null | wc -l" | tr -d '[:space:]')
 if [ -z "$NIAH_COUNT" ] || [ "$NIAH_COUNT" -lt 1 ] 2>/dev/null; then
@@ -163,10 +114,8 @@ else
     say "OK: $NIAH_COUNT NIAH stimulus files in $PHONE_NIAH_DIR"
 fi
 
-# The launcher expects files named niah_stimulus_NN.txt.  The pushed corpus
-# uses the niah_cCTX_dDD.txt naming convention.  Stage a single canonical
-# stimulus (the launcher only needs NIAH_N_STIMULI=1 here).  Pick a 4096-ctx
-# file because the smoke matrix uses ctx=4096.
+# The launcher expects niah_stimulus_NN.txt but the corpus uses niah_cCTX_dDD.txt.
+# Stage one 4096-ctx stimulus to match the smoke matrix ctx.
 SOURCE_STIM="$PHONE_NIAH_DIR/niah_c4096_d50.txt"
 TARGET_STIM="$PHONE_NIAH_DIR/niah_stimulus_00.txt"
 if ! adb_safe_shell "test -f $TARGET_STIM && echo OK" | grep -q OK; then
@@ -184,9 +133,7 @@ else
     say "OK: $TARGET_STIM already staged"
 fi
 
-# ---------------------------------------------------------------------------
 # Gate 3: eviction_bench sha256 (phone == host build)
-# ---------------------------------------------------------------------------
 section "GATE 3 — eviction_bench is current build"
 if [ ! -f "$HOST_BIN" ]; then
     fail "host build missing: $HOST_BIN"
@@ -202,9 +149,7 @@ else
     fi
 fi
 
-# ---------------------------------------------------------------------------
 # Push launcher (every smoke run gets a fresh copy)
-# ---------------------------------------------------------------------------
 section "STAGE — push launcher"
 if [ ! -f "$HOST_LAUNCHER" ]; then
     fail "host launcher missing: $HOST_LAUNCHER"
@@ -217,25 +162,20 @@ else
     fi
 fi
 
-# Bail out early if any pre-launch gate failed: running the launcher would just
-# eat the whole budget on a broken environment.
+# Stop here if any pre-launch gate failed.
 if [ "${#FAIL_REASONS[@]}" -gt 0 ]; then
     section "RESULT"
     echo "FAIL: pre-launch gates: $(join_fails)"
     exit 1
 fi
 
-# ---------------------------------------------------------------------------
 # Gate 4: launch the wave11 launcher in FOREGROUND mode
-# ---------------------------------------------------------------------------
 section "GATE 4 — launcher (foreground, restricted matrix)"
 say "OUT_DIR on phone: $PHONE_OUT_DIR"
 say "starting launcher (cap=${LAUNCHER_MAX_S}s) ..."
 
-# We run the launcher on the phone with WAVE11_FOREGROUND=1 so it returns
-# synchronously, then immediately background that adb shell invocation on the
-# host so we can stream progress.log in parallel.  We capture the launcher's
-# exit code via a sentinel file on the phone.
+# The launcher runs in foreground mode inside a backgrounded adb shell, so the host
+# can stream progress.log. Its exit code comes back through a file on the phone.
 RUN_LOG="$HOST_PULL_DIR/launcher_run.log"
 RC_PHONE_FILE="$PHONE_OUT_DIR/.launcher_rc"
 adb_safe_shell "mkdir -p $PHONE_OUT_DIR" >/dev/null
@@ -251,15 +191,12 @@ NIAH_N_STIMULI=$SMOKE_NIAH \
 NIAH_TIER=1 \
 COOL_MAX_S=$SMOKE_COOL_MAX_S"
 
-# Background the launcher (adb shell call); foreground-mode in the script means
-# it executes main() inline rather than re-execing under setsid.
+# Foreground mode makes the launcher run main() inline instead of re-execing under setsid.
 ( adb shell "$ENV_PREFIX sh $PHONE_LAUNCHER; echo \$? > $RC_PHONE_FILE" \
     > "$RUN_LOG" 2>&1 ) &
 LAUNCH_PID=$!
 
-# ---------------------------------------------------------------------------
 # Gate 5: stream progress.log to stdout while launcher runs
-# ---------------------------------------------------------------------------
 section "GATE 5 — streaming progress.log"
 LAST_LINES=0
 T0="$(date +%s)"
@@ -267,17 +204,15 @@ while kill -0 "$LAUNCH_PID" 2>/dev/null; do
     NOW="$(date +%s)"
     if [ "$((NOW - T0))" -ge "$LAUNCHER_MAX_S" ]; then
         say "WARN: launcher exceeded ${LAUNCHER_MAX_S}s — killing"
-        # Kill local adb shell process.
         kill -9 "$LAUNCH_PID" 2>/dev/null
-        # And kill any phone-side processes the launcher may have spawned.
+        # Also kill phone-side processes the launcher spawned.
         adb_safe_shell "pkill -f phone_wave11_eval || true" >/dev/null 2>&1
         adb_safe_shell "pkill -f eviction_bench    || true" >/dev/null 2>&1
         adb_safe_shell "pkill -f sample_sensors    || true" >/dev/null 2>&1
         break
     fi
 
-    # Pull the current progress.log (may not exist yet during the very first
-    # second; ignore errors).
+    # progress.log may not exist yet in the first second, so ignore errors.
     if adb pull -q "$PROGRESS_PHONE" "$PROGRESS_HOST" 2>/dev/null; then
         TOTAL_LINES="$(wc -l < "$PROGRESS_HOST" 2>/dev/null || echo 0)"
         if [ "$TOTAL_LINES" -gt "$LAST_LINES" ] 2>/dev/null; then
@@ -291,7 +226,7 @@ done
 
 wait "$LAUNCH_PID" 2>/dev/null || true
 
-# Final pull of progress.log so we have the last lines.
+# Final pull for the last lines.
 adb pull -q "$PROGRESS_PHONE" "$PROGRESS_HOST" 2>/dev/null || true
 if [ -f "$PROGRESS_HOST" ]; then
     TOTAL_LINES="$(wc -l < "$PROGRESS_HOST")"
@@ -305,9 +240,7 @@ LAUNCHER_RC="$(adb_safe_shell "cat $RC_PHONE_FILE 2>/dev/null" | head -1 | tr -d
 [ -z "$LAUNCHER_RC" ] && LAUNCHER_RC="UNKNOWN"
 say "launcher exit code: $LAUNCHER_RC"
 
-# ---------------------------------------------------------------------------
 # Pull the smoke OUT_DIR for offline inspection (even on failure).
-# ---------------------------------------------------------------------------
 section "POST — pull smoke OUT_DIR"
 if adb_safe_pull "$PHONE_OUT_DIR" "$HOST_PULL_DIR/"; then
     LOCAL_OUT="$HOST_PULL_DIR/$(basename "$PHONE_OUT_DIR")"
@@ -317,12 +250,7 @@ else
     fail "could not pull $PHONE_OUT_DIR"
 fi
 
-# ---------------------------------------------------------------------------
-# Validation (a): exactly EXPECTED_CELLS "CELL DONE" markers in progress.log
-# The user described these as "cell exit" lines; the launcher emits the line
-#   === CELL DONE  model=... policy=... bench=... ===
-# at the end of every cell.  That marker is the canonical "cell exited" event.
-# ---------------------------------------------------------------------------
+# Validation (a): exactly EXPECTED_CELLS "CELL DONE" lines, one per finished cell.
 section "VALIDATE (a) — 6 cell-exit markers in progress.log"
 if [ ! -f "$PROGRESS_HOST" ]; then
     fail "progress.log not pulled"
@@ -334,18 +262,7 @@ else
     fi
 fi
 
-# ---------------------------------------------------------------------------
-# Validation (b): every ppl stress.csv has at least one non-zero ppl value
-# stress.csv schema (PPL row):
-#   chunk_idx,t_elapsed_s,exit,prefill_ms,decode_tps,n_decode_steps,
-#   peak_kv_cells,peak_rss_kb,evicted,ppl,niah_correct,k_used,
-#   ddr_start_c,mem_free_gb_start
-#   columns:    1         2          3    4          5         6
-#               7              8           9       10  11           12
-#               13           14
-# We check column 10 (ppl) for at least one numeric value != 0 (and != "0"
-# with optional decimal) across the data rows.
-# ---------------------------------------------------------------------------
+# Validation (b): every ppl stress.csv has a nonzero value in column 10 (ppl).
 section "VALIDATE (b) — ppl != 0 in every ppl/stress.csv"
 if [ -n "$LOCAL_OUT" ]; then
     PPL_CSVS=$(find "$LOCAL_OUT" -type f -path '*/ppl/stress.csv' | sort)
@@ -369,9 +286,7 @@ else
     fail "(b) skipped — no local OUT_DIR"
 fi
 
-# ---------------------------------------------------------------------------
 # Validation (c): every niah gen.txt > 50 bytes
-# ---------------------------------------------------------------------------
 section "VALIDATE (c) — niah gen.txt > 50 bytes"
 if [ -n "$LOCAL_OUT" ]; then
     GEN_FILES=$(find "$LOCAL_OUT" -type f -path '*/niah/iter*/gen.txt' | sort)
@@ -391,9 +306,7 @@ else
     fail "(c) skipped — no local OUT_DIR"
 fi
 
-# ---------------------------------------------------------------------------
 # Validation (d): watchdog.log exists ONLY under v1_fa2_stack cells
-# ---------------------------------------------------------------------------
 section "VALIDATE (d) — watchdog.log scope"
 if [ -n "$LOCAL_OUT" ]; then
     WD_FILES=$(find "$LOCAL_OUT" -type f -name 'watchdog.log' | sort)
@@ -422,9 +335,7 @@ else
     fail "(d) skipped — no local OUT_DIR"
 fi
 
-# ---------------------------------------------------------------------------
 # Validation (e): no leftover watchdog (or sampler) processes on the phone
-# ---------------------------------------------------------------------------
 section "VALIDATE (e) — no leftover watchdog/sampler procs on phone"
 LEFTOVER_WD=$(adb_safe_shell "pgrep -fa preempt_throttle_watchdog 2>/dev/null" | grep -v 'pgrep' || true)
 LEFTOVER_SS=$(adb_safe_shell "pgrep -fa sample_sensors 2>/dev/null"         | grep -v 'pgrep' || true)
@@ -439,15 +350,12 @@ else
     say "OK: no leftover sampler procs"
 fi
 
-# Also surface the launcher rc as a soft check; non-zero is suspicious but the
-# detailed validations above are the authoritative gates.
+# A nonzero launcher rc is only a note. The validations above decide the result.
 if [ "$LAUNCHER_RC" != "0" ]; then
     note "launcher exit code was $LAUNCHER_RC (non-zero) — see $RUN_LOG"
 fi
 
-# ---------------------------------------------------------------------------
 # Result
-# ---------------------------------------------------------------------------
 section "RESULT"
 if [ "${#FAIL_REASONS[@]}" -eq 0 ]; then
     echo "PASS — wave11 launcher end-to-end smoke green ($EXPECTED_CELLS cells)"

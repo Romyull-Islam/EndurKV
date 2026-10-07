@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase 0 — create project venv and install missing Python deps.
+# Phase 0 - create project venv and install missing Python deps.
 # Run from the EndurKV root:  bash scripts/01_install_python_deps.sh
 # Idempotent. Safe to re-run.
 
@@ -21,7 +21,7 @@ echo "Installing matplotlib, seaborn, datasets, huggingface_hub ..."
 python -m pip install --quiet matplotlib seaborn datasets huggingface_hub
 
 echo
-echo "=== Resolved package versions ==="
+echo "Resolved package versions"
 python - <<'PY'
 import importlib
 for m in ["numpy","pandas","scipy","tqdm","matplotlib","seaborn","datasets","huggingface_hub"]:

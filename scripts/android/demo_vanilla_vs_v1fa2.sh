@@ -1,105 +1,39 @@
 #!/bin/bash
-# demo_vanilla_vs_v1fa2.sh — Side-by-side terminal demo: vanilla vs v1_fa2_stack.
+# Side-by-side terminal demo on the connected phone: vanilla vs v1_fa2_stack.
+# Runs eviction_bench once per policy and prints generated text, thermal, energy and perf.
 #
-# Runs eviction_bench on the connected Android phone twice (once per policy),
-# captures generated text + thermal/energy/perf metrics, and prints a unified
-# comparison table to stdout.  All host-side; no plotting, no temp dirs left
-# behind on the phone.
-#
-# Usage:
-#   bash demo_vanilla_vs_v1fa2.sh [OPTIONS] [PROMPT] [MODEL_TAG]
-#
-# OPTIONS (any order, before positional args):
-#   --long-decode          Use long-decode regime (MAX_TOKENS=2048, long-story prompt).
-#   --k=N | --k N          Set nominal KV cache size K (default: 512, env: K_NOMINAL).
-#                          Affects both vanilla and v1_fa2_stack runs uniformly.
-#                          CLI flag overrides K_NOMINAL env var.
-#   --ignore-eos           Ignore EOS token — model runs full MAX_TOKENS regardless
-#                          (env: IGNORE_EOS=1). Useful for deterministic long-decode
-#                          benchmarks where you want both policies to emit exactly
-#                          the same number of tokens.
-#   --anchor=N | --anchor N
-#                          Override ANCHOR_TOP_K (default 32). Useful values: 32,
-#                          64, 96, 128. Affects only v1_fa2_stack (vanilla doesn't
-#                          use anchors). Must satisfy ANCHOR + N_SINK < K_NOMINAL.
-#   --repeat-penalty=F | --repeat-penalty F
-#                          Pass --repeat-penalty F to eviction_bench for BOTH
-#                          policies. Binary default is 1.10. Useful values: 1.0
-#                          (off), 1.1, 1.2, 1.3. Must be float >= 1.0.
-#   --policy=NAME | --policy NAME
-#                          Run ONLY ONE policy and skip the comparison table.
-#                          NAME ∈ { vanilla, v1_fa2_stack, adakv, both, three-way }.
-#                          Default: both (current behavior).
-#                          Env: POLICY=vanilla|v1_fa2_stack|adakv|both|three-way
-#                          Use this for fast iteration when you only need to
-#                          measure or eyeball one side. Single-policy mode
-#                          prints a simpler one-column summary (no Δ).
-#   --three-way            Run THREE policies sequentially (vanilla, adakv,
-#                          v1_fa2_stack) and print a 3-column comparison
-#                          table with deltas relative to vanilla. Equivalent
-#                          to --policy=three-way. The adakv cell uses the
-#                          eviction_bench_v8 binary instead of eviction_bench.
-#   --energy-mode          Optimal-energy preset (env: ENERGY_MODE=1):
-#                            K_NOMINAL=512       (smaller cache → less DRAM)
-#                            ANCHOR_TOP_K=128    (preserve semantic quality)
-#                            REPEAT_PENALTY=1.15 (mild)
-#                            does NOT pass --ignore-eos (let model stop naturally)
-#                            watchdog v2 stays in cliff-insurance mode (from
-#                            previous workflow step). Explicit CLI args
-#                            (--k, --anchor, --repeat-penalty, --ignore-eos)
-#                            still override these defaults.
-#
-# Examples:
-#   bash demo_vanilla_vs_v1fa2.sh
-#   bash demo_vanilla_vs_v1fa2.sh "Once upon a time..."
-#   bash demo_vanilla_vs_v1fa2.sh "Custom prompt"  Phi-3-mini-128k
-#   bash demo_vanilla_vs_v1fa2.sh "Custom prompt"  gemma-2-2b-it
-#   bash demo_vanilla_vs_v1fa2.sh --long-decode
-#   bash demo_vanilla_vs_v1fa2.sh --long-decode --k=1024
-#   bash demo_vanilla_vs_v1fa2.sh --k=1024 --long-decode
-#   bash demo_vanilla_vs_v1fa2.sh --k 256 --long-decode "Write a poem" Phi-3-mini-128k
-#   bash demo_vanilla_vs_v1fa2.sh --long-decode --k=1024 "Custom prompt"
-#   bash demo_vanilla_vs_v1fa2.sh --k=2048 "Custom prompt"
-#   bash demo_vanilla_vs_v1fa2.sh --ignore-eos --long-decode
-#   bash demo_vanilla_vs_v1fa2.sh --ignore-eos --k=1024 --long-decode
-#   IGNORE_EOS=1 bash demo_vanilla_vs_v1fa2.sh --long-decode
-#   K_NOMINAL=1024 bash demo_vanilla_vs_v1fa2.sh --long-decode
-#   bash demo_vanilla_vs_v1fa2.sh --policy=v1_fa2_stack --k=512
-#   bash demo_vanilla_vs_v1fa2.sh --policy=vanilla --long-decode
-#   POLICY=v1_fa2_stack bash demo_vanilla_vs_v1fa2.sh --k=1024
+# Usage: bash demo_vanilla_vs_v1fa2.sh [OPTIONS] [PROMPT] [MODEL_TAG]
+#   --long-decode       MAX_TOKENS=2048 with the long-story prompt
+#   --k=N               nominal KV size for all policies (default 512, env K_NOMINAL)
+#   --anchor=N          ANCHOR_TOP_K for v1_fa2_stack (default 32), ANCHOR + N_SINK < K
+#   --repeat-penalty=F  repeat penalty for all policies, >= 1.0 (binary default 1.10)
+#   --ignore-eos        always emit MAX_TOKENS (env IGNORE_EOS=1)
+#   --policy=NAME       vanilla, v1_fa2_stack, adakv, both (default) or three-way (env POLICY)
+#   --three-way         same as --policy=three-way, adakv runs eviction_bench_v8
+#   --energy-mode       preset K=512, anchor 128, repeat 1.15 (env ENERGY_MODE=1), flags override it
 
 set -u
 
-# ---------------------------------------------------------------------------
 # Args
-# ---------------------------------------------------------------------------
 LONG_DECODE=0
-# Track whether K_NOMINAL was explicitly set via env (before we apply a default)
-# so --energy-mode preset can fill in only when the user did NOT specify K.
+# Set when K_NOMINAL came from the env, so --energy-mode does not override it.
 K_NOMINAL_ENV_SET=0
 if [ -n "${K_NOMINAL+x}" ]; then
     K_NOMINAL_ENV_SET=1
 fi
-# K_NOMINAL: env var seeds default; CLI --k=N overrides.
+# Env vars seed the defaults, CLI flags override them.
 K_NOMINAL="${K_NOMINAL:-512}"
 K_CLI=""
-# IGNORE_EOS: env var seeds default; CLI --ignore-eos sets to 1.
 IGNORE_EOS="${IGNORE_EOS:-0}"
-# Track whether IGNORE_EOS was explicitly requested (env IGNORE_EOS=1 or
-# CLI --ignore-eos). Energy mode must NOT silently pass --ignore-eos but
-# must still honor explicit overrides.
+# Energy mode does not add --ignore-eos itself but honors an explicit request.
 IGNORE_EOS_EXPLICIT=0
 if [ "${IGNORE_EOS:-0}" = "1" ]; then
     IGNORE_EOS_EXPLICIT=1
 fi
-# ANCHOR_TOP_K: env var seeds default (32); CLI --anchor=N overrides.
 ANCHOR_CLI=""
-# REPEAT_PENALTY: CLI --repeat-penalty=F overrides (default binary value 1.10).
 REPEAT_PENALTY_CLI=""
-# ENERGY_MODE: env var seeds default; CLI --energy-mode sets to 1.
 ENERGY_MODE="${ENERGY_MODE:-0}"
-# POLICY: env var seeds default (both); CLI --policy=NAME overrides.
-# Valid values: vanilla | v1_fa2_stack | adakv | both | three-way.
+# vanilla, v1_fa2_stack, adakv, both or three-way
 POLICY="${POLICY:-both}"
 
 while [ $# -gt 0 ]; do
@@ -183,29 +117,20 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# ---------------------------------------------------------------------------
-# --energy-mode preset (applied BEFORE final K/anchor/repeat resolution).
-# Each preset value is filled in ONLY when the user did not explicitly set
-# that parameter (via env var or CLI flag), so explicit args still win.
-# Specifically: does NOT force --ignore-eos — model is allowed to stop on EOS.
-# ---------------------------------------------------------------------------
+# --energy-mode preset. Each value is filled in only when the user did not set
+# it, and the model is still allowed to stop on EOS.
 if [ "$ENERGY_MODE" = "1" ]; then
-    # K=512: only fill in if neither env nor --k was provided.
     if [ "$K_NOMINAL_ENV_SET" -eq 0 ] && [ -z "$K_CLI" ]; then
         K_NOMINAL=512
     fi
-    # Anchor=128: only fill in if --anchor was not provided.
     if [ -z "$ANCHOR_CLI" ]; then
         ANCHOR_CLI=128
     fi
-    # Repeat penalty=1.15: only fill in if --repeat-penalty was not provided.
     if [ -z "$REPEAT_PENALTY_CLI" ]; then
         REPEAT_PENALTY_CLI=1.15
     fi
-    # Energy mode deliberately does NOT enable --ignore-eos.
 fi
 
-# CLI flag overrides env var
 if [ -n "$K_CLI" ]; then
     K_NOMINAL="$K_CLI"
 fi
@@ -249,9 +174,7 @@ fi
 PROMPT="${1:-$DEFAULT_PROMPT}"
 MODEL_TAG="${2:-Llama-3.2-1B}"
 
-# ---------------------------------------------------------------------------
 # K_NOMINAL-derived knobs (shared by vanilla & v1_fa2_stack for fair comparison)
-# ---------------------------------------------------------------------------
 ANCHOR_TOP_K=32
 N_SINK=4
 
@@ -323,17 +246,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/adb_resilient.sh"
 
-# ---------------------------------------------------------------------------
 # Settings
-# ---------------------------------------------------------------------------
 PHONE_WORK="${PHONE_WORK:-/data/local/tmp/endurkv}"
 PHONE_BIN="$PHONE_WORK/bin_cpu/eviction_bench"
-# Alternate binary for the adakv policy (paper baseline; AdaKV scoring lives in v8).
+# AdaKV baseline scoring lives in the v8 binary.
 PHONE_BIN_ADAKV="$PHONE_WORK/bin_cpu/eviction_bench_v8"
 PHONE_MODEL="$PHONE_WORK/models/$MODEL_FILE"
 PHONE_SAMPLER="$PHONE_WORK/scripts/sample_sensors.sh"
-# DDR thermal zone for preempt-throttle watchdog v2 (OnePlus 15 default = zone47).
-# Override with env DDR_ZONE=/sys/class/thermal/thermal_zoneNN for other devices.
+# DDR thermal zone for the watchdog (zone47 on the OnePlus 15). Override with env DDR_ZONE.
 DDR_ZONE="${DDR_ZONE:-/sys/class/thermal/thermal_zone47}"
 RUN_ID="demo_$(date +%Y%m%d_%H%M%S)_$$"
 PHONE_OUT_ROOT="$PHONE_WORK/logs/$RUN_ID"
@@ -354,9 +274,7 @@ COOL_TARGET_C=45        # DDR target before each run
 COOL_TIMEOUT_S=60
 SAMPLE_HZ=5             # sensor sample rate (matches wave-9 default)
 
-# ---------------------------------------------------------------------------
 # Long-decode banner
-# ---------------------------------------------------------------------------
 if [ "$IGNORE_EOS" -eq 1 ]; then
     IGNORE_EOS_NOTE=" [ignore-eos]"
 else
@@ -391,9 +309,7 @@ elif [ "$POLICY" != "both" ]; then
     echo "[demo] SINGLE-POLICY MODE: running only '$POLICY' (comparison table disabled)" >&2
 fi
 
-# ---------------------------------------------------------------------------
-# Pre-flight: phone must have everything we need
-# ---------------------------------------------------------------------------
+# Pre-flight: check that the phone has every required file
 echo "[demo] checking phone connectivity..." >&2
 adb_wait
 PREFLIGHT_FILES=("$PHONE_BIN" "$PHONE_MODEL" "$PHONE_SAMPLER")
@@ -408,15 +324,13 @@ for f in "${PREFLIGHT_FILES[@]}"; do
 done
 adb_safe_shell "mkdir -p '$PHONE_OUT_ROOT'" >/dev/null
 
-# Push the prompt as a file (avoids shell-quoting hell for arbitrary text)
+# Push the prompt as a file to avoid shell quoting of arbitrary text.
 HOST_PROMPT_FILE="$HOST_OUT_ROOT/prompt.txt"
 printf '%s\n' "$PROMPT" > "$HOST_PROMPT_FILE"
 adb_safe_push "$HOST_PROMPT_FILE" "$PHONE_OUT_ROOT/prompt.txt" >/dev/null
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
-# DDR temp in degC (zone "ddr" → milliC)
+# DDR temp in degC (zone "ddr" reports milliC)
 ddr_temp_c() {
     adb_safe_shell "for z in /sys/class/thermal/thermal_zone*; do
         t=\$(cat \$z/type 2>/dev/null)
@@ -444,14 +358,13 @@ cool_phone() {
     done
 }
 
-# Pull a single numeric field out of a meta.json (string or numeric).
-# Args: field path
+# jget FIELD PATH: pull one field out of a meta.json.
 jget() {
     local field="$1" path="$2"
     grep -oE "\"$field\"[^,}]*" "$path" 2>/dev/null | sed -E "s/^\"$field\"[[:space:]]*:[[:space:]]*//; s/^\"//; s/\"$//" | head -1
 }
 
-# Compute % delta: (new - base) / base * 100  → printed with sign
+# Signed % delta: (new - base) / base * 100
 pct_delta() {
     awk -v a="$1" -v b="$2" 'BEGIN{
         if (a+0==0) { print "n/a"; exit }
@@ -463,15 +376,8 @@ abs_delta() {
     awk -v a="$1" -v b="$2" 'BEGIN{ printf "%+.1f", (b-a) }'
 }
 
-# ---------------------------------------------------------------------------
-# Preempt-throttle watchdog v2 helpers
-# ---------------------------------------------------------------------------
-# start_watchdog: launch preempt_throttle_watchdog_v2.sh on the phone (root).
-#   Args: cell_dir (host-side cell dir).  Uses globals: PHONE_WORK, DDR_ZONE, PHONE_OUT_ROOT.
-# stop_watchdog:  signal the watchdog to exit (via sentinel file), wait briefly,
-#                 then SIGKILL any stragglers; pulls watchdog.log to host.
-# parse_watchdog_log: parse pulled watchdog.log and emit a one-line summary
-#                     "tier1=N tier2=N tier3=N total=N" via stdout.
+# Watchdog helpers. start_watchdog launches preempt_throttle_watchdog_v2.sh as
+# root, stop_watchdog stops it through a sentinel file and pulls watchdog.log.
 start_watchdog() {
     local cell_name="$1"
     local host_cell="$HOST_OUT_ROOT/$cell_name"
@@ -480,9 +386,8 @@ start_watchdog() {
     local stop="$phone_cell/watchdog.stop"
     local pidf="$phone_cell/watchdog.pid"
     adb_safe_shell "rm -f '$log' '$stop' '$pidf'" >/dev/null
-    # Detach via su -c sh; the su-c sh starts the watchdog detached, so we
-    # can't reliably get its PID from outside.  Use the stop sentinel as
-    # control instead.  Save a marker so we know it's running.
+    # The watchdog runs detached under su, so its PID is not reliable from
+    # here. It is stopped through the sentinel file, and a host marker records it.
     adb_safe_shell "su -c 'sh $PHONE_WORK/scripts/preempt_throttle_watchdog_v2.sh $log $stop $DDR_ZONE' </dev/null >/dev/null 2>&1 &" >/dev/null
     echo started > "$host_cell/watchdog.marker"
 }
@@ -492,9 +397,8 @@ stop_watchdog() {
     local host_cell="$HOST_OUT_ROOT/$cell_name"
     local phone_cell="$PHONE_OUT_ROOT/$cell_name"
     if [ -f "$host_cell/watchdog.marker" ]; then
-        # Touch sentinel; watchdog v2 should observe and exit gracefully.
         adb_safe_shell "touch '$phone_cell/watchdog.stop'" >/dev/null
-        # Wait up to 10s for graceful exit, then SIGKILL stragglers via root.
+        # Wait up to 10 s for a clean exit, then kill any leftover process.
         local waited=0
         while [ "$waited" -lt 10 ]; do
             if ! adb_safe_shell "su -c 'pgrep -f preempt_throttle_watchdog_v2.sh' 2>/dev/null" | grep -q '[0-9]'; then
@@ -504,27 +408,18 @@ stop_watchdog() {
             waited=$(( waited + 1 ))
         done
         adb_safe_shell "su -c 'pkill -f preempt_throttle_watchdog_v2.sh' 2>/dev/null" >/dev/null
-        # Pull log to host.
         adb_safe_pull "$phone_cell/watchdog.log" "$host_cell/" >/dev/null 2>&1 || true
         rm -f "$host_cell/watchdog.marker"
     fi
 }
 
-# parse_watchdog_log: emit "tier1=N tier2=N tier3=N total=N" for a host watchdog.log.
-#
-# Watchdog v2 log format (the line we count is the transition record):
-#   [<ts>] tier <OLD> -> <NEW> (LABEL=<freq> kHz) engaged: <DOM> at <T>C ...
-# We count transitions BY DESTINATION TIER. So a "0 -> 1" engagement is a
-# tier1 transition. The initial "tier=0 MAX=... (initial)" line is NOT a
-# transition and must be skipped.
-#
-# Legacy v1 logs used "TIER1" / "tier=1" tokens; we keep those as fallbacks
-# so this parser also works against older log captures.
+# Prints "tier1=N tier2=N tier3=N total=N" for a host watchdog.log.
+# v2 transition lines look like "[ts] tier OLD -> NEW (...) engaged: ..." and
+# are counted by destination tier. v1 "TIER1" or "tier=1" tokens are a fallback.
 parse_watchdog_log() {
     local log_path="$1"
     if [ ! -f "$log_path" ]; then
-        # File never landed on host -- watchdog likely never started, or
-        # adb_safe_pull silently failed. Caller will surface a defensive msg.
+        # Watchdog never started or the pull failed.
         echo "tier1=0 tier2=0 tier3=0 total=0 missing=1"
         return
     fi
@@ -533,18 +428,15 @@ parse_watchdog_log() {
         return
     fi
     awk '
-        # Skip watchdog v2 metadata lines (start banner, initial tier, exit
-        # summary) so they cannot be miscounted as transitions. The exit line
-        # ends with "(last tier=N driver=..." which would otherwise be matched
-        # by the legacy /tier=N/ fallback.
+        # Skip v2 metadata lines. The exit line contains "last tier=N", which
+        # the v1 /tier=N/ fallback would otherwise count.
         /watchdog_v2 start|watchdog_v2 exit|\(initial\)|^\[[0-9]+\] zones:|^\[[0-9]+\] DDR  |^\[[0-9]+\] CPU  |^\[[0-9]+\] SOC  |^\[[0-9]+\] SKIN |^\[[0-9]+\] BAT  |^\[[0-9]+\] BAT_I |^\[[0-9]+\] tier thresholds|^\[[0-9]+\] LOG=/ { next }
 
-        # v2 transitions: "tier OLD -> NEW (...)"; count by destination NEW.
-        # Portable: use match() + substr() (no gawk array-capture extension).
+        # match() and substr() keep this portable to non-gawk awk.
         {
             if (match($0, /tier[ ]+[0-9]+[ ]*->[ ]*[0-9]+/)) {
                 seg = substr($0, RSTART, RLENGTH)
-                # seg looks like: "tier 0 -> 1"   -- last field is destination.
+                # seg is "tier 0 -> 1", the last field is the destination
                 n = split(seg, parts, /[ \t]+/)
                 new_tier = parts[n] + 0
                 if      (new_tier == 1) { t1++; next }
@@ -553,8 +445,7 @@ parse_watchdog_log() {
                 next
             }
         }
-        # v1 fallbacks (legacy log formats: explicit "TIER<N>" or "tier=<N>"
-        # tokens, expected to co-occur with "engaged" on the same line).
+        # v1 log format
         /engaged/ {
             if      (/TIER1|tier=1/) { t1++; next }
             else if (/TIER2|tier=2/) { t2++; next }
@@ -567,12 +458,12 @@ parse_watchdog_log() {
     ' "$log_path"
 }
 
-# Battery charge counter (uAh, from sysfs — coulomb-accurate when present)
+# Battery charge counter in uAh from sysfs
 bat_charge_uah() {
     adb_safe_shell "cat /sys/class/power_supply/battery/charge_counter 2>/dev/null" \
         | tr -d ' \r\n'
 }
-# Fallback: voltage*current from dumpsys (mV * mA → mW; integrate over time later)
+# Fallback: voltage (mV) and current (mA) from dumpsys
 bat_volt_mv() {
     adb_safe_shell "dumpsys battery 2>/dev/null | sed -n 's/.*Charger voltage *: *//p' | head -1" \
         | tr -d ' \r\n'
@@ -582,18 +473,13 @@ bat_curr_ma() {
         | tr -d ' \r\n'
 }
 
-# ---------------------------------------------------------------------------
-# Core: run one policy
-# Globals consumed:  POLICY, EXTRA_FLAGS, CACHE_K, CACHE_V, OUT_CELL
-# ---------------------------------------------------------------------------
+# run_one_policy CELL POLICY CACHE_K CACHE_V [/BIN] [EXTRA_FLAGS...]
 run_one_policy() {
     local cell_name="$1"
     local policy="$2"
     local cache_k="$3"
     local cache_v="$4"
-    # Optional 5th arg: alternate binary path (default: $PHONE_BIN).
-    # When the first arg after the fixed positionals starts with "/", treat it
-    # as an explicit binary override; otherwise fall back to $PHONE_BIN.
+    # An optional 5th arg starting with / overrides the binary path.
     local bin_path="$PHONE_BIN"
     if [ $# -ge 5 ] && [ "${5#/}" != "$5" ]; then
         bin_path="$5"
@@ -612,26 +498,24 @@ run_one_policy() {
     echo "[demo] === $cell_name ===" >&2
     cool_phone "$cell_name"
 
-    # Baseline battery snapshot
     local bat_q0; bat_q0=$(bat_charge_uah)
     local bat_v0; bat_v0=$(bat_volt_mv)
     local bat_i0; bat_i0=$(bat_curr_ma)
     local t_wall_0; t_wall_0=$(date +%s.%N)
 
-    # Start sensor sampler on phone (nohup so adb hiccups don't kill it)
+    # nohup so an adb disconnect does not kill the sampler
     local pid_file="$phone_cell/sampler.pid"
     adb_safe_shell "nohup sh '$PHONE_SAMPLER' --out '$phone_cell/sensors.csv' --hz $SAMPLE_HZ \
         </dev/null >'$phone_cell/sampler.log' 2>&1 & echo \$! > '$pid_file'" >/dev/null
     sleep 1   # let sampler warm up
 
-    # Start preempt-throttle watchdog v2 (v1_fa2_stack only — vanilla baseline
-    # must have NO thermal control, per the comparison protocol).
+    # Watchdog for v1_fa2_stack only. The vanilla baseline runs without thermal control.
     if [ "$policy" = "v1_fa2" ]; then
         start_watchdog "$cell_name"
         echo "[demo] watchdog v2 started (multi-sensor: DDR/CPU/skin/battery)" >&2
     fi
 
-    # Run eviction_bench inline — we want stderr (timing line) and gen text on host
+    # Run inline so the timing line and generated text reach the host.
     local args=(
         "$bin_path"
         --model "$PHONE_MODEL"
@@ -661,11 +545,9 @@ run_one_policy() {
     for a in "${args[@]}"; do
         cmd+=" $(printf '%q' "$a")"
     done
-    # Capture both streams to files on phone for parsing, AND stream to host terminal via adb
-    # We use 2>&1 to merge stderr into stdout, then `tee` on host streams + saves locally too
+    # Merge stderr into stdout, tee on the host shows and saves the stream.
     cmd+=" 2>&1; echo \$? > '$phone_cell/exit.code'"
-    # DEBUG: dump the full args array + final phone-side cmd so we can verify
-    # flag propagation (e.g. --ignore-eos reaches BOTH vanilla and v1_fa2_stack).
+    # DEBUG=1 prints the args and the final phone command to check flag propagation.
     if [ "${DEBUG:-0}" = "1" ]; then
         {
             echo "[debug] === cell=$cell_name policy=$policy ==="
@@ -683,35 +565,29 @@ run_one_policy() {
     echo "[demo] ── streaming inference output ($policy) ──"
     local host_log="$host_cell/inference.log"
     mkdir -p "$host_cell"
-    # adb shell stdout streams back through the pipe in real time
     adb_safe_shell "$cmd" 2>&1 | tee "$host_log"
     echo "[demo] ── end of $policy stream ──"
-    # The merged stream was saved by tee to $host_log; the rest of the script reads stderr.log
+    # Later parsing reads stderr.log
     cp -f "$host_log" "$host_cell/stderr.log" 2>/dev/null || true
     local t_wall_1; t_wall_1=$(date +%s.%N)
 
-    # Stop sampler
     adb_safe_shell "pid=\$(cat '$pid_file' 2>/dev/null); [ -n \"\$pid\" ] && kill -TERM \$pid 2>/dev/null; sleep 1; [ -n \"\$pid\" ] && kill -KILL \$pid 2>/dev/null; true" >/dev/null
 
-    # Stop watchdog (v1_fa2_stack only) and pull log.
     if [ "$policy" = "v1_fa2" ]; then
         stop_watchdog "$cell_name"
         echo "[demo] watchdog stopped — log pulled to host" >&2
     fi
 
-    # Final battery snapshot
     local bat_q1; bat_q1=$(bat_charge_uah)
     local bat_v1; bat_v1=$(bat_volt_mv)
     local bat_i1; bat_i1=$(bat_curr_ma)
 
-    # Pull all artifacts
     adb_safe_pull "$phone_cell/meta.json"   "$host_cell/" >/dev/null 2>&1 || true
     adb_safe_pull "$phone_cell/gen.txt"     "$host_cell/" >/dev/null 2>&1 || true
     adb_safe_pull "$phone_cell/sensors.csv" "$host_cell/" >/dev/null 2>&1 || true
     adb_safe_pull "$phone_cell/stderr.log"  "$host_cell/" >/dev/null 2>&1 || true
     adb_safe_pull "$phone_cell/stdout.log"  "$host_cell/" >/dev/null 2>&1 || true
 
-    # ---- Extract perf from meta.json ----
     local meta="$host_cell/meta.json"
     local prefill_ms decode_ms decode_tps total_ms peak_kv evicted_dec peak_rss_kb
     prefill_ms=$(jget prefill_ms "$meta");      : "${prefill_ms:=0}"
@@ -725,8 +601,7 @@ run_one_policy() {
     local wall_s
     wall_s=$(awk -v a="$t_wall_0" -v b="$t_wall_1" 'BEGIN{printf "%.3f", b-a}')
 
-    # ---- Extract thermal peaks from sensors.csv ----
-    # Header lists zone names; find indices for ddr, hottest cpu*, and skin.
+    # Peak DDR, CPU and skin temperatures from sensors.csv
     local peak_ddr peak_cpu peak_skin
     peak_ddr=$(awk -F, '
         NR==1 {
@@ -738,11 +613,8 @@ run_one_policy() {
     ' "$host_cell/sensors.csv" 2>/dev/null)
     peak_cpu=$(awk -F, '
         NR==1 {
-            # Read ONLY the big-core sensor (cpu-1-0-0), which is the same zone the
-            # watchdog protects (/sys/class/thermal/thermal_zone24). On the OnePlus 15
-            # the CPU complex has 20+ thermal zones across little/big/prime clusters;
-            # using max() across all of them was conflating clusters and producing
-            # misleading "Peak CPU" values from cores that werent doing the work.
+            # Only the big-core sensor cpu-1-0-0, the zone the watchdog protects.
+            # A max over all 20+ CPU zones would mix in idle clusters.
             for (i=1;i<=NF;i++) {
                 if ($i == "cpu-1-0-0_temp_mc") cols[++n]=i;
             }
@@ -768,31 +640,16 @@ run_one_policy() {
         END { if (p>0) printf "%.1f", p/1000.0; else print "n/a" }
     ' "$host_cell/sensors.csv" 2>/dev/null)
 
-    # ---- Energy: METHOD 1 with priority chain over PMIC sources, then fallbacks ----
-    #
-    # METHOD 1 (PRIMARY): integrate instantaneous power over sensors.csv samples.
-    #   Priority chain INSIDE METHOD 1 (best source wins):
-    #     a) bat_power_now_uw                                          → "power_now_integrated"
-    #     b) bat_current_now_ua + bat_voltage_now_uv                   → "vi_now_integrated"
-    #     c) bat_current_ma + bat_voltage_mv (legacy dumpsys fallback) → "vi_ma_integrated"
-    #   Energy_mWh = sum(power_mW × dt_s) / 3600
-    #   Energy_mAh = mWh / 4.0   (nominal 4 V Li-ion mid-discharge)
-    #
-    # METHOD 2 (FALLBACK): Δ charge_counter (uAh → mAh) → "charge_counter".
-    # METHOD 3 (FALLBACK): mean(|bat_current_ma|) × wall_s → "approx".
-    #
-    # CHARGING DETECTION: if bat_status shows "Charging" during the run, the
-    # battery counter goes UP rather than down — the energy number is not a
-    # reliable workload measurement. We surface a flag in the fallback chain.
-    #
-    # If all 3 fail → "n/a".
+    # Energy in mAh from the first method that works: (1) power integrated over
+    # sensors.csv (power_now, else current_now x voltage_now, else dumpsys mA x mV,
+    # with mAh = mWh / 4.0 at a nominal 4 V), (2) charge_counter delta, (3) mean |I| x wall_s.
+    # A "Charging" status during the run is flagged, since the number is then unreliable.
     local energy_mah="n/a"
     local energy_method="n/a"
     local energy_fallback_chain=""
     local charging_detected=0
     local sensors_csv="$host_cell/sensors.csv"
 
-    # --- Charging detection: scan bat_status column for "Charging" ---
     if [ -s "$sensors_csv" ]; then
         local _charging_hits
         _charging_hits=$(awk -F, '
@@ -805,10 +662,8 @@ run_one_policy() {
         fi
     fi
 
-    # --- METHOD 1: integrate power over sensors.csv with priority source chain ---
-    # Pick the best available source: scan the header AND require at least ~50%
-    # of rows have non-empty values (a column may exist but be empty when the
-    # PMIC read mode wasn't established).
+    # Method 1. A source must be populated in more than half the rows, since a
+    # column can exist but stay empty when the PMIC read fails.
     local m1_result=""
     local m1_method=""
     if [ -s "$sensors_csv" ]; then
@@ -826,12 +681,10 @@ run_one_policy() {
                 next
             }
             {
-                # Count populated rows per source.
                 if (c_p_uw != "" && $c_p_uw != "")                                   n_p++;
                 if (c_i_ua != "" && $c_i_ua != "" && c_v_uv != "" && $c_v_uv != "") n_iv_now++;
                 if (c_i_ma != "" && $c_i_ma != "" && c_v_mv != "" && $c_v_mv != "") n_iv_ma++;
 
-                # Per-sample dt from monotonic_s diffs.
                 dt = 0
                 if (c_t != "" && $c_t != "") {
                     tnow = $c_t + 0
@@ -843,23 +696,22 @@ run_one_policy() {
                     have_prev = 1
                 }
 
-                # Accumulate per-source mWh integrals.
                 if (dt > 0) {
                     if (c_p_uw != "" && $c_p_uw != "") {
                         pp = $c_p_uw + 0; if (pp < 0) pp = -pp
-                        # mWh = uW × dt_s / 3.6e9
+                        # mWh = uW x dt_s / 3.6e9
                         mwh_p += pp * dt / 3.6e9
                     }
                     if (c_i_ua != "" && $c_i_ua != "" && c_v_uv != "" && $c_v_uv != "") {
                         ii = $c_i_ua + 0; if (ii < 0) ii = -ii
                         vv = $c_v_uv + 0
-                        # uW = ua × uv / 1e6   → mWh = uW × dt / 3.6e9
+                        # uW = uA x uV / 1e6
                         if (vv > 0) mwh_iv_now += (ii * vv / 1.0e6) * dt / 3.6e9
                     }
                     if (c_i_ma != "" && $c_i_ma != "" && c_v_mv != "" && $c_v_mv != "") {
                         ii = $c_i_ma + 0; if (ii < 0) ii = -ii
                         vv = $c_v_mv + 0
-                        # mW = mA × mV / 1000  → mWh = mW × dt / 3600
+                        # mW = mA x mV / 1000, mWh = mW x dt / 3600
                         if (vv > 0) mwh_iv_ma += (ii * vv / 1000.0) * dt / 3600.0
                     }
                 }
@@ -867,7 +719,7 @@ run_one_policy() {
             }
             END {
                 if (n_samples < 2 || !have_dt) { print "FAIL"; exit }
-                # Priority: power_now → vi_now → vi_ma. Source must populate ≥50% of rows.
+                # Priority power_now, then vi_now, then vi_ma
                 thresh = n_samples * 0.5
                 if (n_p > thresh && mwh_p > 0) {
                     printf "power_now_integrated %.2f", mwh_p / 4.0
@@ -899,14 +751,14 @@ run_one_policy() {
         energy_fallback_chain="m1_missing"
     fi
 
-    # --- METHOD 2: charge_counter delta ---
+    # Method 2: charge_counter delta
     if [ "$energy_method" = "n/a" ]; then
         if [ -n "${bat_q0:-}" ] && [ -n "${bat_q1:-}" ] \
            && [ "$bat_q0" -gt 0 ] 2>/dev/null && [ "$bat_q1" -gt 0 ] 2>/dev/null; then
-            # Delta in mAh; positive = discharge (q0 > q1 on most kernels).
+            # Positive delta means discharge.
             local m2_result m2_ok
             m2_result=$(awk -v a="$bat_q0" -v b="$bat_q1" 'BEGIN{ printf "%.2f", (a-b)/1000.0 }')
-            # Reject if |Δ| < 1 mAh (quantization) or Δ < 0 (charging).
+            # Reject deltas under 1 mAh (quantization) or negative (charging).
             m2_ok=$(awk -v d="$m2_result" 'BEGIN{
                 ad = (d<0)?-d:d
                 if (d >= 1.0 && ad >= 1.0) print "1"; else print "0"
@@ -923,7 +775,7 @@ run_one_policy() {
         fi
     fi
 
-    # --- METHOD 3: mean(|I|) * wall_s ---
+    # Method 3: mean(|I|) * wall_s
     if [ "$energy_method" = "n/a" ]; then
         local m3_result=""
         if [ -s "$sensors_csv" ]; then
@@ -960,15 +812,12 @@ run_one_policy() {
         fi
     fi
 
-    # If we observed "Charging" in bat_status during the run, the battery-side
-    # energy is UNRELIABLE (current can be net-positive into the cell). Annotate
-    # the audit trail. We don't blank out energy_mah — downstream tooling can
-    # decide whether to show or suppress based on charging_detected.
+    # Keep energy_mah but flag it, since charge current can flow into the cell.
     if [ "$charging_detected" = "1" ]; then
         energy_fallback_chain="${energy_fallback_chain}|charging_detected"
     fi
 
-    # Extract a clean generated text (gen.txt may have escape characters; strip nulls)
+    # Strip NUL bytes from the generated text
     local gen_text
     if [ -s "$host_cell/gen.txt" ]; then
         gen_text=$(tr -d '\000' < "$host_cell/gen.txt")
@@ -976,7 +825,7 @@ run_one_policy() {
         gen_text="<empty>"
     fi
 
-    # Export results via per-cell file (read back in main flow)
+    # Per-cell results, read back by the main flow
     cat > "$host_cell/summary.env" <<EOF
 prefill_ms='$prefill_ms'
 decode_ms='$decode_ms'
@@ -994,19 +843,15 @@ energy_method='$energy_method'
 energy_fallback_chain='$energy_fallback_chain'
 charging_detected='$charging_detected'
 EOF
-    # Generated text separately (avoid quoting hell)
+    # Generated text goes in its own file to avoid quoting issues
     printf '%s' "$gen_text" > "$host_cell/gen_clean.txt"
 }
 
-# ---------------------------------------------------------------------------
-# Run both policies
-# ---------------------------------------------------------------------------
-# Common extra flags shared by vanilla and v1_fa2_stack (e.g. --ignore-eos).
+# Run the policies. These flags apply to every policy.
 COMMON_EXTRA=()
 if [ "$IGNORE_EOS" -eq 1 ]; then
     COMMON_EXTRA+=(--ignore-eos)
 fi
-# --repeat-penalty applies to BOTH policies (sampler-level).
 if [ -n "$REPEAT_PENALTY" ]; then
     COMMON_EXTRA+=(--repeat-penalty "$REPEAT_PENALTY")
 fi
@@ -1018,9 +863,7 @@ if [ "$RUN_VANILLA" -eq 1 ]; then
 fi
 
 if [ "$RUN_ADAKV" -eq 1 ]; then
-    # AdaKV baseline: paper-style scoring lives in eviction_bench_v8.
-    # We mirror the v1_fa2_stack budget shape (k_nominal/anchor/recent/sink)
-    # so the cache size is held constant across the 3-way comparison.
+    # Same budget split as v1_fa2_stack so the cache size matches across policies.
     run_one_policy "adakv" "adakv" "f16" "f16" "$PHONE_BIN_ADAKV" \
         --k-nominal "$K_NOMINAL" \
         --anchor-top-k "$ANCHOR_TOP_K" \
@@ -1040,9 +883,7 @@ if [ "$RUN_V1FA2" -eq 1 ]; then
         ${COMMON_EXTRA[@]+"${COMMON_EXTRA[@]}"}
 fi
 
-# ---------------------------------------------------------------------------
 # Read back cell summaries (only for policies that actually ran)
-# ---------------------------------------------------------------------------
 if [ "$RUN_VANILLA" -eq 1 ]; then
     # shellcheck disable=SC1091
     { . "$HOST_OUT_ROOT/vanilla/summary.env";       V_PREFILL_MS=$prefill_ms; V_DECODE_TPS=$decode_tps;
@@ -1074,16 +915,13 @@ if [ "$RUN_ADAKV" -eq 1 ]; then
     A_GEN=$(cat "$HOST_OUT_ROOT/adakv/gen_clean.txt" 2>/dev/null || echo "<missing>")
 fi
 
-# ---------------------------------------------------------------------------
 # Parse watchdog log (v1_fa2_stack only)
-# ---------------------------------------------------------------------------
 S_WD_MISSING=0
 S_WD_T1=0; S_WD_T2=0; S_WD_T3=0; S_WD_TOTAL=0
 S_WD_TIERS_COMPACT="n/a"
 if [ "$RUN_V1FA2" -eq 1 ]; then
     S_WD_LOG="$HOST_OUT_ROOT/v1_fa2_stack/watchdog.log"
     S_WD_SUMMARY=$(parse_watchdog_log "$S_WD_LOG")
-    # Defensive: surface diagnostic if watchdog.log never landed on host.
     if [ ! -f "$S_WD_LOG" ]; then
         echo "[demo] Watchdog: log not captured (may not have started — check stderr)" >&2
         echo "[demo]   expected at: $S_WD_LOG" >&2
@@ -1092,7 +930,6 @@ if [ "$RUN_V1FA2" -eq 1 ]; then
     elif [ ! -s "$S_WD_LOG" ]; then
         echo "[demo] Watchdog: log present but empty at $S_WD_LOG" >&2
     fi
-    # Extract tier counts from "tier1=N tier2=N tier3=N total=N"
     S_WD_T1=$(printf '%s' "$S_WD_SUMMARY" | sed -nE 's/.*tier1=([0-9]+).*/\1/p'); : "${S_WD_T1:=0}"
     S_WD_T2=$(printf '%s' "$S_WD_SUMMARY" | sed -nE 's/.*tier2=([0-9]+).*/\1/p'); : "${S_WD_T2:=0}"
     S_WD_T3=$(printf '%s' "$S_WD_SUMMARY" | sed -nE 's/.*tier3=([0-9]+).*/\1/p'); : "${S_WD_T3:=0}"
@@ -1105,7 +942,7 @@ if [ "$RUN_V1FA2" -eq 1 ]; then
     fi
 fi
 
-# Convert ms → s for prefill, KB → GB for RSS (per-side; only if that side ran)
+# Prefill ms to s, RSS KB to GB
 if [ "$RUN_VANILLA" -eq 1 ]; then
     V_PREFILL_S=$(awk -v x="$V_PREFILL_MS" 'BEGIN{printf "%.2f", x/1000.0}')
     V_RSS_GB=$(awk -v x="$V_PEAK_RSS_KB" 'BEGIN{printf "%.2f", x/1024.0/1024.0}')
@@ -1119,9 +956,7 @@ if [ "$RUN_ADAKV" -eq 1 ]; then
     A_RSS_GB=$(awk -v x="$A_PEAK_RSS_KB" 'BEGIN{printf "%.2f", x/1024.0/1024.0}')
 fi
 
-# ---------------------------------------------------------------------------
 # Pretty-print the comparison
-# ---------------------------------------------------------------------------
 # Truncate prompt for header
 PROMPT_DISPLAY=$(printf '%s' "$PROMPT" | tr '\n' ' ' | cut -c1-60)
 [ "${#PROMPT}" -gt 60 ] && PROMPT_DISPLAY="${PROMPT_DISPLAY}..."
@@ -1129,11 +964,10 @@ PROMPT_DISPLAY=$(printf '%s' "$PROMPT" | tr '\n' ' ' | cut -c1-60)
 BAR_DOUBLE='════════════════════════════════════════════════════════════════════════'
 BAR_SINGLE='────────────────────────────────────────────────────────────────────────'
 
-# Compact tuning-knob summary for banner: K=512 anchor=64 repeat=1.2 [ignore-eos]
+# Banner summary, e.g. K=512 anchor=64 repeat=1.2 [ignore-eos]
 REPEAT_BANNER="${REPEAT_PENALTY:-1.10}"
 TUNING_SUMMARY="K=$K_NOMINAL anchor=$ANCHOR_TOP_K repeat=$REPEAT_BANNER${IGNORE_EOS_NOTE}"
 
-# Append the active mode strings (energy-mode, long-decode) to the banner.
 MODE_SUFFIX=""
 if [ "$ENERGY_MODE" = "1" ]; then
     MODE_SUFFIX="${MODE_SUFFIX}, energy-mode"
@@ -1178,16 +1012,14 @@ if [ "$RUN_V1FA2" -eq 1 ]; then
 fi
 
 if [ "$POLICY" = "three-way" ]; then
-    # ----------------------------------------------------------------------
-    # 3-way comparison: vanilla | adakv | v1_fa2_stack with Δs vs vanilla.
-    # ----------------------------------------------------------------------
+    # 3-way table, deltas relative to vanilla
     printf '\n── COMPARISON (3-way) %s\n' "${BAR_SINGLE:22}"
     printf '%-16s│ %-11s │ %-11s │ %-12s │ %-10s │ %-10s\n' \
         "Metric" "Vanilla" "AdaKV" "v1_fa2_stack" "Δ AdaKV" "Δ v1fa2"
     printf '%-16s┼%s┼%s┼%s┼%s┼%s\n' \
         "────────────────" "─────────────" "─────────────" "──────────────" "────────────" "────────────"
 
-    # Helper inline: emit one numeric row with two %-deltas vs vanilla.
+    # One row with two %-deltas vs vanilla
     emit_row3_pct() {
         local label="$1" vv="$2" av="$3" sv="$4"
         printf '%-16s│ %-11s │ %-11s │ %-12s │ %-10s │ %-10s\n' \
@@ -1209,7 +1041,7 @@ if [ "$POLICY" = "three-way" ]; then
     emit_row3_abs "Peak Skin (°C)" "$V_PEAK_SKIN"   "$A_PEAK_SKIN"   "$S_PEAK_SKIN"   "°C"
     emit_row3_pct "Peak RSS (GB)"  "$V_RSS_GB"      "$A_RSS_GB"      "$S_RSS_GB"
 
-    # Energy row with n/a handling for each Δ.
+    # No energy delta when either side is n/a
     if [ "${V_ENERGY:-n/a}" = "n/a" ] || [ "${A_ENERGY:-n/a}" = "n/a" ]; then
         A_ENERGY_DELTA="—"
     else
@@ -1254,8 +1086,7 @@ elif [ "$POLICY" = "both" ]; then
         "Peak Skin (°C)" "$V_PEAK_SKIN"   "$S_PEAK_SKIN"   "$(abs_delta "$V_PEAK_SKIN" "$S_PEAK_SKIN")°C"
     printf '%-16s│ %-11s │ %-12s │ %-10s\n' \
         "Peak RSS (GB)"  "$V_RSS_GB"      "$S_RSS_GB"      "$(pct_delta "$V_RSS_GB" "$S_RSS_GB")"
-    # Energy row: keep value cells compact; show the energy method as a footer
-    # annotation below the table. If either side is "n/a", suppress %-delta.
+    # No energy delta when either side is n/a. The method is printed below the table.
     if [ "${V_ENERGY:-n/a}" = "n/a" ] || [ "${S_ENERGY:-n/a}" = "n/a" ]; then
         V_ENERGY_DELTA="—"
     else
@@ -1270,24 +1101,15 @@ elif [ "$POLICY" = "both" ]; then
     printf '%-16s│ %-11s │ %-12s │ %-10s\n' \
         "Watchdog tiers" "n/a"            "$S_WD_TIERS_COMPACT" "T1/T2/T3"
 
-    # Energy-method annotation (which source / fallback was used per cell).
-    #   power_now_integrated = METHOD 1a: ∫ bat_power_now_uw dt           (BEST)
-    #   vi_now_integrated    = METHOD 1b: ∫ |I_now_ua|·V_now_uv dt        (best)
-    #   vi_ma_integrated     = METHOD 1c: ∫ |I_ma|·V_mv dt (dumpsys)      (preferred)
-    #   charge_counter       = METHOD 2:  Δ /sys/.../charge_counter        (fallback)
-    #   approx               = METHOD 3:  mean(|I|) × wall_s               (fallback)
-    #   n/a                  = all methods failed
+    # Energy method names are defined in run_one_policy.
     printf '  energy method: vanilla=%s, v1_fa2_stack=%s\n' \
         "${V_ENERGY_METHOD:-n/a}" "${S_ENERGY_METHOD:-n/a}"
-    # Surface charging-detected warning if either cell saw "Charging" in bat_status.
     if [ "${V_CHARGING:-0}" = "1" ] || [ "${S_CHARGING:-0}" = "1" ]; then
         printf '  energy WARNING: charging_detected during run (vanilla=%s, v1_fa2_stack=%s) — energy values UNRELIABLE\n' \
             "${V_CHARGING:-0}" "${S_CHARGING:-0}"
     fi
 else
-    # ----------------------------------------------------------------------
-    # Single-policy summary: simple one-column table (no Δ).
-    # ----------------------------------------------------------------------
+    # Single policy: one-column table
     if [ "$RUN_VANILLA" -eq 1 ]; then
         SINGLE_LABEL="vanilla"
         S1_PREFILL_S="$V_PREFILL_S"; S1_DECODE_TPS="$V_DECODE_TPS"; S1_WALL_S="$V_WALL_S"
@@ -1340,11 +1162,8 @@ if [ "$RUN_V1FA2" -eq 1 ]; then
     fi
 fi
 
-# ---------------------------------------------------------------------------
-# Verdict (only meaningful when both policies ran)
-# ---------------------------------------------------------------------------
+# Verdict, only when at least two policies ran
 if [ "$POLICY" = "three-way" ]; then
-    # Three-way verdict: emit headline Δs for both adakv and v1_fa2_stack vs vanilla.
     printf '\n── VERDICT (3-way) %s\n' "${BAR_SINGLE:19}"
     VERDICT3=$(awk \
         -v vtps="$V_DECODE_TPS"  -v atps="$A_DECODE_TPS"  -v stps="$S_DECODE_TPS" \
@@ -1374,7 +1193,6 @@ if [ "$POLICY" = "three-way" ]; then
 fi
 
 if [ "$POLICY" != "both" ]; then
-    # Single-policy mode: skip the verdict (no comparison to anchor against).
     echo ""
     echo "Artifacts (host):  $HOST_OUT_ROOT"
     echo "Artifacts (phone): $PHONE_OUT_ROOT"
@@ -1411,7 +1229,6 @@ else
 fi
 printf '%s\n' "$VERDICT"
 
-# Watchdog summary line in verdict section.
 if [ "$S_WD_MISSING" -eq 1 ]; then
     printf 'Watchdog: log not captured (may not have started — check stderr)\n\n'
 elif [ "$S_WD_TOTAL" -gt 0 ] 2>/dev/null; then
@@ -1421,8 +1238,5 @@ else
     printf 'Watchdog: no transitions (stayed at MAX freq throughout)\n\n'
 fi
 
-# ---------------------------------------------------------------------------
-# Pointer to raw artifacts
-# ---------------------------------------------------------------------------
 echo "Artifacts (host):  $HOST_OUT_ROOT"
 echo "Artifacts (phone): $PHONE_OUT_ROOT"

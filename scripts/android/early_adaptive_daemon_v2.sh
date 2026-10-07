@@ -1,22 +1,14 @@
 #!/system/bin/sh
-# v2 multi-sensor early-adaptive watchdog (explicit per-sensor multi-tier ladders).
-# Each sensor has its OWN warn/mid/crit thresholds; a sensor's tier = highest
-# threshold it has crossed; global tier = max over all sensor tiers.
-#
-# Empirical basis (10 kernel-BCL throttle events on ab4_vanilla):
-#   skin_BACK   trigger band 41.8-43.3 C  (mean 42.5, sigma 0.48)  - PRIMARY
-#   skin_FRONT  43.2-44.7 C  (mean 43.97, sigma 0.48)              - PRIMARY
-#   skin_FRAME  40.6-41.8 C  (mean 41.25, sigma 0.42)              - PRIMARY
-#   PMIC die    47.4-49.4 C  (mean 48.03, sigma 0.53)              - PRIMARY
-#   battery     41.7-43.2 C  (mean 42.54, sigma 0.52)              - PRIMARY
-#   DDR/CPU     loose (sigma 0.80-0.94), passengers near actual kernel cliff (65-67 C)
-#
+# Multi-sensor early-adaptive watchdog. Each sensor has three thresholds, its tier is the
+# highest one crossed, and the global tier (max over sensors) caps big cores 6-7.
+# Skin, PMIC and battery thresholds sit around the temperatures where kernel throttling was
+# seen. DDR and CPU thresholds sit near their kernel cliffs (65 and 67 C). Tiers only go up.
 # Args: $1 log path  $2 stop-flag path
 set -u
 LOG=${1:-/sdcard/early_ad_v2.log}
 STOP=${2:-/sdcard/early_ad_v2.stop}
 
-# === Sensor sysfs zones (OnePlus 15 Snapdragon 8 Elite Gen 5) ===
+# Sensor sysfs zones (OnePlus 15 Snapdragon 8 Elite Gen 5)
 DDR_ZONE=/sys/class/thermal/thermal_zone47        # ddr_temp_mc
 CPU_ZONE=/sys/class/thermal/thermal_zone24        # cpu-0-3-0
 SK_BACK_ZONE=/sys/class/thermal/thermal_zone70    # shell_back  (primary trigger)
@@ -24,10 +16,7 @@ SK_FRONT_ZONE=/sys/class/thermal/thermal_zone61   # shell_front (primary trigger
 PMIC_ZONE=/sys/class/thermal/thermal_zone86       # pmh0101_tz  (primary trigger)
 BAT_ZONE=/sys/class/thermal/thermal_zone93        # battery     (primary trigger)
 
-# === Per-sensor explicit tier thresholds (milli-degrees C) ===
-# Each sensor has warn/mid/crit triggering STEP 1/2/3 respectively.
-# Primary triggers (chassis): tight 2-3 C bands centered on the empirical fire point.
-# Passengers (DDR, CPU): wider bands near the actual kernel cliffs.
+# Per-sensor thresholds in milli-degrees C for steps 1, 2 and 3.
 
 # skin_back  (primary)
 SK_BACK_T1=41000   # STEP 1
@@ -49,12 +38,12 @@ BAT_T1=41000
 BAT_T2=42000
 BAT_T3=43000
 
-# CPU mid (passenger -- near 67 C kernel CPU cliff)
+# CPU mid, near the 67 C kernel CPU cliff
 CPU_T1=62000
 CPU_T2=64000
 CPU_T3=67000
 
-# DDR (passenger -- near 65 C kernel DDR cliff)
+# DDR, near the 65 C kernel DDR cliff
 DDR_T1=60000
 DDR_T2=62000
 DDR_T3=65000
@@ -80,8 +69,7 @@ read_zone() {
     echo $out
 }
 
-# Compute a single sensor's tier (0-3) from its three thresholds.
-# Args: T  T1  T2  T3
+# Tier 0-3 of one sensor. Args: T T1 T2 T3
 tier_of() {
     if   [ "$1" -ge "$4" ] 2>/dev/null; then echo 3
     elif [ "$1" -ge "$3" ] 2>/dev/null; then echo 2

@@ -1,23 +1,12 @@
-// controller_probe — Track 2 v0 of EndurKV.
+// controller_probe: attention_probe plus online eviction. After each decode step the
+// EndurKV-Evict v1 policy picks KV positions to remove with llama_memory_seq_rm.
+// Writes the attention_probe CSV and a .controller.json with timing and eviction counts.
+// Scoring is per position (attention pooled over layers and heads) because seq_rm works
+// per sequence, then v1's spread gate and TOVA-style top-K_t selection are applied.
 //
-// Same decoding pipeline as attention_probe, but acts on the captured attention:
-// after each decode step, the EndurKV-Evict v1 policy decides which KV positions
-// to physically remove via llama_memory_seq_rm, and we measure per-step latency.
-//
-// Sidecar outputs:
-//   * a CSV identical to attention_probe (per-step entropy / top-k)
-//   * a .controller.json with per-step timing, evicted-positions count, and a
-//     pre/post latency comparison summary.
-//
-// The eviction policy decides POSITIONS (global, across all layers), because
-// llama_memory_seq_rm operates per-sequence. To get a position-level score we
-// mean-pool the layer-averaged attention across all layers, then apply v1's
-// spread gate and TOVA scoring (top-K_t by aggregated current-step attention).
-// Per-layer eviction would require an llama.cpp KV-cache patch — left to v1.
-//
-// Flags vs attention_probe:
-//   --k-budget N        per-step KV budget (0 = no eviction; runs baseline)
-//   --evict-every N     run eviction every N steps (default 1 = every step)
+// Extra flags vs attention_probe:
+//   --k-budget N        per-step KV budget (0 = no eviction, baseline)
+//   --evict-every N     run eviction every N steps (default 1)
 //   --start-evict-at N  do not evict for the first N decode steps (default 4)
 
 #include "compute_entropy.h"
@@ -131,9 +120,7 @@ int argmax_logits(const float * logits, int n_vocab) {
     return best;
 }
 
-// -------- Attention capture state (per-layer sum-over-heads) ----------------
-// Simpler than attention_probe v2: we only need an aggregate score per position
-// for the eviction decision, not the full per-head data.
+// Attention capture state: one aggregate score per position, summed over layers and heads.
 
 struct AttnAgg {
     std::vector<double> sum_layers;   // length n_kv, sum over (layer, head) of attention
@@ -198,11 +185,9 @@ bool eval_callback(struct ggml_tensor * t, bool ask, void * user_data) {
     return true;
 }
 
-// -------- EndurKV-Evict v1 policy --------------------------------------------
-// score_i = layer-averaged attention[i] / (n_layers_seen * n_head). Same shape
-// as a probability distribution. Spread gate: K_t = K * (1.3 - 0.6 * norm(max)).
-// Returns the SORTED LIST of positions to REMOVE (ascending). Always preserves
-// the last `protect_recent` positions (default 4) and the first 4 sinks.
+// EndurKV-Evict v1 policy. score_i = summed attention[i] / (n_layers_seen * n_head),
+// spread gate K_t = K * (1.3 - 0.6 * norm(max)). Returns positions to remove in
+// descending order, always keeping the first protect_sink and last protect_recent.
 
 std::vector<int> select_positions_to_remove(
     const std::vector<double> & sum_scores, int n_kv, int K_budget,
@@ -256,7 +241,7 @@ std::vector<int> select_positions_to_remove(
         for (int i : cand) keep[i] = 1;
     }
 
-    // Build the removal list (descending order so seq_rm doesn't shift indices)
+    // Removal list, in descending order
     std::vector<int> to_remove;
     to_remove.reserve((size_t)(n_kv - K_t));
     for (int i = n_kv - 1; i >= 0; --i) if (!keep[i]) to_remove.push_back(i);
@@ -367,7 +352,7 @@ int main(int argc, char ** argv) {
         const std::string text_q = csv_escape(text);
         const int64_t now = ggml_time_us();
 
-        // --- Controller: select positions to evict from the just-completed step's attention ---
+        // Controller: select positions to evict from the just-completed step's attention
         int n_evicted = 0;
         int64_t evict_us = 0;
         const int n_kv_before = agg.n_kv_last;
@@ -377,20 +362,13 @@ int main(int argc, char ** argv) {
             && agg.n_layers_seen > 0
             && agg.n_kv_last > args.k_budget)
         {
-            // n_head is the average heads-per-layer we just summed in; assume the
-            // probe disabled FA so n_head matches the model's query-head count.
-            // We don't have direct access from here, so just use n_layers_seen to
-            // normalize; the relative ordering is the same.
+            // The head count is not available here, so normalise by n_layers_seen only.
             const int n_head_stub = 1;   // ranking is invariant under positive scaling
             const int64_t te0 = ggml_time_us();
             auto to_remove = select_positions_to_remove(
                 agg.sum_layers, agg.n_kv_last, args.k_budget,
                 agg.n_layers_seen, n_head_stub);
-            // Apply seq_rm. We pass descending positions so earlier removals
-            // don't shift the indices of later removals within the cache.
-            // (llama_memory_seq_rm operates on absolute positions, but compacting
-            // groups of contiguous positions in one call is faster than per-pos.)
-            // Group contiguous descending runs.
+            // Group the descending positions into contiguous runs, one seq_rm call per run.
             int i = 0;
             while (i < (int)to_remove.size()) {
                 int j = i;
@@ -429,7 +407,7 @@ int main(int argc, char ** argv) {
             break;
         }
 
-        agg.active = false;  // suspend capture during the next decode... no, we need it
+        agg.active = false;  // reset the capture buffer before the next decode
         agg.reset(0);
         agg.active = true;
         llama_token next = tok;
@@ -447,7 +425,7 @@ int main(int argc, char ** argv) {
     const double total_ms = (t1 - t0) / 1000.0;
     const double tok_per_s = n_steps_done > 0 ? (double)n_steps_done * 1e6 / (double)(t1 - t0) : 0.0;
 
-    // --- JSON sidecar ---
+    // JSON sidecar
     if (std::FILE * jf = std::fopen(args.output_json.c_str(), "w")) {
         std::fprintf(jf,
             "{\n"

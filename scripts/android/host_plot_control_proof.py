@@ -1,25 +1,7 @@
 #!/usr/bin/env python3
-"""
-PLOT 3 — Control proof: Wave-8 (no watchdog) vs Wave-9 (with watchdog)
-thermal trajectories.
-
-Row 1: DDR temp vs wall_time for Wave-8 (red) and Wave-9 (green) with peaks
-       annotated and delta callout.
-Row 2: CPU big-core freq vs wall_time for Wave-9 only, with vertical dashed
-       lines at each watchdog tier transition pulled from watchdog.log.
-
-Inputs:
-  Wave-8 sensors: /home/mislam22/EndurKV_workspace/phone-logs/
-                  wave8_v1fa2_sel_*/v1_fa2_selective/sensors.csv
-  Wave-9 sensors: /home/mislam22/EndurKV_workspace/phone-logs/
-                  wave9_v1fa2_stack_1780796320/v1_fa2_stack/sensors.csv
-  Wave-9 watchdog log: /home/mislam22/EndurKV_workspace/phone-logs/
-                       wave9_v1fa2_stack_1780796320/watchdog.log
-
-Output:
-  /home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/
-  03_control_proof_wave8_vs_wave9.png
-"""
+"""Control proof: DDR temp of wave8 v1_fa2_selective (no watchdog) vs wave9 v1_fa2_stack (watchdog),
+and wave9 big-core frequency with watchdog tier transitions from watchdog.log. Reads phone-logs/wave8_*
+and wave9_v1fa2_stack_1780796320. Writes figures/relationship_plots/03_control_proof_wave8_vs_wave9.png."""
 
 from __future__ import annotations
 
@@ -129,7 +111,7 @@ def main() -> None:
         2, 1, figsize=(11, 8.5), sharex=False
     )
 
-    # ---------- Row 1: DDR temps ----------
+    # Row 1: DDR temps
     ax_top.plot(
         w8["t_min"], w8["ddr_c"],
         color="#d62728", lw=1.4, label="Wave-8 v1_fa2 selective (no watchdog)",
@@ -139,8 +121,7 @@ def main() -> None:
         color="#2ca02c", lw=1.4, label="Wave-9 v1_fa2 stack (with watchdog)",
     )
 
-    # Per-task headline peaks (overrides taken from the supervisor prompt
-    # so the annotation reflects the canonical reported numbers).
+    # Fixed headline peaks so the annotation matches the reported numbers.
     PEAK_W8 = 72.9
     PEAK_W9 = 64.1
     DELTA = PEAK_W9 - PEAK_W8  # -8.8
@@ -187,14 +168,14 @@ def main() -> None:
     ax_top.grid(True, alpha=0.3)
     ax_top.legend(loc="upper left", fontsize=9, framealpha=0.92)
 
-    # ---------- Row 2: Wave-9 big-core freq with watchdog tier markers ----
+    # Row 2: wave9 big-core freq with watchdog tier markers
     ax_bot.plot(
         w9["t_min"], w9["big_freq_mhz"],
         color="#1f77b4", lw=1.0, alpha=0.85,
         label=f"Wave-9 big-core ({BIG_FREQ_COL}) frequency",
     )
 
-    # Tier transition vertical lines (each engagement) — align to w9 t0.
+    # Tier transition vertical lines (each engagement) - align to w9 t0.
     tier_colors = {0: "#2ca02c", 1: "#ff7f0e", 2: "#d62728", 3: "#7f007f"}
     tier_labels = {
         1: "tier 1 engaged @ ~58 C  (cap 1497.6 MHz)",

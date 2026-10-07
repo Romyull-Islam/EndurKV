@@ -1,30 +1,10 @@
 #!/bin/bash
-# ============================================================================
-# run_prefill_diag.sh -- why is FA-on prefill +23% over vanilla? (2026-08-26)
-#
-# ANOMALY. On Phi-3 CPU, vanilla prefills in 381 s but EVERY evicting policy
-# takes ~470 s (+23%), including StreamingLLM -- which reads no attention, no
-# key geometry, installs no eval-callback (positional_policy => cb_eval NULL,
-# same as vanilla), and runs the same FA-on graph with identical n_batch /
-# n_ubatch / n_ctx / KV dtype. In-place compaction is logged at 43 ms, three
-# orders of magnitude too small to explain a 90 s gap. So the published claim
-# "+1.2% prefill for in-graph scoring" does not hold on this model and we do
-# not yet know what the cost actually is.
-#
-# THREADS=6 (was 4 in the killed first attempt). The thread count is now known to
-# scale throughput almost linearly (observed 6/4 = 1.46 vs ideal 1.50), so an arm
-# at the wrong count would swamp the effect being measured.
-#
-# DESIGN. Two arms per policy, everything else fixed:
-#   *_defrag   : as shipped (evict + compact)
-#   *_nodefrag : --no-defrag (evict, do NOT compact)
-# plus a vanilla control re-run at the SAME point in the queue, because vanilla
-# was cell #1 of the previous campaign and run-order is a live confound.
-#
-#   vanilla == nodefrag  -> the cost is COMPACTION
-#   nodefrag == defrag   -> the cost is EVICTION/selection, not compaction
-#   vanilla_ctl != 381 s -> the cost is RUN ORDER, not the policy at all
-# ============================================================================
+# Prefill diagnostic, Phi-3 CPU, 6 threads: why evicting policies (even StreamingLLM,
+# which installs no eval callback) prefill slower than vanilla.
+# Each policy runs with round-trip compaction, in-place compaction and --no-defrag.
+#   vanilla == nodefrag  : the cost is compaction
+#   nodefrag == compact  : the cost is eviction/selection
+#   vanilla_ctl differs from earlier vanilla runs : the cost is run order
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 LOG(){ echo "[$(date +%H:%M:%S)] $*"; }
@@ -44,7 +24,7 @@ cell(){
   mkdir -p "$HOST/$TAG"
   CG=$(adb_safe_shell "su -c '. /data/local/tmp/endurkv/scripts/cool_gate.sh; cool_ddr36'" < /dev/null 2>/dev/null | tail -1)
   case "$CG" in *"cool ddr="*) : ;; *) LOG "  [SKIP-HOT] $TAG"; return;; esac
-  # only 64 decode tokens: this measures PREFILL, so decode is a formality
+  # 64 decode tokens only, this measures prefill
   adb_safe_shell "rm -f $DEV/$TAG.done; setsid nohup sh -c \"timeout 5400 env LD_LIBRARY_PATH=$CB $CB/eviction_bench \
     --prompt $P --prompt-id $TAG --eval-mode gen --max-tokens 64 --ignore-eos --ctx-size 16384 \
     --n-batch 512 --ubatch-size 64 --model $M --seed 42 --threads 6 --n-gpu-layers 0 --greedy \
@@ -64,19 +44,10 @@ try:
 except Exception: print('--')" 2>/dev/null)
   LOG "  [$TAG] prefill=${PF}s"
 }
-# THREE compaction arms for muKV, not two. Table 1's muKV never passed
-# --compact-inplace and fell through to the ROUND-TRIP path: its prefill was
-# +3.5% over vanilla, matching the paper's "+1.2%" claim. Adding
-# --compact-inplace this session took prefill to +22%. So in-place is NOT
-# strictly better than round-trip -- it trades prefill time for peak memory:
-#   round-trip : 2x cache (OS-killed for Phi-3@16K), logged 330 ms, cheap
-#   in-place   : never exceeds prefill's allocation, but ~20k small memcpys
-# These arms measure that trade-off directly instead of inferring it.
-# ORDER: vanilla runs MID-QUEUE (position 4 of 8), not first -- a first-slot
-# vanilla is the exact bias this whole investigation started from. KeyDiff arms
-# added: it pays the LARGEST prefill premium (+34%) while reading no attention,
-# holding no callback and emitting no side node, so it brackets the mechanism
-# from the other side.
+# Round-trip compaction needs 2x the cache but is fast, in-place stays within the
+# prefill allocation but does many small memcpys. These arms measure that trade-off.
+# vanilla runs mid-queue (4 of 8) so it is not biased by running first. KeyDiff reads
+# no attention and installs no callback, so it brackets the cost from the other side.
 cell mukv_roundtrip     $MU --k-nominal 1024 --force-defrag
 cell keydiff_inplace    --policy keydiff --n-sink 0 --k-nominal 2048 --compact-inplace --keydiff-decode-block 128
 cell mukv_inplace       $MU --k-nominal 1024 --compact-inplace

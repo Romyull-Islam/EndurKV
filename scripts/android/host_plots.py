@@ -1,18 +1,7 @@
 #!/usr/bin/env python3
-"""Generate publication-grade plots from a sweep directory.
-
-Reads:
-  <sweep_dir>/<model>/<policy>/K*/<prompt>/repN/repN/
-    meta.json, sensors.csv, steps.csv, gen.txt
-
-Outputs PNG figures into <sweep_dir>/figures/ with informative filenames.
-
-Tries to use matplotlib if available; falls back to pure-text "ASCII plots"
-when matplotlib is missing.
-
-Usage:
-    python3 host_plots.py --sweep-dir <path>  [--truth-jsonl <path>]
-"""
+"""Plot a sweep directory (<sweep_dir>/<model>/<policy>/K*/<prompt>/repN/repN/) into
+<sweep_dir>/figures/. Falls back to text output when matplotlib is missing.
+Usage: python3 host_plots.py --sweep-dir <path> [--truth-jsonl <path>]"""
 import argparse, csv, json, re, statistics, sys
 from collections import defaultdict
 from pathlib import Path
@@ -61,8 +50,7 @@ def load_sensors(p):
 
 
 def load_steps(p):
-    """Be tolerant of malformed rows — some logs have CSV rows where a
-    multi-line token leaks across rows, leaving fields None."""
+    """Load steps.csv, tolerating rows where a multi-line token spilled across rows."""
     def _i(s, default=0):
         try: return int(s) if s not in (None, '', 'nan') else default
         except (TypeError, ValueError): return default
@@ -106,9 +94,7 @@ def gather_cells(sweep_dir):
     return cells
 
 
-# ---------------------------------------------------------------------------
 # F1 / EM / ROUGE scoring (pandas-free)
-# ---------------------------------------------------------------------------
 import string
 from collections import Counter
 
@@ -158,9 +144,7 @@ def attach_scores(cells, truth_jsonl):
     return cells
 
 
-# ---------------------------------------------------------------------------
 # Plots
-# ---------------------------------------------------------------------------
 def figdir(sweep_dir):
     d = Path(sweep_dir) / "figures"
     d.mkdir(parents=True, exist_ok=True)
@@ -217,7 +201,7 @@ def plot_kv_trajectory(cells, out_dir):
         if not rows: continue
         steps = [r['step'] for r in rows]
         retention_proxy = c['meta'].get('mean_retention_ratio', 1.0) or 1.0
-        # n_kv_cells is max_pos+1, so "live KV" ≈ n_kv × retention_ratio
+        # n_kv_cells is max_pos+1, so live KV is about n_kv * retention_ratio
         live_kv = [r['n_kv'] * retention_proxy for r in rows]
         grouped[(c['model'], c['prompt_id'])].append((c['policy'], steps, live_kv))
     for (model, prompt), entries in grouped.items():
@@ -234,7 +218,7 @@ def plot_kv_trajectory(cells, out_dir):
 
 def plot_f1_bars(cells, out_dir):
     if not HAVE_MPL: return
-    # group by (model, task, policy) — mean over reps
+    # group by (model, task, policy) - mean over reps
     g = defaultdict(list)
     for c in cells:
         if c['task'] is None: continue
@@ -261,23 +245,15 @@ def plot_f1_bars(cells, out_dir):
 
 
 def plot_avg_thermal_per_model(cells, out_dir):
-    """For each model, average thermal trajectories across all cells of each
-    policy, plot one figure per (model, zone). Covers:
-      - skin (user-facing)
-      - battery
-      - CPU max (across all per-core sensors)
-      - GPU max (across all gpuss shader clusters)
-      - DDR (memory)
-    Time axis = seconds since cell start (cells are time-aligned at t=0)."""
+    """Per model, average each policy's thermal trajectory over its cells and plot one figure
+    per zone (skin, battery, CPU max, GPU max, NPU, DDR) against seconds since cell start."""
     if not HAVE_MPL: return
     import numpy as np
 
-    # Define which fields to track per zone, with how to derive a single value per timestep
+    # how each zone is reduced to one value per timestep
     def _max_temp(fields_present, name_predicate, scale=1000.0):
-        """Return per-step max across temperature fields matching `name_predicate`.
-        Only fields ending in `_temp_mc` are considered — avoids catching
-        `cpu0_freq_hz` (frequency) or `cpu0_cool_state` (governor state).
-        Also excludes hw-trip-* (constant thresholds, not real-time)."""
+        """Per-step max over `*_temp_mc` fields matching `name_predicate`, excluding
+        hw-trip-* fields (fixed thresholds, not live readings)."""
         keys = [k for k in fields_present
                 if k.endswith('_temp_mc') and name_predicate(k)
                 and 'hw-trip' not in k]
@@ -397,7 +373,6 @@ def plot_footprint_vs_f1(cells, out_dir):
         plt.close()
 
 
-# ---------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sweep-dir", required=True)

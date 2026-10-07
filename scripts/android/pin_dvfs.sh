@@ -1,21 +1,12 @@
 #!/system/bin/sh
-# pin_dvfs.sh — root-only: force consistent DVFS regime across all Wave-3 cells.
+# Root only: pin CPU DVFS so clocks do not depend on cable or charging state.
+# All cores get the performance governor with max 1632000 kHz (the cap seen on
+# battery). Big cores are cpu6 and cpu7. Safe to call before every cell. The
+# previous state is saved to /sdcard for restore.
 #
-# Eliminates the cable-state confound: regardless of whether USB is plugged in
-# or the battery is charging/full, the big cores stay capped at 1.63 GHz.
-#
-# This matches the regime that all v1 / v1_FA cells experienced during Wave-3
-# REAL when the battery was on its own (USB online but not charging).
-#
-# Idempotent — safe to call before every cell. Records old state to /sdcard so
-# you can restore later.
-#
-# Usage (must run as root, e.g., via `su -c`):
-#   sh /data/local/tmp/endurkv/scripts/pin_dvfs.sh         # set to 1.63 GHz
-#   sh /data/local/tmp/endurkv/scripts/pin_dvfs.sh restore # restore previous state
-#
-# Big cores on Snapdragon 8 Elite Gen 5: CPU6, CPU7 (Phoenix-L prime cores).
-# 1.63 GHz = 1632000 kHz — matches the battery-state observed cap.
+# Usage (as root, e.g. via `su -c`):
+#   sh /data/local/tmp/endurkv/scripts/pin_dvfs.sh          # pin
+#   sh /data/local/tmp/endurkv/scripts/pin_dvfs.sh restore  # restore previous state
 
 set -u
 TARGET_MHZ=${TARGET_MHZ:-1632000}
@@ -25,10 +16,8 @@ ACTION=${1:-pin}
 STATE_FILE=/sdcard/.dvfs_state.sh
 
 pin() {
-    # Only capture the pre-pin state if we are NOT already pinned. Re-running pin()
-    # while pinned used to overwrite the saved state with the PINNED values, so the
-    # later restore re-applied the cap instead of undoing it -- which left the phone
-    # capped at 1632 MHz (35% of hw max) after a run died mid-campaign on 2026-08-29.
+    # Save state only if not already pinned. Otherwise the saved state would hold
+    # the pinned values and restore would re-apply the cap.
     _cur_gov=$(cat /sys/devices/system/cpu/cpu6/cpufreq/scaling_governor 2>/dev/null)
     if [ "$_cur_gov" = "performance" ] && [ -s "$STATE_FILE" ]; then
         echo "[pin_dvfs] already pinned; keeping existing $STATE_FILE" >&2
@@ -49,9 +38,8 @@ pin() {
         fi
     done
 
-    # Apply target — use performance governor at capped max_freq for stable clocks.
-    # 'userspace' lets us pin an exact freq but isn't always available; performance
-    # at the chosen max_freq is universally supported.
+    # performance governor with a capped max_freq gives stable clocks. The
+    # userspace governor is not always available.
     for cpu in 0 1 2 3 4 5; do
         if [ -d /sys/devices/system/cpu/cpu$cpu/cpufreq ]; then
             echo performance     > /sys/devices/system/cpu/cpu$cpu/cpufreq/scaling_governor 2>/dev/null

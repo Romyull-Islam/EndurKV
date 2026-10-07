@@ -1,20 +1,8 @@
 #!/system/bin/sh
-# discover_sensors.sh — run ONCE on the OnePlus 15 (or any target Android phone)
-# to map the sysfs paths the controller will read at runtime.
-#
-# Captures four things:
-#   1. /sys/class/thermal/thermal_zone*/type     (zone names)
-#      /sys/class/thermal/thermal_zone*/temp     (current temp, millideg C)
-#   2. /sys/block/sd*/stat and /sys/block/sd*/queue/*  (block-level write counts)
-#   3. /sys/devices/platform/.../ufshc*/...      (vendor UFS counters if exposed)
-#   4. /proc/meminfo + /proc/pressure/{cpu,memory,io}  (PSI signals)
-#
-# Output: /data/local/tmp/endurkv/sensor_map.txt — paste back to host so we
-# wire the right paths into the sampler.
-#
-# Runs without root. Some paths only readable as root will be marked PERM-DENIED.
-# Run as:
-#   adb shell sh /data/local/tmp/endurkv/discover_sensors.sh
+# Run once on a target phone to list the sysfs/procfs paths the sampler can read:
+# thermal zones and cooling devices, block-device stats, UFS host paths, mounts, PSI, meminfo.
+# Writes /data/local/tmp/endurkv/sensor_map.txt. Runs without root, root-only paths show PERM-DENIED.
+# Usage: adb shell sh /data/local/tmp/endurkv/discover_sensors.sh
 
 set +e
 OUT="/data/local/tmp/endurkv/sensor_map.txt"
@@ -52,9 +40,8 @@ done
 log ""
 
 log "=== block devices ==="
-# /sys/block/<dev>/stat is 17 fields (kernel >= 4.18). Field 7 = writes_completed,
-# field 8 = writes_merged, field 9 = sectors_written, field 10 = ms_writing.
-# These move regardless of root, which is exactly the WAF signal we need.
+# /sys/block/<dev>/stat (kernel >= 4.18): field 7 writes_completed, 8 writes_merged,
+# 9 sectors_written, 10 ms_writing. Readable without root.
 for b in /sys/block/sd* /sys/block/mmcblk* /sys/block/sda; do
     [ -d "$b" ] || continue
     stat=$(cat "$b/stat" 2>/dev/null || echo "PERM-DENIED")
@@ -65,8 +52,7 @@ done
 log ""
 
 log "=== UFS host controller (vendor paths) ==="
-# Most Qualcomm-based phones expose UFS under platform/soc/<addr>.ufshc/.
-# OnePlus 15 with Snapdragon 8 Elite Gen 5 will follow the same pattern.
+# Qualcomm phones usually expose UFS under platform/soc/<addr>.ufshc/
 for u in /sys/devices/platform/soc/*.ufshc/host*/scsi_host/host*/ \
          /sys/class/scsi_host/host*/ \
          /sys/bus/platform/drivers/ufshcd/*/; do
@@ -78,7 +64,7 @@ for u in /sys/devices/platform/soc/*.ufshc/host*/scsi_host/host*/ \
     done
 done
 
-# Look for the userdata/system partitions backing the writes we care about.
+# /data and /system mounts
 log "=== mount points (data partition is what catches KV spills) ==="
 mount | grep -E "/data |/system " | tee -a "$OUT"
 log ""

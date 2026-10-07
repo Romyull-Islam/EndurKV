@@ -1,25 +1,10 @@
 #!/bin/bash
-# ============================================================================
-# run_cpu_soak.sh -- SUSTAINED CPU load: the missing watchdog demonstration.
-# (2026-08-26)
-#
-# EVERY timed CPU cell so far is cool-gated and finishes before the thermal
-# ladders can engage: wd logs end tier=0 in all of them, so the paper currently
-# has NO CPU evidence for "the watchdog holds the clock by capping frequency
-# BEFORE the vendor throttle trips". The GPU soak has it (+10.8% tok/s, throttle
-# residency 41.0%->28.5%); this is the CPU counterpart.
-#
-# DESIGN. Per arm: ONE cool gate, then SIX back-to-back 9.7K+4K generations with
-# NO cooling between them -- heat accumulates as it would in real use. Arms:
-#   vanilla        : does the full cache deep-throttle under sustained load?
-#   mukv_wdoff     : is eviction alone enough to stay out of throttle?
-#   mukv_wdon      : does the preemptive ladder (preempt_throttle_watchdog_v2,
-#                    name-resolved zones, post-07-18 fix) beat the vendor
-#                    governor once heat has accumulated?
-# Recorded per generation: tok/s, and at 5 Hz: cpu6 clock (883 MHz floor
-# residency), DDR/CPU/battery temps -- enough for a per-generation trace figure.
-# Threads 6, same build and prompt as the n=3 table so rows are comparable.
-# ============================================================================
+# Sustained CPU soak. Cool-gated cells finish before the watchdog ladders can
+# engage, so here each arm cools once and then runs six back-to-back 9.7K+4K
+# generations with no cooling in between.
+# Arms: vanilla, muKV without watchdog, muKV with preempt_throttle_watchdog_v2.
+# Records tok/s per generation and sensors at 5 Hz (cpu6 clock, DDR, CPU and
+# battery temps). Same build, prompt and 6 threads as the n=3 table.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 LOG(){ echo "[$(date +%H:%M:%S)] $*"; }
@@ -31,7 +16,7 @@ CB=/data/local/tmp/endurkv/bin_cpu_kd
 M=/data/local/tmp/endurkv/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 DEV=/data/local/tmp/cpusoak; HOST=/tmp/cpu_soak
 mkdir -p $HOST; adb_safe_shell "mkdir -p $DEV/wt" < /dev/null >/dev/null 2>&1
-timeout 180 adb push /tmp/claude-1001/-home-mislam22-EndurKV-workspace/1d283ef2-8bcb-4a99-8b56-fd8d8af9f80d/scratchpad/wikitext_16k_p12k_d4k.txt "$DEV/wt/prompt.txt" < /dev/null >/dev/null 2>&1
+timeout 180 adb push "$(cd "$(dirname "$0")/../.." && pwd)/eval_corpora"/wikitext_16k_p12k_d4k.txt "$DEV/wt/prompt.txt" < /dev/null >/dev/null 2>&1
 MU="--policy v1_fa2 --fa-on-evict --compact-inplace --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70"
 
 arm(){

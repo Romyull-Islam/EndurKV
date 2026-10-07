@@ -1,24 +1,13 @@
-"""
-Simulator of (cache budget, clock cap, thermal state) -> (tok/s, J/token, DDR).
+"""Simulator of (cache budget, clock cap, thermal state) to (tok/s, J/token, DDR temp).
 
-FITTED FROM MEASURED DATA:
-  cache axis : /tmp/ea_n3        muKV at 3 budgets, GPU, clock held 902 MHz
-  clock axis : /tmp/phone_freq_sweep   CPU prime core, 5 frequencies, 2 repeats
-  thermal    : /tmp/cpu_soak/mukv_wdoff  44 min soak, tau = 221 s, rise 39.0 -> 63.6 C
-
-KNOWN LIMITATION, stated because it bounds every conclusion drawn from this file:
-every campaign varied ONE actuator and pinned the other. The cache axis is GPU at a
-held clock; the clock axis is CPU at one policy. The JOINT (K, clock) surface has
-never been measured, so this model assumes the two are SEPARABLE and multiplies
-their normalised effects. The interesting operating point -- energy-optimal cache
-with the clock absorbing its heat -- sits exactly in that unmeasured region.
-A 3x3 grid on the phone would replace this assumption with data.
+Fit from a GPU cache-budget run (/tmp/ea_n3), a CPU clock sweep and a CPU soak. The
+joint (K, clock) surface was not measured, so the two effects are assumed separable.
 """
 import math, random
 
-CACHE = [   # cells, tok/s, W   (GPU, native DVFS: /tmp/ea_n3 did NOT pin the clock; corrected 2026-09-02)
-            # W here is decode-phase USB-rail power; the report's tables use whole-run rail+pack
-            # energy per decoded token (about 2.5x larger). Do not compare the two directly.
+CACHE = [   # cells, tok/s, W   (GPU, native DVFS, clock not pinned)
+            # W is decode-phase USB-rail power, not the whole-run rail+pack energy
+            # per token used in the report tables (about 2.5x larger).
     (1379, 32.62, 4.804),
     ( 688, 39.35, 4.751),
     ( 342, 35.07, 4.557),
@@ -99,10 +88,8 @@ class Phone:
                 "throttled": self.throttled, "eff_mhz": eff_mhz}
 
 
-# ---- quality axis, fitted on the measured budget curve -------------------------
-# q(retention) = 1 - 0.884 * exp(-r / 3.03), fitted on Bonsai hotpotqa:
-#   6.8% kept -> 42.71 F1 (q=0.906), 13.6% -> 46.69 (0.990), 26.7% -> 47.17 (1.000)
-# Quality saturates fast: past ~14% retention there is almost nothing left to buy.
+# Quality vs retention r (%): q = 1 - 0.884 * exp(-r / 3.03), fitted on Bonsai
+# hotpotqa F1 at 6.8%, 13.6% and 26.7% retention. Nearly flat past ~14%.
 Q_A, Q_B = 0.884, 3.03
 PEAK_CELLS = 12500.0     # ea_n3 peak KV cells at the 9737-token prompt
 

@@ -14,7 +14,7 @@
 #include <stdexcept>
 #include <vector>
 
-// EndurKV (2026-08-31): madvise-based tail reclaim needs the POSIX memory API.
+// EndurKV: madvise-based tail reclaim needs the POSIX memory API.
 #if defined(__linux__) || defined(__ANDROID__)
 #  include <sys/mman.h>
 #  include <unistd.h>
@@ -335,11 +335,8 @@ void llama_kv_cache::clear(bool data) {
     }
 }
 
-// EndurKV (2026-07-25): cell-index-level eviction. See header for why this is
-// required for M-RoPE / vision caches (all tokens of an image share one dim-0
-// position, so position-based seq_rm cannot express a per-token keep mask).
-// Kept cells retain their pos and 2D ext (x,y), so M-RoPE attention over the
-// compacted cache stays spatially correct.
+// EndurKV: cell-index eviction (see the header). Kept cells keep their position
+// and 2D extent, so M-RoPE attention over the compacted cache stays correct.
 uint32_t llama_kv_cache::endurkv_rm_cells(llama_seq_id seq_id, const int8_t * keep, uint32_t n) {
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
     if (!keep) {
@@ -378,33 +375,16 @@ uint32_t llama_kv_cache::endurkv_rm_cells(llama_seq_id seq_id, const int8_t * ke
 }
 
 
-// ============================================================================
-// endurkv_compact_seq -- IN-PLACE, CHUNKED cache compaction.  (added 2026-08-07)
-//
-// WHY THIS EXISTS. muKV's original compaction round-trips the cache through
-// llama_state_seq_get_data / llama_state_seq_set_data into a SECOND context. That
-// is correct and provably quality-neutral, but its peak memory is 2x the cache
-// plus the serialized blob. That 2x is what blocks Phi-3 at ctx 16384 on the phone
-// (2 x 6.44 GB of f16 KV + 2.4 GB of weights = 15.28 GB against 15.1 GB of RAM)
-// and what bounds compaction at 64K on the RTX. This routine does the same job by
-// sliding the survivors down into a dense prefix INSIDE the tensors that prefill
-// already allocated, so no second context is ever created and peak memory never
-// rises above what prefill used. The only extra allocation is a staging buffer of
-// chunk_cells rows (~256 KB at the default chunk), which is why the caller can ask
-// for this mode when the round-trip does not fit.
-//
-// CORRECTNESS. Survivors are visited in ASCENDING cell order and the destination
-// index of the j-th survivor is j, so dst <= src always: a destination row is only
-// written after its own source row has been read, and no not-yet-moved survivor is
-// ever clobbered. The runs must therefore not be reordered or parallelised.
-// Positions and 2D/M-RoPE extents travel with the cell via cells.cp()/cells.set(),
-// so RoPE stays correct -- the cells move, the positions they carry do not change.
-//
-// DECLINES (returns 0) when the cache holds cells belonging to sequences other than
-// seq_id: this routine rewrites the whole cell array into a dense prefix and would
-// discard them. Returning 0 lets the caller fall back to the round-trip path rather
-// than silently corrupting a multi-sequence cache.
-// ============================================================================
+// endurkv_compact_seq: in-place, chunked compaction.
+// The state round-trip (llama_state_seq_get_data / set_data into a second context)
+// peaks at twice the cache, which does not fit Phi-3 at ctx 16384 on the phone.
+// This routine moves the survivors into a dense prefix inside the tensors prefill
+// allocated. The only extra memory is a staging buffer for one chunk of one layer
+// (512 KiB for Llama-3.2-1B at the default 512 cells).
+// Survivors are visited in ascending cell order and the j-th survivor goes to cell j,
+// so dst <= src and no unread survivor is overwritten. Keep the runs in order.
+// Positions and M-RoPE extents move with the cell, so RoPE stays correct.
+// Returns 0 if the cache holds other sequences, so the caller can fall back.
 uint32_t llama_kv_cache::endurkv_compact_seq(llama_seq_id seq_id, uint32_t chunk_cells) {
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
 
@@ -424,7 +404,7 @@ uint32_t llama_kv_cache::endurkv_compact_seq(llama_seq_id seq_id, uint32_t chunk
     const uint32_t n = (uint32_t) src.size();
 
     if (n != cells.get_used()) {
-        // some live cells belong to another sequence -- see DECLINES above
+        // some live cells belong to another sequence, so decline
         LLAMA_LOG_WARN("%s: %u of %u live cells are not in seq %d; declining in-place compaction\n",
                        __func__, cells.get_used() - n, cells.get_used(), seq_id);
         return 0;
@@ -463,7 +443,7 @@ uint32_t llama_kv_cache::endurkv_compact_seq(llama_seq_id seq_id, uint32_t chunk
         const size_t v_row = v ? ggml_row_size(v->type, n_embd_v_gqa) : 0;
 
         for (uint32_t j = first_moved; j < n; ) {
-            // longest run that is contiguous at the SOURCE (the destination is
+            // longest run that is contiguous at the source (the destination is
             // contiguous by construction) and no longer than one chunk
             uint32_t len = 1;
             while (len < chunk_cells && j + len < n && src[j + len] == src[j] + len) {
@@ -482,10 +462,8 @@ uint32_t llama_kv_cache::endurkv_compact_seq(llama_seq_id seq_id, uint32_t chunk
                 ggml_backend_tensor_get(v, stage.data(), (size_t) s * v_row, (size_t) len * v_row);
                 ggml_backend_tensor_set(v, stage.data(), (size_t) d * v_row, (size_t) len * v_row);
             } else if (v) {
-                // Transposed V (FA-off layout): a cell is a COLUMN of the [kv_size,
-                // n_embd_v_gqa] tensor, not a row, so it has to move one embedding
-                // dimension at a time. muKV decodes FA-on and never takes this path;
-                // it exists so FA-off policies can use in-place compaction too.
+                // Transposed V (FA-off layout): a cell is a column, so it moves one
+                // embedding dimension at a time. Only FA-off policies use this path.
                 const size_t v_el = ggml_type_size(v->type);
                 const size_t kvsz = cells.size();
 
@@ -501,10 +479,8 @@ uint32_t llama_kv_cache::endurkv_compact_seq(llama_seq_id seq_id, uint32_t chunk
         }
     }
 
-    // Metadata last, and as a single gather->scatter: cp() snapshots pos/ext/seq for
-    // the survivors before anything is cleared, so a survivor that lives inside the
-    // destination prefix cannot be lost. set(0, ...) maintains the used-set and the
-    // per-seq position index for us.
+    // Metadata last, as one gather and scatter: cp() snapshots the survivors before
+    // anything is cleared, and set(0, ...) rebuilds the used set and position index.
     llama_kv_cells kept = cells.cp(src);
 
     for (uint32_t j = 0; j < n; ++j) {
@@ -520,33 +496,13 @@ uint32_t llama_kv_cache::endurkv_compact_seq(llama_seq_id seq_id, uint32_t chunk
     return n;
 }
 
-// endurkv_reclaim_tail -- return the dead tail of the KV buffer to the OS.
-// (added 2026-08-31)
-//
-// WHY THIS EXISTS. The cache is one backend buffer sized for the FULL context at
-// init, and llama_kv_cache() ends with ggml_backend_buffer_clear(buf, 0), which
-// memsets every page. Residency is therefore decided at allocation time: on a
-// OnePlus 15, ctx=16384 on Llama-3.2-1B is 512 MiB resident before a single token
-// exists, and no eviction policy can lower it. Eviction buys BANDWIDTH (bytes read
-// per token), not FOOTPRINT.
-//
-// What compaction adds is the precondition for buying footprint too. Once
-// endurkv_compact_seq has slid the survivors down, cells [n, kv_size) are dead AND
-// contiguous, so their pages can be handed back with MADV_DONTNEED while the
-// mapping stays intact. The pages re-fault as zero if the region is ever written
-// again, which is safe because those cells are empty and masked out of attention.
-//
-// ALIGNMENT. The start is rounded UP and the end rounded DOWN to a page, so this
-// can never clobber a live cell nor spill into the tensor that follows in the same
-// buffer. Whole pages only; the rounding loss is under 8 KiB per region.
-//
-// TRANSPOSED V. With v_trans (the FA-off layout) a cell is a column, so the dead
-// region is one run per embedding dimension rather than one run per tensor. That
-// is n_embd_v_gqa smaller madvise calls and more rounding loss, but it still works
-// -- FA-on is faster here, not uniquely capable.
-//
-// Returns bytes actually released. Host buffers only: device-local memory (Vulkan,
-// CUDA) is skipped, as madvise has no meaning there.
+// endurkv_reclaim_tail: return the dead tail of the KV buffer to the OS.
+// The cache buffer is sized and cleared for the full context at init, so eviction
+// alone lowers bytes read per token but not resident memory. After compaction the
+// dead cells [n, kv_size) are contiguous, so their pages can be released with
+// MADV_DONTNEED. Start and end are rounded inward to whole pages, so live cells and
+// neighbouring tensors are never touched. With transposed V there is one region per
+// embedding dimension. Host buffers only. Returns the bytes released.
 size_t llama_kv_cache::endurkv_reclaim_tail(llama_seq_id seq_id) {
 #ifndef ENDURKV_HAVE_MADVISE
     GGML_UNUSED(seq_id);
@@ -630,36 +586,16 @@ size_t llama_kv_cache::endurkv_reclaim_tail(llama_seq_id seq_id) {
 #endif
 }
 
-// endurkv_keydiff_scores -- per-cell key-diversity scores for the KeyDiff baseline.
-// (added 2026-08-16)
-//
-// WHY THIS LIVES IN libllama. KeyDiff (Park et al., NeurIPS 2025, arXiv:2504.15364)
-// evicts by KEY GEOMETRY alone: score_i = -CosSim(mu(K), k_i), keep the N most
-// distinctive keys. It never reads an attention value, so unlike every other
-// score-reading baseline it needs no eval-callback, no FA-off path, and no side
-// node -- but it does need the K cache tensors, which only this class can reach
-// (layer.k_stream + ggml_backend_tensor_get, the same access endurkv_compact_seq
-// uses). One small exported function is cleaner than parsing a serialized state
-// blob host-side.
-//
-// SCORING, faithful to their efficient variant: per layer, the anchor is the mean
-// of the (unnormalized) keys -- their App. notes mu(K-hat) can be replaced by
-// mu(K) "without losing accuracy", and mu(K) is what their implementation uses.
-// The per-layer key of a cell is the concatenated-head row llama.cpp stores
-// (n_embd_k_gqa floats). Scores are -cos(mu_l, k_i) accumulated over layers and
-// divided by n_layers: the paper treats K as one matrix per cache and does not
-// specify a cross-layer rule, so the MEAN across layers is our sequence-level
-// realization -- the same adaptation every per-head baseline gets on this engine,
-// and it must be documented wherever these numbers are reported. Their block-wise
-// eviction cadence (evict every B=128 tokens DURING prefill) is likewise realized
-// as end-of-prefill selection by the harness; that changes PEAK cache, not the
-// final keep-set rule, and the peak-memory column must say so.
-//
-// DECLINES (returns 0) when cells [0, n) are not a dense single-sequence prefix
-// (scores are indexed by cell, and the harness equates cell index with position,
-// which holds exactly in the pre-eviction state this is meant to run in), or when
-// K is stored quantized -- reading it as raw bytes would score garbage, the exact
-// failure mode the 2026-08-13 capture hardening exists to prevent.
+// endurkv_keydiff_scores: per-cell scores for the KeyDiff baseline
+// (Park et al., NeurIPS 2025, arXiv:2504.15364). KeyDiff ranks keys by
+// -cos(mu(K), k_i) and needs no attention scores, only the K tensors.
+// Per layer, the anchor is the mean of the unnormalized keys (their mu(K) variant).
+// Scores are averaged over layers, our sequence-level adaptation, since the paper
+// gives no cross-layer rule. Their block-wise eviction during prefill is applied
+// once at the end of prefill by the harness.
+// Returns 0 if cells [0, n) are not a dense single-sequence prefix or K is quantized.
+// Scores are indexed by cell, and the harness treats the cell index as the position,
+// which holds only before any eviction.
 uint32_t llama_kv_cache::endurkv_keydiff_scores(llama_seq_id seq_id, float * out, uint32_t n_max) {
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
     GGML_ASSERT(out != nullptr);

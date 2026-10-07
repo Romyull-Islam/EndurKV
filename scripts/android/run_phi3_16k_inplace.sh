@@ -1,29 +1,10 @@
 #!/bin/bash
-# ============================================================================
-# run_phi3_16k_inplace.sh -- fill the phone-GPU table's broken Phi-3 row. (2026-08-10)
-#
-# The table currently prints "does not fit at 16K -- see ctx 8192 below" for Phi-3 with
-# compaction, and that note was honest: the phi3_mukv_dfg cells exist on disk with NO
-# meta.json, i.e. they were attempted and died. But mukv_dfg is --force-defrag, the STATE
-# ROUND-TRIP, which restores into a SECOND context: 2 x 6144 MiB of KV + 2.4 GB of weights
-# against 15.47 GB of unified RAM. Reproduced twice with logcat attached -- exactly one of
-# the two KV allocations succeeds and Android SIGKILLs six Zygote processes. The same
-# failure occurs on a 24 GB RTX ("second context alloc failed"), so it belongs to the
-# MECHANISM, not to phone memory.
-#
-# In-place compaction needs only ONE cache (6144 + 2400 = 8.5 GB) and has already been
-# shown to run this exact configuration: 874 cells retained, compacted in 6.2 s. This
-# script produces the timed n=3 cells the table needs, so a measured row can replace the
-# note.
-#
-# WATCHDOG v5LOW IS ON, and only on muKV -- baselines never receive it. v5LOW (battery
-# 36.0/36.5/37.0, skin 39.5/40.0/40.5) is the ladder that actually engages on GPU work;
-# v5HIGH's 47 C battery anchor was measured firing ZERO times across 36 min of sustained
-# GPU load because it is calibrated to the CPU deep-throttle trigger.
-#
-# Cool gate before EVERY cell (DDR<=35 C, batt<=33 C, charging off while cooling); a
-# failed gate skips the cell rather than running it hot.
-# ============================================================================
+# run_phi3_16k_inplace.sh: n=3 timed Phi-3 muKV cells on the phone GPU at ctx 16384 with
+# in-place compaction. The state round trip (--force-defrag) restores into a second context,
+# which needs two 6 GiB KV caches and is killed by Android, while in-place needs only one.
+# Uses gpu_watchdog_v5_low.sh (battery 36.0/36.5/37.0, skin 39.5/40.0/40.5), the ladder
+# that engages on GPU work. Cool gate before every cell (DDR<=35 C, batt<=33 C, charging
+# off), and a failed gate skips the cell.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 BIN=/data/local/tmp/ukv

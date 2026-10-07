@@ -1,31 +1,7 @@
 #!/usr/bin/env python3
-"""
-PLOT 24 — CPU big-core temperature at throttle events.
-
-Companion to plot 23 (throttle vs DDR). Same source cells, but the y-axis is
-the Cortex-X (big-core) cluster temperature: cpu-1-0-0_temp_mc / 1000.
-
-Three rows:
-  Row 1 (Wave-4 vanilla, Phi-3 long-decode):
-      Throttle moment marked at iter 6 — CPU peak = 67.1 C
-      (DDR at the same instant was 62.9 C).
-  Row 2 (Wave-8 v1_fa2_selective):
-      Throttle moment marked at iter 10 — CPU peak = 77.9 C
-      (DDR at the same instant was 72.9 C, both crossed in tandem).
-  Row 3 (Wave-9 v1_fa2_stack, watchdog-on):
-      No throttle.  CPU held <= 66.8 C peak.
-
-Insight: CPU big-core temp may predict throttle better than DDR alone.
-
-Inputs:
-  Wave-4 vanilla:  phone-logs/wave4_longdecode_1780750084/vanilla/sensors.csv
-                                                          /stress.csv
-  Wave-8 fa2 sel:  phone-logs/wave8_v1fa2_sel_1780788550/v1_fa2_selective/...
-  Wave-9 fa2 stk:  phone-logs/wave9_v1fa2_stack_1780796320/v1_fa2_stack/...
-
-Output:
-  EndurKV/figures/relationship_plots/24_throttle_event_cpu.png
-  EndurKV/figures/relationship_plots/24_throttle_event_cpu.schema.json
+"""Plot 24: big-core CPU temperature (cpu-1-0-0_temp_mc) around throttle events, the CPU
+companion to plot 23. Rows: Wave-4 vanilla, Wave-8 v1_fa2_selective, Wave-9 v1_fa2_stack.
+Output: EndurKV/figures/relationship_plots/24_throttle_event_cpu.png (+ .schema.json)
 """
 
 from __future__ import annotations
@@ -42,7 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-# ----------------------------- config -----------------------------------------
+# config
 
 CELLS = {
     "wave4_vanilla": Path(
@@ -107,13 +83,12 @@ ANNOTATIONS = {
     ),
 }
 
-# Throttle reference line for the big cluster (Cortex-X kernel hot zone).
-# We do NOT claim this is the exact kernel trip point - it is a visual
-# reference at the canonical peak observed for the throttling runs.
+# Visual reference line for the big cluster at the peak seen in throttling runs,
+# not the exact kernel trip point.
 CPU_THROTTLE_REF_C = 67.0   # the cliff observed in wave-4 vanilla
 
 
-# ---------------------------- helpers -----------------------------------------
+# helpers
 
 def _to_float(x):
     try:
@@ -151,7 +126,7 @@ def load_sensor_series(cell_dir: Path):
     return t, cpu, ddr
 
 
-# ------------------------------- plot -----------------------------------------
+# plot
 
 def main() -> int:
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -204,8 +179,7 @@ def main() -> int:
             t_iter_s = d["iters"][ev_iter]
             # Use the supervisor's canonical CPU peak as the y-anchor.
             cpu_at = meta["cpu_peak_c"]
-            # Find the actual sample index closest to iter start for a vline
-            # that lines up with the observed timeline.
+            # Place the vline at the sample closest to the iter start.
             j = int(np.argmin(np.abs(d["t"] - t_iter_s)))
             t_ev_min = t_min[j]
 

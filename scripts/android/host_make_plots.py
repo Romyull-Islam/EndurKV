@@ -1,25 +1,8 @@
 #!/usr/bin/env python3
-"""
-host_make_plots.py — generate PNG plots from a completed phone study.
+"""Plots 01 to 07 (thermal, KV growth, latency, entropy vs attention, rho, memory) from a phone
+study. Reads <id>.entropy.csv, .attn.bin, .sensors.csv and .run.json per prompt in --log-dir.
 
-Inputs (per prompt_id in --log-dir):
-  <id>.entropy.csv   (per-step probe metrics)
-  <id>.attn.bin      (per-step per-layer attention, optional)
-  <id>.sensors.csv   (per-sample thermal + memory + endurance)
-  <id>.run.json      (wall-clock join keys)
-
-Outputs (in --out-dir, default <log_dir>_figures/):
-  01_thermal_trace.png         — multi-zone temp(t) for 4 representative prompts
-  02_thermal_aggregate.png     — per-task max-active-zone warming (boxplot)
-  03_kv_cache_growth.png       — n_kv vs step_index across prompts
-  04_decode_latency.png        — ms/decode-step over the run
-  05_entropy_vs_attention.png  — slide-22-style scatter + quantile binning
-  06_rho_per_task.png          — slide-23-style per-task Spearman bar chart
-  07_memory_trajectory.png     — MemAvailable + pswpout delta over time
-
-Usage:
-  python scripts/android/host_make_plots.py [--log-dir logs/study_phone_1b]
-"""
+Usage: python scripts/android/host_make_plots.py [--log-dir logs/study_phone_1b] [--out-dir DIR]"""
 from __future__ import annotations
 
 import argparse
@@ -33,7 +16,7 @@ HERE = Path(__file__).resolve()
 WORKSPACE = Path(os.environ.get("WORKSPACE", HERE.parents[3]))
 
 
-# -------------- attn.bin parser (also in host_join_and_rho.py) --------------
+# attn.bin parser (also in host_join_and_rho.py)
 def parse_attn_bin_top1(path: Path) -> tuple[list[float], list[int]]:
     """Return (per_step_layer_avg_top1, per_step_n_kv)."""
     if not path.exists():
@@ -76,7 +59,7 @@ def is_trip_zone(col: str) -> bool:
     return any(p in low for p in TRIP_PATTERNS)
 
 
-# -------------- main --------------
+# main
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--log-dir", default=str(WORKSPACE / "logs" / "study_phone_1b"))
@@ -99,7 +82,7 @@ def main() -> int:
 
     plt.rcParams.update({"figure.dpi": 110, "savefig.dpi": 130, "font.size": 9})
 
-    # --------- load every prompt --------------------------------------------
+    # load every prompt
     prompts = []  # list of dicts: id, task, ent (df), sen (df), run (dict), attn_top1 (list), nkv (list)
     for ent_path in sorted(log_dir.glob("*.entropy.csv")):
         pid = ent_path.name[: -len(".entropy.csv")]
@@ -143,9 +126,7 @@ def main() -> int:
     ]
     def task_key(t): return (PAPER_TASK_ORDER.index(t) if t in PAPER_TASK_ORDER else 99, t)
 
-    # ========================================================================
-    # 01_thermal_trace.png — multi-zone temp(t) for 4 representative prompts
-    # ========================================================================
+    # 01_thermal_trace.png - multi-zone temp(t) for 4 representative prompts
     fig, axes = plt.subplots(2, 2, figsize=(13, 7), sharex=False)
     # pick one from each end of the task spectrum, by id, robust to missing
     pick_ids = []
@@ -198,9 +179,7 @@ def main() -> int:
     plt.close(fig)
     print("  wrote 01_thermal_trace.png")
 
-    # ========================================================================
-    # 02_thermal_aggregate.png — warming per task (boxplot of dT)
-    # ========================================================================
+    # 02_thermal_aggregate.png - warming per task (boxplot of dT)
     warmings = []  # list of (task, dT_C)
     max_active = []  # list of (task, max active zone temp)
     for p in prompts:
@@ -241,9 +220,7 @@ def main() -> int:
         plt.close(fig)
         print("  wrote 02_thermal_aggregate.png")
 
-    # ========================================================================
-    # 03_kv_cache_growth.png — n_kv vs step across prompts (and a few samples)
-    # ========================================================================
+    # 03_kv_cache_growth.png - n_kv vs step across prompts (and a few samples)
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))
     ax = axes[0]
     for p in prompts:
@@ -279,9 +256,7 @@ def main() -> int:
     plt.close(fig)
     print("  wrote 03_kv_cache_growth.png")
 
-    # ========================================================================
-    # 04_decode_latency.png — ms per decode step, distribution + over-time
-    # ========================================================================
+    # 04_decode_latency.png - ms per decode step, distribution + over-time
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))
     ax = axes[0]
     all_dt_ms = []
@@ -324,9 +299,7 @@ def main() -> int:
     plt.close(fig)
     print("  wrote 04_decode_latency.png")
 
-    # ========================================================================
-    # 05_entropy_vs_attention.png — slide-22 LEFT panel style
-    # ========================================================================
+    # 05_entropy_vs_attention.png - slide-22 LEFT panel style
     have_attn = any("attn_top1_layer_avg" in p["ent"].columns for p in prompts)
     if have_attn:
         all_e = pd.concat([p["ent"][p["ent"].columns.intersection(
@@ -362,9 +335,7 @@ def main() -> int:
             plt.close(fig)
             print(f"  wrote 05_entropy_vs_attention.png  (pooled ρ={rho:+.3f})")
 
-    # ========================================================================
-    # 06_rho_per_task.png — slide-23 RIGHT panel style
-    # ========================================================================
+    # 06_rho_per_task.png - slide-23 RIGHT panel style
     if have_attn:
         rows = []
         for task, grp_prompts in pd.DataFrame(
@@ -405,9 +376,7 @@ def main() -> int:
             plt.close(fig)
             print("  wrote 06_rho_per_task.png")
 
-    # ========================================================================
-    # 07_memory_trajectory.png — MemAvailable + Δpswpout over time per prompt
-    # ========================================================================
+    # 07_memory_trajectory.png - MemAvailable and pswpout delta over time per prompt
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))
     ax = axes[0]
     for p in prompts:
@@ -434,7 +403,7 @@ def main() -> int:
     if deltas:
         df = pd.DataFrame(deltas, columns=["task", "pswpout_delta"])
         order = sorted(df["task"].unique(), key=task_key)
-        data = [df[df.task == t]["pswpout_delta"].values * 4 for t in order]  # ×4 KB → KiB
+        data = [df[df.task == t]["pswpout_delta"].values * 4 for t in order]  # 4 KB pages to KiB
         ax.boxplot(data, labels=order, showmeans=True, showfliers=True)
         ax.set_ylabel("Δpswpout per prompt (KiB swap-out)")
         ax.set_title("Per-prompt UFS swap activity (4 KB pages)")

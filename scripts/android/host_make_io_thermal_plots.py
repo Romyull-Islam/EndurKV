@@ -1,27 +1,8 @@
 #!/usr/bin/env python3
-"""
-host_make_io_thermal_plots.py — visualise the I/O <-> heat coupling.
+"""I/O vs temperature plots for one study log dir: DDR temp vs memory, flash temp
+vs swap writes, per-prompt peak temps, and bytes-to-UFS and memory pressure vs heating.
 
-For a given log directory (short-ctx or long-ctx study), produce:
-
-  01_ddr_temp_vs_memory.png        — RAM controller temp over time + MemAvailable
-                                     overlay. Tests: does the LPDDR5X PHY heat
-                                     visibly with memory pressure?
-  02_flash_temp_vs_writes.png      — UFS controller temp over time + cumulative
-                                     pswpout (4 KB pages) overlay. Tests: does
-                                     the flash chip warm with swap activity?
-  03_temp_decomposition.png        — Per-prompt peak temps split into CPU/DDR/
-                                     flash families. Tests: which subsystem
-                                     dominates the thermal envelope?
-  04_io_to_heat_scatter.png        — Cross-prompt scatter: bytes-to-UFS (from
-                                     pswpout + storaged delta when available)
-                                     vs Δflash_temp_C. Quantifies "MB per
-                                     degree of flash heating".
-  05_ram_pressure_to_heat.png      — Cross-prompt scatter: working-set drop
-                                     (max MemTotal − MemAvail) vs ΔDDR_temp_C.
-
-Run:
-  python scripts/android/host_make_io_thermal_plots.py --log-dir logs/study_phone_8b
+Usage: python scripts/android/host_make_io_thermal_plots.py --log-dir logs/study_phone_8b
 """
 from __future__ import annotations
 
@@ -52,9 +33,7 @@ def main():
 
     plt.rcParams.update({"figure.dpi": 110, "savefig.dpi": 130, "font.size": 9})
 
-    # ----------------------------------------------------------------
     # Load every prompt's sensors.csv + run.json
-    # ----------------------------------------------------------------
     prompts = []
     for sen_p in sorted(log_dir.glob("*.sensors.csv")):
         pid = sen_p.name[: -len(".sensors.csv")]
@@ -87,9 +66,7 @@ def main():
             return None
         return pd.to_numeric(p["sen"][c], errors="coerce")
 
-    # ===============================================================
-    # 01 — DDR (RAM controller) temp + MemAvailable, 4 sample prompts
-    # ===============================================================
+    # 01 - DDR (RAM controller) temp + MemAvailable, 4 sample prompts
     pick_long = sorted(prompts, key=lambda p: -len(p["sen"]))[:4]
     fig, axes = plt.subplots(2, 2, figsize=(14, 8))
     for ax, p in zip(axes.flat, pick_long):
@@ -115,9 +92,7 @@ def main():
     plt.close(fig)
     print("  wrote 01_ddr_temp_vs_memory.png")
 
-    # ===============================================================
-    # 02 — Flash temp + cumulative pswpout, 4 prompts with most I/O
-    # ===============================================================
+    # 02 - Flash temp + cumulative pswpout, 4 prompts with most I/O
     def pswpout_delta(p):
         c = col(p, "vmstat_pswpout")
         if c is None: return 0
@@ -152,9 +127,7 @@ def main():
     plt.close(fig)
     print("  wrote 02_flash_temp_vs_writes.png")
 
-    # ===============================================================
-    # 03 — Per-prompt peak temperatures: CPU / DDR / flash side-by-side
-    # ===============================================================
+    # 03 - Per-prompt peak temperatures: CPU / DDR / flash side-by-side
     rows = []
     TRIP_PATTERNS = ("trip", "bcl-lvl", "ibat-lvl", "vbat", "pmh", "pmr", "pmih",
                      "wireless", "usb", "sdr")
@@ -203,9 +176,7 @@ def main():
     plt.close(fig)
     print("  wrote 03_temp_decomposition.png")
 
-    # ===============================================================
-    # 04 — Cross-prompt scatter: bytes-to-UFS vs ΔFlash_temp
-    # ===============================================================
+    # 04 - Cross-prompt scatter: bytes-to-UFS vs ΔFlash_temp
     rows = []
     for p in prompts:
         sen = p["sen"]
@@ -278,9 +249,7 @@ def main():
     plt.close(fig)
     print("  wrote 04_io_to_heat_scatter.png")
 
-    # ===============================================================
-    # 05 — Memory pressure vs DDR thermal change
-    # ===============================================================
+    # 05 - Memory pressure vs DDR thermal change
     rows = []
     for p in prompts:
         sen = p["sen"]

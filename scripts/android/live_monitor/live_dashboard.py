@@ -1,19 +1,7 @@
 #!/usr/bin/env python3
-"""
-OnePlus 15 LIVE resource/energy dashboard (the Android 'Xcode Instruments' live view).
-
-Polls the phone over adb at ~4 Hz and serves a browser dashboard with time-aligned
-tracks: battery power (W), CPU/GPU/NPU/DDR/skin temperature, CPU utilization, and
-per-cluster CPU frequency. Headless-friendly (no X needed) — open the printed URL.
-
-  python3 live_dashboard.py                 # serve on http://127.0.0.1:8717
-  python3 live_dashboard.py --port 9000 --hz 4 --csv run1.csv
-
-Env: ADB="/path/to/adb -s <serial>" overrides the adb command.
-
-Power note: a phone reads true draw only while DISCHARGING. Unplug USB (Wi-Fi adb) or
-use ../energy_measure.sh to disable charging; the dashboard shows battery status so you
-know when the wattage is real.
+"""Live browser dashboard for the phone: polls adb at ~4 Hz for battery power, temperatures,
+CPU utilization and per-cluster frequency. Power is only real while discharging.
+Usage: python3 live_dashboard.py [--port 8717] [--hz 4] [--csv run1.csv]   (env ADB overrides adb)
 """
 import argparse, json, os, shlex, subprocess, sys, threading, time
 from collections import deque
@@ -23,7 +11,7 @@ ADB = os.environ.get("ADB", "/home/mislam22/tools/platform-tools/adb -s 3C15B800
 DEV_SAMPLER = "/data/local/tmp/op15_sampler.sh"
 DEV_STOP = "/data/local/tmp/op15_sampler.stop"
 
-# ----------------------------------------------------------------------------- phone setup
+# phone setup
 def adb(*args, **kw):
     return subprocess.run(ADB + list(args), capture_output=True, text=True, **kw)
 
@@ -69,7 +57,7 @@ while [ ! -f "$SF" ]; do
 done
 """
 
-# ----------------------------------------------------------------------------- sampling state
+# sampling state
 BUF = deque(maxlen=8192)          # parsed samples
 LOCK = threading.Lock()
 T0 = [None]
@@ -138,7 +126,7 @@ def sampler_thread(csv_path):
                       for k in ["t","power","status","cpu","npu","gpu","ddr","skin","util","f0","f4","f7"]) + "\n")
             csv.flush()
 
-# ----------------------------------------------------------------------------- web server
+# web server
 HTML = r"""<!doctype html><html><head><meta charset=utf-8><title>OnePlus 15 — live</title>
 <style>
  body{margin:0;background:#0e1116;color:#cdd6e4;font:13px -apple-system,Segoe UI,Roboto,sans-serif}

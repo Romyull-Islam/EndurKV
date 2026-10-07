@@ -1,14 +1,9 @@
 #!/system/bin/sh
-# phone_wave8_v1fa2_selective.sh — v1_FA² with SELECTIVE ANCHORING (Wave-7 fixes).
-#
-# Wave-7 failed because: (a) all prompt tokens anchored → recent context starved → PPL up
-# and (b) insufficient cool-down left 1.8 GB free → state-swap forced 1552 MB swap-out.
-#
-# Wave-8 fixes:
-#   1. v1_fa2 binary: --anchor-top-k 32 keeps only top-32 attention-scored prompt
-#      positions as anchored, leaving recent_budget = 476 (huge recent window).
-#   2. Launcher MemAvailable gate: require >= 4 GB free before iter-1 starts.
-#   3. Strict cool-down to 33 C (no proceed-on-timeout).
+# phone_wave8_v1fa2_selective.sh: v1_fa2 long-decode stress with selective anchoring.
+# --anchor-top-k 32 anchors only the 32 highest-scored prompt positions, so the rest of the
+# budget goes to recent tokens (anchoring the whole prompt starved recent context).
+# Waits for MIN_FREE_GB of MemAvailable before the first iteration, since low free memory
+# forced swap-out during state swaps. Cools to battery 33 C first (up to COOL_MAX_S).
 
 set -u
 
@@ -50,7 +45,7 @@ cool_phone() {
     done
 }
 
-# Memory gate — wait for at least MIN_FREE_GB of MemAvailable.
+# Memory gate - wait for at least MIN_FREE_GB of MemAvailable.
 wait_for_memory() {
     local cell="$1"; local t0
     t0=$(date +%s)

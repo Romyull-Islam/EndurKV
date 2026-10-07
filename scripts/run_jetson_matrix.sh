@@ -1,37 +1,12 @@
 #!/bin/bash
-# ============================================================================
-# run_jetson_matrix.sh -- Jetson Orin NX, same protocol as the phone. (2026-08-05)
-#
-# WHY THE JETSON MATTERS. The two closest related systems -- KVSwap (MobiSys) and
-# MobiLoRA (ACL, with Honor) -- are both branded "mobile" but evaluate on Jetson
-# Orin boards, not phones. Measuring muKV on an Orin lets us compare against them
-# on THEIR hardware class instead of arguing across devices, and it separates two
-# things our phone results conflate: what is due to being memory-bound on a small
-# device, and what is due to the Adreno/Vulkan backend specifically.
-#
-# PROTOCOL IS THE PHONE'S, deliberately: 12K WikiText prompt + 4096 generated,
-# ctx 16384, batch 1, greedy, seed 42, f16 K/V for every policy. Identical inputs
-# are what make the two devices comparable at all.
-#
-# f16, NOT q8_0. Quantized KV is numerically broken on the phone's Adreno build
-# (random tokens; NLL above ln(vocab)). The Jetson is CUDA and q8_0 is fine there,
-# but using f16 keeps this table on the same footing as the corrected phone table
-# and as LongBench -- and it is the only format all policies can share, since a
-# per-head evictor needs FA-off and llama.cpp requires FA for a quantized V.
-#
-# CTXJ/PROMPTJ let the context be reduced when the board is co-tenanted. A
-# co-tenant grew to 9.7 GB mid-setup and a 512 MiB KV allocation began failing
-# outright (NvMapMemAllocInternalTagged error 12), so 16K is not always feasible.
-# An 8K run is not directly comparable to the phone's 16K table and must be
-# labelled as such -- but the POLICY ORDERING on Orin-class hardware is still
-# the point, since that is the class KVSwap and MobiLoRA evaluate on.
-#
-# LLAMA-1B ONLY. A co-tenant process holds ~8.5 GB of the board's 15 GB. Phi-3
-# needs 2.4 GB of weights plus 6.4 GB of f16 KV at 16K -- and compaction transiently
-# needs a SECOND full context -- so it cannot fit in the ~5 GB available. Running it
-# anyway would either OOM or silently fall back to the sparse path, which is exactly
-# the failure that produced a bogus 13x on the RTX. Phi-3 is deferred, not dropped.
-# ============================================================================
+# Jetson Orin NX matrix with the phone protocol: 12K WikiText prompt + 4096
+# generated tokens, ctx 16384, greedy, seed 42, Llama-3.2-1B. KVSwap and
+# MobiLoRA evaluate on Orin boards, so this compares on their hardware class.
+# f16 K/V for every policy: per-head evictors need FA-off, and llama.cpp needs
+# FA for a quantized V. CTXJ/PROMPTJ shrink the context when other jobs on the
+# board leave too little memory. Label such runs, they do not match the 16K table.
+# Phi-3 does not fit next to the other jobs, since compaction briefly needs a
+# second full context.
 set -u
 H=orin-nx
 RB=/home/romyull/ukv/code/entropy_probe/build-jetson-cuda/eviction_bench
@@ -42,15 +17,15 @@ ROUT=/home/romyull/ukv/logs/jm_$(date +%Y%m%d_%H%M%S)
 MU="--policy v1_fa2 --fa-on-evict --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70"
 
 ssh -o BatchMode=yes $H "mkdir -p $ROUT" 2>/dev/null
-# push the SAME prompt the phone used, so the workloads are identical
+# Push the same prompt the phone used.
 scp -o BatchMode=yes ${PROMPTJ:-/home/mislam22/EndurKV_workspace/EndurKV/benchmarks/ctx_sweep/llama1b_12288tok.txt} $H:$RP >/dev/null 2>&1
 
 flags_for(){ case "$1" in
   vanilla)    echo "--policy vanilla" ;;
   mukv_dfg)   echo "$MU --force-defrag" ;;
   mukv_nodfg) echo "$MU --no-defrag" ;;
-  # WikiText has no published SnapKV setting, so the baseline gets the shipped
-  # FasterDecoding default (window 32, avgpool-5) -- verified from snapkv_utils.py.
+  # SnapKV has no published WikiText setting, so use the FasterDecoding default
+  # (window 32, avgpool 5) from snapkv_utils.py.
   snapkv)     echo "--policy snapkv --obs-window 32 --snapkv-kernel 5 --n-sink 0" ;;
 esac; }
 
@@ -77,9 +52,8 @@ print("  [%-20s] prefill=%7.1fs decode=%7.1fs wall=%7.1fs tps=%7.2f cells=%6.0f 
   j['retained_kv_bytes']/(16*8*64*2*2.0), j.get('compaction_applied')))
 PY
 }
-# correctness gate FIRST: a timed run whose output is wrong is worthless, and that
-# is exactly how the phone GPU q8_0 pass wasted a full campaign.
-echo "=== correctness check (expected: Miller v. California) ==="
+# Check output correctness before any timed run.
+echo "correctness check (expected: Miller v. California)"
 scp -o BatchMode=yes /home/mislam22/EndurKV_workspace/EndurKV/benchmarks/longbench/hotpotqa/trunc_16384/llama1b/prompt_000.txt $H:/home/romyull/ukv/sanity.txt >/dev/null 2>&1
 ssh -o BatchMode=yes $H "cd /home/romyull/ukv && $RB --prompt sanity.txt --prompt-id sanity --eval-mode gen \
   --max-tokens 24 --ctx-size ${CTXJ:-16384} --model $RM --seed 42 --threads 6 --n-gpu-layers 99 --greedy \

@@ -1,26 +1,12 @@
 #!/bin/bash
-# ============================================================================
-# rerun_kd_speed_faithful.sh -- redo the pinned GPU speed cells for KeyDiff WITH
-# its decode-time eviction. (2026-08-17)
-#
-# WHY. /tmp/kd_speed was produced by the binary staged at 05:33, before
-# --keydiff-decode-block existed. Those cells show evicted_total_decode = 0, so
-# the cache grew 2048 -> 6144 across the 4096-token decode while muKV held ~1980.
-# The resulting numbers (33.7 tok/s at 337 mJ/token, ~11.4 W) measure OUR missing
-# mechanism, not KeyDiff: their Sec. 2.4 specifies B=1 during generation exactly so
-# the budget holds throughout. Publishing them would be the handicapped-StreamingLLM
-# error a second time. The old cells are kept under _nodecodeevict for the record.
-# ============================================================================
+# Pinned GPU speed cells for KeyDiff with decode-time eviction
+# (--keydiff-decode-block), so the budget holds during generation as in the
+# KeyDiff paper (Sec. 2.4). Older cells without it move to /tmp/kd_speed_nodecodeevict.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 LOG(){ echo "[$(date +%H:%M:%S)] $*"; }
-# 2026-08-22: the KD_LADDER_DONE gate is REMOVED. This run has no real dependency on the
-# LongBench ladder -- the gate existed only to stop two campaigns sharing the phone, and
-# supervise_campaign.sh now enforces that with an flock. The chain cost us these cells:
-# the ladder aborted after its bounded 15 h wait during the 44 h outage, so this script
-# aborted too, and neither had a supervisor to restart it. Independent queues from now on.
 
-# stage the decode-block-capable Vulkan build alongside, in its own dir
+# Stage the Vulkan build with --keydiff-decode-block in its own dir
 adb_safe_shell "mkdir -p /data/local/tmp/ukv_kd2" < /dev/null
 for so in /home/mislam22/EndurKV_workspace/EndurKV/llama.cpp/build-android-vulkan/bin/lib*.so; do
   adb push "$so" /data/local/tmp/ukv_kd2/ < /dev/null >/dev/null 2>&1

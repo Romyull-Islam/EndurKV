@@ -1,24 +1,7 @@
 #!/usr/bin/env python3
-"""
-PLOT 2: Cache size SCATTER vs instantaneous DDR temperature (aggregate cross-cell).
+"""Plot 2: cache size vs DDR temperature, pooled over cells in waves 3-10.
 
-For every cell in waves 3-10 (every sub-directory that has a sensors.csv +
-optional stress.csv), sample (cache_size, ddr_temp_C) points:
-
-  - From sensors.csv: every 5th row -> ddr_temp_mc / 1000.0
-  - For the matching cache_size at that time:
-        * If a per-iter stress.csv exists, use the iter-bucket -> peak_kv_cells
-          for the iter that contains the sensor sample's monotonic offset.
-        * Otherwise (sensors-only cell), use that cell's max peak_kv_cells as a
-          constant.
-
-Each point is colored by policy family (vanilla red, v1 blue,
-v1_fa2_stack green, ...).
-
-Left panel  : raw scatter (log-x).
-Right panel : Pareto-style median + IQR per log-cache_size bin (all colors
-              aggregated), plus a fitted line  DDR = a + b * log10(cache_size).
-
+Pairs every 5th sensors.csv sample with its iter's peak_kv_cells from stress.csv.
 Output: figures/relationship_plots/02_cache_temp_scatter.png
 """
 
@@ -33,7 +16,6 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-# ----------------------------------------------------------------------
 PHONE_LOGS  = "/home/mislam22/EndurKV_workspace/phone-logs"
 OUT_DIR     = "/home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots"
 OUT_FIG     = os.path.join(OUT_DIR, "02_cache_temp_scatter.png")
@@ -85,10 +67,7 @@ def col_idx(header_line: str, name: str):
 
 
 def load_stress_iters(stress_path):
-    """
-    Return a list of (t_start_s, peak_kv_cells) for each iter, sorted by
-    t_start. peak_kv defaults to last row when missing.
-    """
+    """Return [(t_start_s, peak_kv_cells)] per iter from stress.csv, sorted by time."""
     iters = []
     try:
         with open(stress_path) as f:
@@ -157,8 +136,7 @@ def collect_points():
         # max peak_kv as fallback if no per-iter or sensors-only cell
         max_pk = max((it[1] for it in iters), default=0)
         if max_pk == 0:
-            # try sensors-only fallback: cell's "expected" cache from name
-            # (rare path; produces a constant per cell)
+            # No peak_kv_cells in stress.csv, skip the cell.
             continue
 
         # Stream the sensors file every Nth row
@@ -221,7 +199,7 @@ def make_plot(family_points):
 
     fig, (axL, axR) = plt.subplots(1, 2, figsize=(14, 6))
 
-    # --- Left: raw scatter, color by policy ---
+    # Left: raw scatter, color by policy
     order = ["vanilla", "llamacpp_stock", "tova", "pyramid",
              "v1", "v1_fa", "v1_fa2", "v1_fa2_selective", "v1_fa2_stack",
              "other"]
@@ -255,7 +233,7 @@ def make_plot(family_points):
         except Exception:
             pass
 
-    # --- Right: Pareto-style median + IQR per log-cache bin ---
+    # Right: Pareto-style median + IQR per log-cache bin
     if n_total > 0:
         log_x = np.log10(all_x[mask])
         nbins = 20

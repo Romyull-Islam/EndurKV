@@ -1,19 +1,7 @@
 #!/usr/bin/env python3
-"""
-PLOT 6: Counter-factual ablation - each mechanism removed from v1_FA2-stack.
-
-Compares 5 cells (Phi-3 long-decode protocol) showing how each layer of
-EndurKV control affects peak DDR temperature and throttle outcomes:
-
-  - Wave-4 vanilla              (no eviction, no control)
-  - Wave-4 v1 K=512             (eviction only, no control)
-  - Wave-6 v1_fa bounded        (+ state-swap, no control)
-  - Wave-8 v1_fa2 selective     (+ smarter anchoring, no control)
-  - Wave-9 v1_fa2-stack         (+ Q8 K + watchdog + adaptive K) -- only one
-                                that avoids kernel throttle.
-
-Output: figures/relationship_plots/06_ablation_stack.png
-"""
+"""Plot 6: ablation of the v1_fa2 stack on the Phi-3 long-decode protocol. Peak DDR temperature
+and throttle outcome as mechanisms are added: vanilla, v1 K=512, + state swap, + selective
+anchoring, + Q8 K, watchdog and adaptive K. Writes figures/relationship_plots/06_ablation_stack.png."""
 
 import os
 import matplotlib
@@ -24,10 +12,7 @@ import numpy as np
 
 OUT_FIG = "/home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/06_ablation_stack.png"
 
-# Ordered from baseline (top of stack added last) to fully-stacked (bottom).
-# We plot top-to-bottom so the most-stacked variant sits at the top of the bar
-# chart. Each row records:
-#   label, mechanism_delta, peak_ddr_C, throttle_bool
+# Ordered from baseline to fully stacked. Fields: label, added mechanism, peak DDR (C), throttled.
 CELLS = [
     {
         "label":  "Wave-4 vanilla",
@@ -68,7 +53,7 @@ NO_THROTTLE_COLOR = "#2ca02c"  # green
 def main():
     os.makedirs(os.path.dirname(OUT_FIG), exist_ok=True)
 
-    # We want most-stacked at TOP of plot, so reverse for matplotlib's y order.
+    # Reverse so the fully stacked variant is at the top.
     rows = list(reversed(CELLS))
     n = len(rows)
 
@@ -76,7 +61,7 @@ def main():
     ddrs = [r["ddr"] for r in rows]
     colors = [THROTTLE_COLOR if r["throttle"] else NO_THROTTLE_COLOR for r in rows]
 
-    # Build y-axis labels combining variant name + mechanism delta.
+    # y labels: variant name and added mechanism.
     ytick_labels = [f"{r['label']}\n{r['delta']}" for r in rows]
 
     fig, ax = plt.subplots(figsize=(12, 7))
@@ -92,8 +77,7 @@ def main():
     ax.grid(axis="x", linestyle="--", alpha=0.35)
     ax.set_axisbelow(True)
 
-    # Annotate each bar with the delta from the PREVIOUS condition (in the
-    # original stacking order = CELLS order). Build a lookup from row label.
+    # Annotate each bar with the change from the previous row in CELLS order.
     prev_ddr_by_label = {}
     for i, c in enumerate(CELLS):
         if i == 0:

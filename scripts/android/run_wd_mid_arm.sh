@@ -1,19 +1,9 @@
 #!/bin/bash
-# ============================================================================
-# run_wd_mid_arm.sh -- MID anchor: the throttle-prevention sweet spot. (2026-08-28)
-# Measured: muKV wd-off spends 8.2% of a soak at the 883 MHz vendor floor while
-# holding a 1377 MHz steady clock. The cliff anchor (47C) engages too rarely to
-# help (floor 6.4%, tps unchanged); the early anchor (35C) over-caps to 1014 MHz
-# steady and loses 31% throughput. A MID anchor (battery 42C / skin 45C) should
-# hold tier 2 (1497 MHz) -- above the 883 floor, below full -- so it prevents the
-# drop to 883 instead of replacing it. If the mechanism works, floor residency
-# falls further AND throughput rises slightly, which is the claim being tested.
-# Two validated ladder anchors exist (matching the GPU soak's wd-early /
-# wd-vendor pair): vendor-anchored (battery 47.0+, skin 50.0+) glides only in
-# the cliff run-up; EARLY (battery 35.0+, skin 39.5+) glides during workloads
-# that never near the cliff, so BOTH sensors demonstrably act. Same staircase,
-# same code, only the anchor shifted via env (BAT_L0/SKIN_L0).
-# ============================================================================
+# run_wd_mid_arm.sh: CPU soak arm with the watchdog ladder anchored between the early
+# (battery 35 C) and vendor-cliff (battery 47 C) anchors, at battery 42 C and skin 45 C.
+# The aim is to hold an upper tier above the 883 MHz vendor floor instead of falling to it.
+# Same watchdog code, only the anchor is shifted via BAT_L0 and SKIN_L0. Six back-to-back
+# 4096-token generations with no cooling in between.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 LOG(){ echo "[$(date +%H:%M:%S)] $*"; }

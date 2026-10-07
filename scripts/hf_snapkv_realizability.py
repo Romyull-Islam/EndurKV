@@ -1,28 +1,8 @@
 #!/usr/bin/env python3
-# ============================================================================
-# hf_snapkv_realizability.py -- the runtime-isolation experiment.  (2026-08-03)
-#
-# THE QUESTION. SnapKV publishes "8.2x memory efficiency"; ported to llama.cpp we
-# measure 1.00-1.49x, and on Phi-3 exactly nothing (11157 of 11157 cells retained).
-# Is that because our port is wrong, or because the RUNTIME cannot express what
-# SnapKV selects? This script answers it by running the SAME selection rule in
-# HuggingFace, where each attention head owns a separate KV tensor.
-#
-# WHY MEMORY, NOT SPEED. Speed on an A100-class card depends on batch, kernel and
-# attention implementation, none of which we can match to their setup -- a speed
-# comparison would be arguing about confounds. The realizability claim is
-# arithmetic and confound-free: given a per-head budget K, how many cache entries
-# does the runtime actually still hold?
-#   - HuggingFace: per-head tensors, so head h can be gathered to exactly K -> the
-#     cache is K*H entries and the reduction is real.
-#   - llama.cpp: ONE cell array shared by every head and layer, so a cell survives
-#     if ANY of the H*L selectors keeps it. The union is what remains.
-# Both numbers are computed from the same keep-sets, so the only difference is
-# how the runtime stores them.
-#
-# Neither number is "wrong": SnapKV's 8.2x is real on its own stack. The point is
-# that it does not survive the port to the storage layout on-device engines use.
-# ============================================================================
+# Runs the SnapKV selection rule in HuggingFace and counts the cache entries left
+# under two storage layouts, from the same keep-sets: per KV head (HuggingFace) and
+# one cell array shared by all heads and layers (llama.cpp, where a cell survives
+# if any selector keeps it).
 import argparse, json, torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -36,15 +16,13 @@ ap.add_argument("--max-tokens", type=int, default=12288)
 ap.add_argument("--out", default="/tmp/hf_snapkv.json")
 a = ap.parse_args()
 
-# trust_remote_code=False deliberately: Phi-3's bundled modelling code calls
-# DynamicCache.from_legacy_cache(), removed in transformers 5.x. transformers has
-# had native Phi3 support since 4.41, so the built-in implementation is both newer
-# and the one a reader would reproduce with.
+# No trust_remote_code: the bundled Phi-3 code calls DynamicCache.from_legacy_cache(),
+# which transformers 5.x removed. The built-in Phi3 model is used instead.
 tok = AutoTokenizer.from_pretrained(a.model)
 model = AutoModelForCausalLM.from_pretrained(
     a.model, dtype=torch.float16, device_map="cuda",
-    attn_implementation="eager")     # eager: we need the attention weights, exactly
-model.eval()                          # as SnapKV does (it cannot use FlashAttention)
+    attn_implementation="eager")     # eager returns the attention weights,
+model.eval()                          # which SnapKV needs
 
 text = open(a.prompt, errors="replace").read()
 ids = tok(text, return_tensors="pt").input_ids[:, :a.max_tokens].cuda()
@@ -60,12 +38,8 @@ _, H, _, _ = out.attentions[0].shape
 HKV = getattr(model.config, "num_key_value_heads", H)
 GRP = H // HKV
 print("layers=%d  query heads=%d  KV heads=%d  (GQA group=%d)" % (L, H, HKV, GRP))
-# GQA MATTERS HERE. SnapKV selects per QUERY head, but the cache is stored per
-# KV head -- so even in HuggingFace, the GRP query heads sharing one KV head must
-# union before anything can be dropped. With no GQA (Phi-3, 32/32) that union is
-# trivial; with Llama-3.2-1B (32 query / 8 KV) it is a union of 4. This is a
-# SMALLER union than llama.cpp's (which is over all heads AND all layers), and
-# reporting HF as "exactly K per head" would overstate its reduction.
+# SnapKV selects per query head but the cache is stored per KV head, so even in
+# HuggingFace the GRP query heads sharing a KV head are unioned (4 on Llama-3.2-1B).
 
 W = min(a.window, N)
 prefix = N - W
@@ -102,7 +76,7 @@ res = dict(model=a.model, prompt_tokens=N, budget=a.budget, layers=L, heads=H, k
            union_per_layer_min=min(union_per_layer), union_per_layer_max=max(union_per_layer))
 json.dump(res, open(a.out, "w"), indent=1)
 
-print("\n--- SAME selection, two storage layouts ---")
+print("SAME selection, two storage layouts")
 print("HuggingFace  (per-KV-head tensors): %8.1f entries/head -> %5.2fx reduction"
       % (hf_entries_per_head, N / hf_entries_per_head))
 print("llama.cpp    (shared cell array): %8d cells        -> %5.2fx reduction"

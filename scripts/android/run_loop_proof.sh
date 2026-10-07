@@ -1,31 +1,10 @@
 #!/bin/bash
-# ============================================================================
-# run_loop_proof.sh -- do the two loops and the lever actually work on the phone? (2026-09-04)
-#
-# The scheduler (ukv_sched.sh v2.1) picks a plan from its cost table for the battery tier,
-# runs it, meters it, and lets two loops move the lever: the performance loop nudges it toward
-# performance when the request ran over its time budget, the energy loop toward energy when it
-# drew more than its predicted energy; when both budgets are met the bias decays back. None of
-# this had ever fired in a measured run (the earlier proof lost every update to a key bug), so
-# this campaign provokes each loop with a REAL disturbance and checks the response:
-#
-#   ctrl_mains     told it is on mains         -> full performance, the control
-#   healthy        SoC 80                      -> 1200 MHz with decode at 902, 4096 tokens
-#   mid_1          SoC 40                      -> 1200 MHz with decode at 726, cap 1024
-#   mid_burn_1/2   SoC 40, four idle cores spinning during the request (another app) ->
-#                  energy over budget -> energy loop, lever -0.1 each -> bias -0.2
-#   mid_after_1/2  SoC 40, no disturbance      -> at L=0.3 the walk reaches gpu902; both
-#                  budgets met -> the bias decays (-0.15, then -0.10) and the plan returns
-#   low_1          SoC 15                      -> gpu 902, cap 512
-#   low_cap_1/2/3  SoC 15, an external 726 MHz cap written 12 s into the request (the vendor
-#                  thermal limiter) -> time over budget -> performance loop, +0.1 each -> +0.3
-#   low_after_1/2  SoC 15, no disturbance      -> at L=0.3 the time budget rejects gpu902 and
-#                  the scheduler takes 1200 with decode at 726, cap 1024; then the bias decays
-#
-# Same matched protocol as the other proofs: cool gate DDR <= 35 C, battery <= 33 C, charging
-# off, CPU caps pinned, --ignore-eos so every request decodes exactly its cap. The table is reset
-# to its seed and the bias file removed at the start.
-# ============================================================================
+# run_loop_proof.sh: check that the scheduler's two loops and its lever respond on the phone.
+# Each loop gets a real disturbance: four spinning cores during mid-tier requests (energy over
+# budget, energy loop) and an external 726 MHz GPU cap 12 s into low-tier requests (time over
+# budget, performance loop). Undisturbed requests afterwards check that the bias decays.
+# Protocol: cool gate DDR <= 35 C and battery <= 33 C, charging off, CPU caps pinned,
+# --ignore-eos. The cost table is reset to its seed and the bias file removed at the start.
 set -u
 export ADB_CALL_TIMEOUT=900   # the wrapper kills and RERUNS any adb shell call past this; a request runs 145 to 230 s
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
@@ -78,7 +57,7 @@ cell(){ # tag  disturbance(none|cpuburn|gpucap726)  scheduler-args
       adb_safe_shell "su -c 'for i in 0 1 2 3; do nohup taskset \$((1<<i)) sh -c \"while :; do :; done\" >/dev/null 2>&1 & done'" < /dev/null >/dev/null 2>&1
       sleep 3; launch; waitdone; burn_stop;;
     gpucap726)
-      # the request starts under the scheduler's 902 cap; 12 s in, an external limiter drops the GPU to 726
+      # 12 s into the request, an external limiter drops the GPU cap to 726 MHz
       launch; sleep 12
       adb_safe_shell "su -c 'echo 726000000 > /sys/class/kgsl/kgsl-3d0/max_gpuclk; cat /sys/class/kgsl/kgsl-3d0/max_gpuclk'" < /dev/null | sed 's/^/    external cap now: /'
       waitdone;;

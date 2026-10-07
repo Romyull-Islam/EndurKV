@@ -1,18 +1,11 @@
 #!/bin/bash
-# ============================================================================
-# run_gap_closure.sh -- the last three coverage gaps. (2026-08-25)
-# Waits for the Phi-3 CPU campaign; one campaign owns the phone at a time.
-#
-#  D. KeyDiff on GPU Llama-1B   -- the two GPU rows are otherwise not policy-
-#     matched (GPU Phi-3 has KeyDiff, GPU Llama-1B does not).
-#  E. KeyDiff on CPU Bonsai-8B  -- the only missing cell in that row.
-#  F. gemma-2B CPU, published configs, current build -- same double defect the
-#     Phi-3 CPU table had: pre-2026-07-17 binary AND a uniform k_nominal=1024
-#     for every policy instead of each paper's own setting.
-#
-# H2O uses 20%-of-N resolved per prompt: gemma 6382 -> 1276.
-# Generations kept and battery voltage recorded on every cell.
-# ============================================================================
+# run_gap_closure.sh: three missing table cells. Waits for the Phi-3 CPU campaign,
+# since only one campaign may use the phone at a time.
+#   D. KeyDiff on GPU Llama-1B, so both GPU rows have the same policies
+#   E. KeyDiff on CPU Bonsai-8B
+#   F. Gemma-2B on CPU, current build, each policy at its published config
+#      (H2O 20% of a 6382-token prompt = 1276)
+# Generations are kept and battery voltage is logged for every cell.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 LOG(){ echo "[$(date +%H:%M:%S)] $*"; }
@@ -63,7 +56,7 @@ cell /tmp/gap_gpu_llama1b keydiff2048 $VK $MOD/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 # E. KeyDiff, CPU, Bonsai-8B (matching nat_bonsai: 10074 prompt + 4096)
 cell /tmp/gap_cpu_bonsai keydiff2048 $CB $MOD/Bonsai-8B-Q1_0.gguf \
      /data/local/tmp/endurkv/corpora/prompt_12k.txt 4096 0 $KD
-# F. gemma-2B CPU, published configs (6382 prompt -> H2O 20% = 1276)
+# F. Gemma-2B CPU, published configs (6382-token prompt, H2O 20% = 1276)
 G=/tmp/gap_cpu_gemma; GM=$MOD/gemma-2-2b-it-Q4_K_M.gguf; GP=/data/local/tmp/endurkv/corpora/prompt_7k.txt
 cell $G vanilla      $CB $GM $GP 2048 0 --policy vanilla --k-nominal 1024
 cell $G mukv         $CB $GM $GP 2048 0 $MU --k-nominal 1024

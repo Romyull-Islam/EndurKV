@@ -1,13 +1,9 @@
 #!/bin/bash
-# ============================================================================
-# run_split_clock_proof.sh -- measure the phase-aware plans the lever scheduler predicts
-# (2026-09-03). Prefill at 1200 MHz, decode capped at 902 or 726 MHz, K=1024, 4096 output
-# tokens, the 9737-token prompt, n=3 each, same pinned protocol as run_energy_aware_proof_v2
-# (CPU caps pinned, cool gate, taskset f0 nice -20, sampler v6 recording the GPU clock).
-# The controller is not used: the clock caps are set explicitly (prefill by the script,
-# decode by --gpu-mhz-decode in the engine), so the cells are the plans' true costs.
+# Measures split GPU clock plans: prefill at 1200 MHz, decode capped at 902 or 726 MHz.
+# muKV K=1024, 9737-token prompt, 4096 output tokens, n=3, same pinned protocol as
+# run_energy_aware_proof_v2 (CPU caps pinned, cool gate, taskset f0 nice -20).
+# Clocks are set explicitly (prefill by this script, decode by --gpu-mhz-decode), no controller.
 # Compare with /tmp/ea_proof_v2 gpu_healthy (1200/1200), gpu_mid (902/902), gpu_low (726/726).
-# ============================================================================
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 BIN=/data/local/tmp/ukv
@@ -67,7 +63,7 @@ cell(){ # tag  prefill_mhz  decode_mhz
 }
 
 for R in 1 2 3; do
-  echo "=== replicate $R ==="
+  echo "replicate $R"
   cell gpu1200d902_r$R 1200 902
   cell gpu1200d726_r$R 1200 726
 done

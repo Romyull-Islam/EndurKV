@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
-"""Aggregate per-run meta.json files pulled from the phone into a single CSV
-and a side-by-side comparison table.
+"""Aggregate per-run meta.json files pulled from the phone into one CSV and a comparison table.
 
-Usage:
-    host_aggregate_phone_logs.py --in-dir <pulled-logs-dir> [--out-csv path]
+Usage: host_aggregate_phone_logs.py --in-dir <pulled-logs-dir> [--out-csv path]
 """
 import argparse, json
 from pathlib import Path
@@ -33,8 +31,8 @@ def main():
     df.to_csv(args.out_csv, index=False)
     print(f"wrote {args.out_csv}")
 
-    # Pivot: per (model, prompt_id, K) → policies columns
-    print("\n=== Per-(prompt, K) comparison ===")
+    # One table per (model, prompt_id, K), one row per policy
+    print("Per-(prompt, K) comparison")
     for keyset, grp in df.groupby(["model", "prompt_id", "k_nominal"]):
         m, p, k = keyset
         print(f"\n  {Path(m).stem}  prompt={p}  K={k}:")
@@ -43,7 +41,7 @@ def main():
         print(sub.to_string(index=False))
 
     # Side-by-side summary
-    print("\n=== POLICY HEADLINE ===")
+    print("POLICY HEADLINE")
     agg = df.groupby("policy").agg(
         n=("prompt_id","count"),
         prefill_ms_mean=("prefill_ms","mean"),

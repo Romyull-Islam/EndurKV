@@ -1,28 +1,10 @@
 #!/bin/bash
-# ============================================================================
-# CONTROL EXPERIMENT (2026-07-27): does an 8B model run on the Adreno 840 GPU?
-#
-# WHY: Bonsai-8B (Q1_0, 1-bit) fails on the phone GPU two ways -- vk::DeviceLostError
-# under the eviction_bench harness, and numerically broken Vulkan Q1_0 kernels
-# (nan PPL, degenerate text) on the Prism build. Those are confounded: we cannot
-# tell whether 8B-on-Adreno fails because of SIZE or because of the 1-BIT KERNEL.
-#
-# This script removes the confound by running a same-scale 8B in a Vulkan-native
-# quant: DeepSeek-R1-Distill-Llama-8B-Q4_K_M (llama arch, 4.58 GB, 32 layers).
-#   - If it runs -> the Bonsai failure is the Q1_0 Vulkan kernel, not model size,
-#     and "8B on mobile GPU" stays viable for the paper.
-#   - If it also dies -> Adreno cannot sustain 8B prefill at all, and the CPU+muKV
-#     deployment claim is about the device, not about the quant.
-#
-# STAGE 0 is the MANDATORY output-validity check (PLATFORMS.md): greedy GPU-vs-CPU
-# diff + a finite-PPL cell. Bonsai passed every mechanism check while computing
-# garbage; no timing number is recorded here until logits are proven finite.
-# STAGE 1 finds the largest prompt that completes (the question asked of Bonsai).
-# STAGE 2 runs vanilla / muKV / SnapKV at that size, cooled, with energy.
-#
-# Serialised by design: NEVER run while the NIAH campaign is live -- concurrent
-# device work contaminates every timed and energy-measured cell.
-# ============================================================================
+# Control: does an 8B model in a Vulkan-native quant (DeepSeek-R1-Distill-Llama-8B Q4_K_M)
+# run on the Adreno 840? Separates model size from the Q1_0 kernel as the cause of Bonsai-8B's GPU failures.
+# Stage 0: greedy GPU vs CPU output diff, stop if they differ (wrong kernels).
+# Stage 1: largest prompt that completes on the GPU.
+# Stage 2: vanilla, muKV, SnapKV at that size, cooled, with energy.
+# Do not run alongside another phone campaign, it would contaminate timing and energy.
 set -u
 for _p in ${ADB_PORTS:-5152 5037 5151}; do
   (exec 3<>/dev/tcp/127.0.0.1/$_p) 2>/dev/null || continue   # never poke a dead port (starts a squatting adb server)
@@ -43,7 +25,7 @@ MU="--policy v1_fa2 --fa-on-evict --n-sink 4 --adaptive-anchor --adaptive-rmin 3
 
 adb_safe_shell "mkdir -p $OUT" < /dev/null
 
-# ---- push the model once (4.58 GB; skip if already correct size) -----------
+# push the model (4.58 GB) unless the device copy already has the right size
 have=$(adb_safe_shell "su -c 'stat -c %s $DEV_MODEL 2>/dev/null || echo 0'" < /dev/null | tr -d '\r ')
 want=$(stat -c %s "$HOST_MODEL")
 if [ "${have:-0}" != "$want" ]; then
@@ -58,8 +40,8 @@ cool(){ CG=$(adb_safe_shell "su -c '. /data/local/tmp/endurkv/scripts/cool_gate.
         echo "$CG" | tail -1
         case "$CG" in *"cool ddr="*) return 0;; *) echo "[SKIP-HOT] gate failed"; return 1;; esac; }
 
-# ============ STAGE 0 — output validity (no timing recorded yet) ============
-echo "=== STAGE 0: output-validity check (GPU vs CPU greedy diff + finite PPL) ==="
+# STAGE 0 - output validity (no timing recorded yet)
+echo "STAGE 0: output-validity check (GPU vs CPU greedy diff + finite PPL)"
 adb_safe_shell "su -c 'head -c 2000 $PROMPT > /data/local/tmp/l8b_short.txt'" < /dev/null
 for BE in gpu cpu; do
   if [ $BE = gpu ]; then B=$VK; NGL=99; TH=4; else B=$CPUB; NGL=0; TH=6; fi
@@ -71,13 +53,13 @@ for BE in gpu cpu; do
     > $OUT/valid_$BE.out 2> $OUT/valid_$BE.err" < /dev/null
 done
 adb_safe_pull "$OUT" "$OUT_HOST/"
-echo "--- greedy outputs (MUST be identical) ---"
+echo "greedy outputs (MUST be identical)"
 diff "$OUT_HOST/$(basename $OUT)/valid_gpu.txt" "$OUT_HOST/$(basename $OUT)/valid_cpu.txt" >/dev/null 2>&1 \
   && echo "PASS: GPU == CPU" || { echo "FAIL: GPU != CPU -- kernels are wrong, STOPPING (this is the Bonsai failure mode)"; \
        head -c 300 "$OUT_HOST/$(basename $OUT)/valid_gpu.txt" 2>/dev/null; exit 2; }
 
-# ============ STAGE 1 — largest prompt that completes on GPU ================
-echo "=== STAGE 1: prompt-length ceiling on Adreno (vanilla) ==="
+# STAGE 1 - largest prompt that completes on GPU
+echo "STAGE 1: prompt-length ceiling on Adreno (vanilla)"
 BEST=0
 for BYTES in 2000 4000 8000 16000 32000 44308; do
   cool || continue
@@ -95,11 +77,11 @@ for BYTES in 2000 4000 8000 16000 32000 44308; do
     break
   fi
 done
-echo "=== largest completing prompt: $BEST bytes ==="
+echo "largest completing prompt: $BEST bytes"
 [ "$BEST" = 0 ] && { echo "8B does not run on this GPU at any tested size"; adb_safe_pull "$OUT" "$OUT_HOST/"; exit 3; }
 
-# ============ STAGE 2 — vanilla / muKV / SnapKV at the working size =========
-echo "=== STAGE 2: three policies at $BEST bytes, cooled, with energy ==="
+# STAGE 2 - vanilla / muKV / SnapKV at the working size
+echo "STAGE 2: three policies at $BEST bytes, cooled, with energy"
 adb_safe_shell "su -c 'head -c $BEST $PROMPT > /data/local/tmp/l8b_run.txt'" < /dev/null
 cell(){ local TAG=$1; shift
   cool || return
@@ -118,4 +100,4 @@ cell mukv    $MU
 cell snapkv  --policy snapkv --obs-window 64 --n-sink 0
 
 adb_safe_pull "$OUT" "$OUT_HOST/"
-echo "=== ALL DONE -> $OUT_HOST/$(basename $OUT) ==="
+echo "ALL DONE -> $OUT_HOST/$(basename $OUT)"

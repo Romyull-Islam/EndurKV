@@ -1,32 +1,8 @@
 #!/usr/bin/env python3
-"""
-Phase E.1+ — entropy vs. positional distribution of high-attention source tokens.
-
-For each (prompt, step) pair, computes per-step features describing WHERE in
-the source sequence the model's attention is concentrated, then correlates
-those features with output entropy.
-
-Features per step (averaging over layers; head-averaged inside each .attn.bin):
-    centroid_norm       weighted mean source-token position, normalized to [0,1]
-    spread_norm         weighted std of source-token position, normalized to [0,1]
-    top1_pos_norm       position of the most-attended source token, normalized
-    mass_first_4        fraction of attention on the first 4 source tokens
-                        (the "attention sink" region)
-    mass_last_16        fraction of attention on the most recent 16 positions
-                        (the "recency window")
-    mass_middle         1 - mass_first_4 - mass_last_16  (the bulk we'd prune)
-
-Outputs:
-    figures/pos_01_entropy_vs_centroid_norm.{pdf,png}
-    figures/pos_02_entropy_vs_spread.{pdf,png}
-    figures/pos_03_entropy_vs_mass_buckets.{pdf,png}      (3-panel: first/last/middle)
-    figures/pos_04_heatmap_entropy_x_top1pos.{pdf,png}    (entropy bin × top1-pos bin density)
-    figures/position_summary.json                          numerical results
-
-Usage:
-    LOG_SUBDIR=study_8b_longctx PROMPTS_PATH=data/prompts_longctx.jsonl \\
-        python3 scripts/16_position_distribution.py
-"""
+"""Correlate output entropy with where attention lands in the source sequence: per-step
+centroid, spread, top-1 position, and mass on the first 4 / last 16 / middle tokens.
+Writes figures/pos_01..04 and figures/position_summary.json. Usage:
+LOG_SUBDIR=study_8b_longctx PROMPTS_PATH=data/prompts_longctx.jsonl python3 scripts/16_position_distribution.py"""
 from __future__ import annotations
 
 import json
@@ -65,7 +41,6 @@ K_FIRST = 4    # attention-sink window
 K_LAST  = 16   # recency window
 
 
-# --------------------------------------------------------------------------- #
 def load_attn_bin(path: Path):
     with open(path, "rb") as f:
         if f.read(4) != b"ATTN":
@@ -83,11 +58,8 @@ def load_attn_bin(path: Path):
 
 
 def step_position_features(layers_for_step: list[np.ndarray]):
-    """Compute positional features from one step's per-layer attention.
-    Each per-layer array is already head-averaged (sums to 1 per layer).
-    We further average over layers to get a single distribution over source
-    positions for this step, then compute features.
-    """
+    """Positional features for one step. Layer arrays are already head-averaged and are
+    averaged over layers here into one distribution over source positions."""
     if not layers_for_step or layers_for_step[0].size == 0:
         return None
     n_kv = layers_for_step[0].shape[0]
@@ -135,7 +107,6 @@ def step_position_features(layers_for_step: list[np.ndarray]):
     }
 
 
-# --------------------------------------------------------------------------- #
 def task_from_prompt_id(pid: str, lookup: dict) -> str:
     if pid in lookup:
         return lookup[pid]
@@ -213,7 +184,7 @@ def main() -> int:
         "per_task": {},
     }
 
-    # --- global Spearman: entropy vs each feature ---
+    # global Spearman: entropy vs each feature
     feats = ["centroid_norm", "spread_norm", "top1_pos_norm",
              "mass_first_4", "mass_last_16", "mass_middle"]
     for f in feats:
@@ -223,7 +194,7 @@ def main() -> int:
             "mean": float(df[f].mean()), "median": float(df[f].median()),
         }
 
-    # --- per-task Spearman ---
+    # per-task Spearman
     for task in sorted(df["task"].unique()):
         sub = df[df["task"] == task]
         if len(sub) < 8: continue
@@ -233,9 +204,7 @@ def main() -> int:
             per[f] = {"n": int(len(sub)), "spearman_rho": float(rho), "p_value": float(p)}
         summary["per_task"][task] = per
 
-    # ====================================================================== #
-    # Plot 01 — entropy vs centroid_norm                                      #
-    # ====================================================================== #
+    # Plot 01: entropy vs centroid_norm
     fig, ax = plt.subplots(figsize=(8, 5))
     for task, gsub in df.groupby("task"):
         ax.scatter(gsub["H_nats"], gsub["centroid_norm"], s=6, alpha=0.4, label=task)
@@ -251,9 +220,7 @@ def main() -> int:
     fig.savefig(FIG_DIR / f"pos_01_entropy_vs_centroid{SUFFIX}.png", dpi=200)
     plt.close(fig)
 
-    # ====================================================================== #
-    # Plot 02 — entropy vs spread                                             #
-    # ====================================================================== #
+    # Plot 02: entropy vs spread
     fig, ax = plt.subplots(figsize=(8, 5))
     for task, gsub in df.groupby("task"):
         ax.scatter(gsub["H_nats"], gsub["spread_norm"], s=6, alpha=0.4, label=task)
@@ -269,9 +236,7 @@ def main() -> int:
     fig.savefig(FIG_DIR / f"pos_02_entropy_vs_spread{SUFFIX}.png", dpi=200)
     plt.close(fig)
 
-    # ====================================================================== #
-    # Plot 03 — entropy quintile vs mass in [first / middle / last] buckets   #
-    # ====================================================================== #
+    # Plot 03: entropy quintile vs mass in [first / middle / last] buckets
     df["H_quintile"] = pd.qcut(df["H_nats"], q=5,
                                labels=["Q1 (lowest H)", "Q2", "Q3", "Q4", "Q5 (highest H)"])
     bucket_means = df.groupby("H_quintile")[["mass_first_4", "mass_last_16", "mass_middle"]].mean()
@@ -303,9 +268,7 @@ def main() -> int:
         for q in bucket_means.index
     }
 
-    # ====================================================================== #
-    # Plot 04 — 2D density: entropy bin × top1-position bin                   #
-    # ====================================================================== #
+    # Plot 04: 2D density: entropy bin x top1-position bin
     H_bins = np.linspace(0, max(0.5, df["H_nats"].quantile(0.99)), 21)
     P_bins = np.linspace(0, 1, 21)
     H_idx  = np.clip(np.digitize(df["H_nats"],     H_bins) - 1, 0, len(H_bins) - 2)
@@ -313,7 +276,7 @@ def main() -> int:
     grid = np.zeros((len(H_bins) - 1, len(P_bins) - 1), dtype=np.float64)
     for hi, pi in zip(H_idx, P_idx):
         grid[hi, pi] += 1
-    # row-normalise so each entropy row sums to 1 — shows P(top1_pos | H bin)
+    # row-normalise so each entropy row sums to 1 - shows P(top1_pos | H bin)
     row_sums = grid.sum(axis=1, keepdims=True)
     row_sums[row_sums == 0] = 1
     grid_n = grid / row_sums
@@ -331,19 +294,13 @@ def main() -> int:
     fig.savefig(FIG_DIR / f"pos_04_heatmap_entropy_x_top1pos{SUFFIX}.png", dpi=200)
     plt.close(fig)
 
-    # ====================================================================== #
-    # Save numerical summary                                                  #
-    # ====================================================================== #
+    # Save numerical summary
     with open(SUMMARY, "w") as f:
         json.dump(summary, f, indent=2)
 
-    # ====================================================================== #
-    # Headline print                                                          #
-    # ====================================================================== #
+    # Headline print
     print()
-    print("=" * 78)
     print("HEADLINE — entropy  vs  positional-attention features  (Spearman ρ)")
-    print("=" * 78)
     g = summary["global"]
     for f in feats:
         v = g[f]
@@ -357,7 +314,6 @@ def main() -> int:
         print(f"  {str(q):<22}  first{K_FIRST}={row['mass_first_4']:.3f}  "
               f"middle={row['mass_middle']:.3f}  "
               f"last{K_LAST}={row['mass_last_16']:.3f}")
-    print("=" * 78)
     print(f"figures: {FIG_DIR}/pos_*{SUFFIX}.{{pdf,png}}")
     print(f"summary: {SUMMARY}")
     return 0

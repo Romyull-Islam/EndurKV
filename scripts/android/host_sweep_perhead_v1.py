@@ -1,22 +1,8 @@
 #!/usr/bin/env python3
-"""Hyperparameter sweep for the perhead_v1 spread gate.
-
-Spread gate (current paper default):
-    norm_h = clip((max_a_h - thresh_low) / (thresh_high - thresh_low), 0, 1)
-    mult_h = alpha - beta * norm_h
-    K_h    = round(K_nominal * mult_h)
-
-Parameters being swept (`--mode quick` is Path A; `--mode full` is Path B):
-    alpha       : ceiling of mult_h    (current paper default = 1.3)
-    beta        : range of mult_h       (current paper default = 0.6)
-                  → mult_h ∈ [alpha - beta, alpha]
-    thresh_low  : where the gate starts to bite (default = 0.4)
-    thresh_high : where the gate saturates    (default = 0.8)
-
-Outputs:
-    sweep_<mode>_results.csv  — per-(config, dir, K) KL + mass retained + win vs TOVA
-    sweep_<mode>_heatmap.png  — 2D contour (alpha × beta) of mean KL improvement
-    sweep_<mode>_robustness.png — band of (alpha, beta) where we still beat TOVA by ≥5%
+"""Sweep alpha, beta, thresh_low, thresh_high of the perhead_v1 spread gate:
+K_h = round(K * (alpha - beta * clip((max_a_h - thresh_low) / (thresh_high - thresh_low), 0, 1))).
+Defaults 1.3, 0.6, 0.4, 0.8. --mode quick or full. Writes sweep_<mode>_results.csv
+and a heatmap of mean KL change vs TOVA, and prints configs at least 5% better than TOVA.
 """
 import argparse
 import json
@@ -60,7 +46,7 @@ def make_parameterized_perhead_v1(alpha: float, beta: float,
     return policy
 
 
-# ── Capture dirs to sweep on ─────────────────────────────────────────────
+# Capture dirs to sweep on
 LONG_CTX_DIRS = [
     "/home/mislam22/EndurKV_workspace/logs/study_phone_phi3_longbench",
     "/home/mislam22/EndurKV_workspace/logs/study_phone_mistral_longbench",
@@ -76,8 +62,8 @@ BUDGETS = [128, 256, 512, 1024]
 
 def evaluate_config(alpha: float, beta: float, thresh_low: float, thresh_high: float,
                     dirs: list, budgets: list, max_prompts_per_dir: int = 2):
-    """Evaluate one (alpha, beta, thresh_low, thresh_high) tuple. Returns DataFrame."""
-    # Monkey-patch the parameterized policy into POLICIES so simulate() can find it
+    """Evaluate one (alpha, beta, thresh_low, thresh_high) tuple against TOVA."""
+    # Register the policy in POLICIES so simulate() can find it
     POLICIES["perhead_v1_param"] = make_parameterized_perhead_v1(
         alpha, beta, thresh_low, thresh_high)
 
@@ -145,8 +131,8 @@ def run_sweep(grid_alpha: list, grid_beta: list,
 
 
 def plot_heatmap(df: pd.DataFrame, out_dir: Path, mode: str):
-    """For each (thresh_low, thresh_high), render an alpha × beta heatmap of
-    mean KL improvement (% reduction vs TOVA). Lower (more negative) = better."""
+    """One alpha x beta heatmap of mean KL change vs TOVA (%) per threshold pair.
+    Negative is better."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -214,7 +200,7 @@ def plot_heatmap(df: pd.DataFrame, out_dir: Path, mode: str):
 
     # Robustness band: cells where mean improvement <= -5%
     robust = agg[agg["mean_kl_imp"] <= -5].sort_values("mean_kl_imp")
-    print(f"\n=== {len(robust)} configs achieve ≥5% KL reduction vs TOVA ===")
+    print(f"{len(robust)} configs achieve ≥5% KL reduction vs TOVA")
     if not robust.empty:
         print(robust.head(20).to_string(index=False))
 
@@ -228,7 +214,7 @@ def main() -> int:
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir); out_dir.mkdir(exist_ok=True, parents=True)
-    dirs = LONG_CTX_DIRS  # focus on long-context — the publication regime
+    dirs = LONG_CTX_DIRS  # focus on long-context - the publication regime
 
     if args.mode == "quick":
         grid_alpha = [1.1, 1.2, 1.3, 1.4, 1.5]

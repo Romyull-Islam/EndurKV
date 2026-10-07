@@ -1,16 +1,9 @@
 #!/bin/bash
-# phone_v1_vs_v1fa_thermal.sh — head-to-head thermal comparison of v1 (FA-off
-# throughout) vs v1_fa (FA-off prefill + FA-on decode via snapkv state-swap).
+# Thermal comparison of v1 (FA-off throughout) vs v1_fa (FA-off prefill, FA-on decode
+# via SnapKV state-swap) on Llama-3.2-1B. Each condition runs ITERS iterations of a
+# 7700-token narrativeqa prefill plus 256 decoded tokens, with sensors at 5 Hz.
 #
-# Each condition: 3 iterations of (prefill 7700-token narrativeqa + decode 256
-# tokens) on Llama-3.2-1B. Cool-down between conditions; sensor sampler at 5 Hz.
-#
-# This is the experiment that proves v1_fa's thermal benefit translates from
-# theory (FA-on cuts attention-side bandwidth ~3×) to measurable on-device
-# temperature reduction.
-#
-# Usage:
-#   ./phone_v1_vs_v1fa_thermal.sh [--iters N]
+# Usage: ITERS=3 ./phone_v1_vs_v1fa_thermal.sh
 
 set -e
 export PATH=/home/mislam22/tools/platform-tools:$PATH

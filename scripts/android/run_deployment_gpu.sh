@@ -1,37 +1,17 @@
 #!/bin/bash
-# ============================================================================
-# DEFINITIVE deployment-model GPU run  --  HotMobile thermal-aware KV paper
-# (finalized 2026-07-16). Mirror of run_deployment_cpu.sh on the Adreno 840 GPU.
-#
-# WATCHDOG MODEL (muKV-ONLY):
-#   - Baselines (vanilla, SnapKV, AdaKV): native GPU DVFS, NO watchdog. The GPU's
-#     own governor + kernel thermal management run unmodified (their default).
-#   - muKV: native GPU DVFS + surface-aware reduce-only watchdog v4
-#     (gpu_watchdog_v4_surface_aware.sh). Reads shell(skin)/battery/gpuss zones,
-#     caps the GPU clock DOWN one rung BEFORE throttle onset, never raises it.
-#
-# muKV on GPU uses fa-on-evict (in-graph kq_evict side-node, last-chunk scoring) --
-#   NO state-swap (Adreno can't cheaply swap); this is the GPU-viable muKV path.
-#     --policy v1_fa2 --fa-on-evict --n-sink 4 --adaptive-anchor --adaptive-rmin 32
-#     --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70
-#
-# Canonical SnapKV: identical to CPU -- --policy snapkv --k-nominal 1024
-#   --obs-window 64 --n-sink 0 (exact FasterDecoding defaults, per-head union ->
-#   near-full on-device; realizability captured as data).
-#
-# ALL cells: WikiText 9737-token prompt + 4096 decode, ctx 16384, Llama-3.2-1B
-#   Q4_K_M, n-gpu-layers 99, 4 threads, k-nominal 1024, bin_vulkan_new.
-#   Deep cool-gate (GPU+DDR <=37 C, stable >=90 s) before every cell.
-# CAPTURES: peak_kv/evicted (realizability), prefill, decode tps, wall, energy,
-#   peak GPU/DDR/skin temps, watchdog action log (muKV only).
-# ============================================================================
+# run_deployment_gpu.sh: deployment-model run on the Adreno 840 GPU, the GPU
+# counterpart of run_deployment_cpu.sh. Baselines run with native GPU DVFS only. muKV
+# also runs gpu_watchdog_v4_surface_aware.sh, which only lowers the GPU clock, one step
+# before throttle onset. muKV uses --fa-on-evict (in-graph kq_evict scoring, no state swap).
+# All cells: WikiText 9737-token prompt + 4096 decode, ctx 16384, Llama-3.2-1B Q4_K_M,
+# k-nominal 1024, deep cool gate (GPU and DDR <= 37 C, stable for 90 s) before each.
 set -u; export ANDROID_ADB_SERVER_PORT=5151
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 
 OUT_HOST=/tmp/deploy_gpu; mkdir -p "$OUT_HOST"
 TS=$(date +%Y%m%d_%H%M%S); OUT=/data/local/tmp/endurkv/logs/deploygpu_$TS
 adb_safe_shell "mkdir -p $OUT" < /dev/null
-SCR=/tmp/claude-1001/-home-mislam22-EndurKV-workspace/1d283ef2-8bcb-4a99-8b56-fd8d8af9f80d/scratchpad
+SCR="${SCR:-$(cd "$(dirname "$0")/../.." && pwd)/eval_corpora}"
 adb push "$SCR/wikitext_16k_p12k_d4k.txt" "$OUT/prompt.txt" < /dev/null >/dev/null 2>&1
 adb push "$SCR/wiki_eval_disjoint.txt" "$OUT/eval.txt" < /dev/null >/dev/null 2>&1
 adb push /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/gpu_watchdog_v4_surface_aware.sh \
@@ -83,7 +63,7 @@ run(){ local CELL=$1; local WD=$2; shift 2; local PD=$OUT/$CELL
 
 MU="--policy v1_fa2 --fa-on-evict --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70"
 
-# ALL 8 policies for the complete GPU table (canonical setups, watchdog muKV-only).
+# All 8 policies, published settings, watchdog for muKV only.
 run mukv         1 $MU
 run vanilla      0 --policy vanilla
 run snapkv       0 --policy snapkv --obs-window 64 --n-sink 0

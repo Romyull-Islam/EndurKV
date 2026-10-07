@@ -1,20 +1,8 @@
 #!/bin/bash
-# phone_ppl_wave2b.sh — REVISED PPL eval that pressures eviction.
-#
-# Wave-2 used a 9-token seed prompt → eviction never engaged (KV never
-# exceeded K_nominal=1024). All policies produced the same PPL.
-#
-# Wave-2b fixes that:
-#   - --prompt    wiki_seed_3k.txt  (~3000 tokens of WT2 prefix)
-#   - --eval-text wiki_eval_1k.txt  (~1000 tokens of WT2 continuation)
-#   - --k-nominal 512                (forces ~3-6× compression throughout)
-#
-# Flow per cell:
-#   1. Prefill ~3000 tokens → KV at 3000.
-#   2. Apply post-prefill eviction → KV at K_nominal=512 (6× compression).
-#   3. Teacher-force ~1000 WT2 tokens, evicting after each step.
-#      Eviction is ACTIVE throughout — policies will diverge.
-#   4. mean -log P(token | prefix) → PPL.
+# phone_ppl_wave2b.sh: teacher-forced PPL with the cache under eviction pressure.
+# Prefill a ~3000-token WikiText-2 prefix (wiki_seed_3k), evict to K_nominal=512, then
+# teacher-force ~1000 continuation tokens (wiki_eval_1k) while evicting after each step.
+# A short seed prompt would never exceed K, so every policy would give the same PPL.
 
 set -e
 export PATH=/home/mislam22/tools/platform-tools:$PATH
@@ -57,7 +45,7 @@ run_count=0
 for MODEL_ENTRY in "${MODELS[@]}"; do
     IFS='|' read -r MODEL MODEL_TAG NGL NBATCH UB CTX <<< "$MODEL_ENTRY"
     echo "" | tee -a "$PROG_LOG"
-    echo "===== $MODEL_TAG =====" | tee -a "$PROG_LOG"
+    echo "$MODEL_TAG" | tee -a "$PROG_LOG"
 
     for r in $(seq 1 $N_REPLICATES); do
     for PROMPT_ID in $PROMPT_IDS; do

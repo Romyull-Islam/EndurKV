@@ -1,10 +1,8 @@
 #!/system/bin/sh
-# phone_discharge_loop.sh -- runs ON THE PHONE under su, detached: the energy-aware scheduler on a
-# real discharge, with no host in the loop (2026-09-04). Charging off; back-to-back requests through
-# ukv_sched.sh with no forced battery state and the length left open; a light cool gate between
-# requests (DDR <= 42 C, battery <= 36 C); stops at STOP_SOC and switches charging back on. The
-# battery only carries the load once the USB cable is out (on the cable USB supplies 5 W of 6),
-# so the timeline records the USB-powered flag for every request.
+# phone_discharge_loop.sh: runs on the phone under su, detached. Sends back-to-back requests
+# through ukv_sched.sh on a real discharge with charging off and a light cool gate between
+# requests (DDR <= 42 C, battery <= 36 C). Stops at STOP_SOC and turns charging back on.
+# On the cable USB supplies most of the power, so the USB-powered flag is logged per request.
 ROOT=/data/local/tmp/endurkv; P=$ROOT/corpora/prompt_12k.txt; OUTD=${OUTD:-$ROOT/discharge}; mkdir -p $OUTD
 # MODEL (optional): a gguf name under $ROOT/models, passed to ukv_sched.sh --model (per-model cost table)
 CSV=$OUTD/timeline.csv; RLOG=$OUTD/run.log; STOP_SOC=${STOP_SOC:-12}; KEEP_TABLE=${KEEP_TABLE:-0}
@@ -17,7 +15,8 @@ USB_CUT=${USB_CUT:-0}; ICL=/sys/class/power_supply/usb/input_current_limit; ICL0
 SAVED=""; for p in /sys/devices/system/cpu/cpufreq/policy*; do SAVED="$SAVED $(basename $p):$(cat $p/scaling_min_freq):$(cat $p/scaling_max_freq)"; done
 restore(){ for s in $SAVED; do pol=${s%%:*}; r=${s#*:}; mn=${r%%:*}; mx=${r#*:}; echo $mx > /sys/devices/system/cpu/cpufreq/$pol/scaling_max_freq; echo $mn > /sys/devices/system/cpu/cpufreq/$pol/scaling_min_freq; done
   echo 1200000000 > /sys/class/kgsl/kgsl-3d0/max_gpuclk; echo 1 > /sys/class/oplus_chg/battery/mmi_charging_enable
-  [ "$USB_CUT" = 1 ] && [ -n "$ICL0" ] && echo $ICL0 > $ICL 2>/dev/null; log "restored caps, charging on, usb input limit ${ICL0:-untouched}"; }
+  [ "$USB_CUT" = 1 ] && [ -n "$ICL0" ] && echo $ICL0 > $ICL 2>/dev/null; echo endurkv_discharge > /sys/power/wake_unlock 2>/dev/null
+  log "restored caps, charging on, wake lock released, usb input limit ${ICL0:-untouched}"; }
 trap 'restore; log "interrupted"; echo INTERRUPTED > $OUTD/DONE; exit 1' INT TERM
 pin(){ echo 1785600 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq; echo 1785600 > /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq; echo 1497600 > /sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq; echo 1497600 > /sys/devices/system/cpu/cpufreq/policy6/scaling_min_freq; }
 bat(){ dumpsys battery 2>/dev/null | tr -d '\r' | awk '$1=="level:"{l=$2} $1=="status:"{s=$2} /USB powered:/{u=$3} END{print l, s, u}'; }
@@ -26,6 +25,9 @@ temps(){ echo $(( $(cat /sys/class/thermal/thermal_zone47/temp)/1000 )) $(( $(ca
 rm -f $OUTD/DONE
 [ "$KEEP_TABLE" = 1 ] || { [ -f $ROOT/ukv_sched_table.seed.txt ] && cp $ROOT/ukv_sched_table.seed.txt $ROOT/ukv_sched_table.txt; rm -f $ROOT/ukv_lever_bias.txt; }
 echo 0 > /sys/class/oplus_chg/battery/mmi_charging_enable
+# Hold a wake lock for the whole run, since deep sleep inside a request breaks its energy
+# window. Released in restore().
+echo endurkv_discharge > /sys/power/wake_lock 2>/dev/null
 # USB_CUT=1: also cut the USB input current so the battery alone carries the load while the data link stays
 [ "$USB_CUT" = 1 ] && { echo 0 > $ICL 2>/dev/null; log "usb input_current_limit $ICL0 -> $(cat $ICL 2>/dev/null)"; }
 n=$(ls -d $OUTD/dis_* 2>/dev/null | wc -l); fails=0
@@ -57,10 +59,8 @@ while :; do
   else
     fails=$((fails+1)); log "  $TAG FAILED ($fails in a row)"; [ $fails -ge 3 ] && { log "three failures in a row: stop"; break; }
   fi
-  # on the cable the port carries the load and the battery barely moves: run sparsely (one request
-  # per 20 min keeps the timeline alive); once the cable is out, run back to back to drain
-  # FORCE_BATT=1: the cable is in but charging is disabled, so the pack still carries part of every
-  # request; run back to back instead of sparsely, otherwise the pack recovers between requests.
+  # On USB power the battery barely moves, so run one request per 20 min. Off the cable, or with
+  # FORCE_BATT=1 (cable in, charging off, pack still carries part of the load), run back to back.
   echo 0 > /sys/class/oplus_chg/battery/mmi_charging_enable
   set -- $(bat); [ "$3" = "true" ] && [ "${FORCE_BATT:-0}" != 1 ] && { log "usb powered: sparse mode, next request in 20 min"; sleep 1200; }
 done

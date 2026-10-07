@@ -1,36 +1,8 @@
 #!/usr/bin/env python3
-"""
-host_plot_perchunk_delta.py — per-chunk PPL delta plot for Wave-11 (live).
-
-Walks iter0000..iter000N/meta.json under
-  <run_dir>/<model>/<policy>/ppl/
-for an arbitrary list of policies, extracts "perplexity" per chunk, and emits:
-
-  Top:    grouped bar chart of per-chunk PPL — one bar per policy per chunk
-          (vanilla blue, h2o green, v1_fa2_stack orange, additional policies
-          cycle through the matplotlib default cycle).
-  Middle: per-chunk Δ_PPL (absolute, policy − vanilla) for each non-vanilla
-          policy. The vanilla policy is always the baseline; the script
-          requires "vanilla" to be in the policy list.
-  Bottom: per-chunk Δ_log_PPL = log(ppl_policy) − log(ppl_vanilla)
-          (the metric H2O paper / Zhang et al. Table 1 reports).
-
-For the top grouped chart we include EVERY chunk that appears in ANY policy;
-missing values are drawn as gaps. For the Δ panels we only show chunks where
-the comparison policy AND vanilla both have a parseable value.
-
-Also writes a markdown table summarising per-policy paired chunks vs vanilla.
-
-Inputs may include bare-token `inf`/`-inf`/`nan` in meta.json (llama.cpp
-default printf), so we sanitise before json.loads.
-
-Usage:
-  python host_plot_perchunk_delta.py \
-      --run-dir /home/mislam22/EndurKV_workspace/phone-logs/wave11_eval_1780862534 \
-      --model Phi-3-mini-128k \
-      --policies vanilla,h2o,v1_fa2_stack,tova \
-      --out-png /home/mislam22/EndurKV_workspace/EndurKV/figures/eval_plots/wave11_perchunk_ppl_delta.png \
-      --out-md  /home/mislam22/EndurKV_workspace/EndurKV/figures/master_tables/WAVE11_PHI3_PPL_LIVE.md
+"""Per-chunk PPL plot from <run_dir>/<model>/<policy>/ppl/iterNNNN/meta.json: PPL bars,
+PPL minus vanilla, and log PPL minus log vanilla (vanilla must be in --policies), plus a markdown table.
+Usage: python host_plot_perchunk_delta.py --run-dir DIR --model Phi-3-mini-128k
+       --policies vanilla,h2o,v1_fa2_stack,tova --out-png FILE.png --out-md FILE.md
 """
 from __future__ import annotations
 
@@ -46,9 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-# ---------------------------------------------------------------------------
-# Colour map (vanilla blue, h2o green, v1_fa2_stack orange; extend as needed)
-# ---------------------------------------------------------------------------
+# fixed colours per policy, others cycle through _CYCLE
 POLICY_COLORS: dict[str, str] = {
     "vanilla":      "#1f77b4",  # blue
     "h2o":          "#2ca02c",  # green
@@ -66,9 +36,7 @@ def color_for(policy: str, idx: int) -> str:
     return POLICY_COLORS.get(policy, _CYCLE[idx % len(_CYCLE)])
 
 
-# ---------------------------------------------------------------------------
 # meta.json loader (sanitises bare inf/-inf/nan tokens emitted by llama.cpp)
-# ---------------------------------------------------------------------------
 _BARE_NUM = re.compile(r":\s*(-?inf|nan)\b", re.IGNORECASE)
 
 
@@ -108,9 +76,7 @@ def load_meta(path: Path) -> dict | None:
     return fix(d)
 
 
-# ---------------------------------------------------------------------------
 # walk iter0000..iter000N for a single policy
-# ---------------------------------------------------------------------------
 def collect_policy(policy_dir: Path, max_iters: int = 8) -> dict[int, float]:
     """Return {chunk_idx: perplexity} for iters that have a parseable meta.json."""
     out: dict[int, float] = {}
@@ -137,9 +103,7 @@ def collect_policy(policy_dir: Path, max_iters: int = 8) -> dict[int, float]:
     return out
 
 
-# ---------------------------------------------------------------------------
 # plotting (3-panel, N-policy)
-# ---------------------------------------------------------------------------
 def make_plot(policy_data: dict[str, dict[int, float]],
               policies: list[str],
               out_png: Path,
@@ -162,7 +126,7 @@ def make_plot(policy_data: dict[str, dict[int, float]],
         sharex=True, constrained_layout=True,
     )
 
-    # ----------------------- TOP: grouped per-chunk PPL --------------------
+    # TOP: grouped per-chunk PPL
     ax0 = axes[0]
     for pi, pol in enumerate(policies):
         col = color_for(pol, pi)
@@ -170,8 +134,7 @@ def make_plot(policy_data: dict[str, dict[int, float]],
         # offset bars symmetrically around the chunk centre
         offset = (pi - (n_pol - 1) / 2.0) * w
         xs = x + offset
-        # NaNs would draw zero-height bars; filter for the bar call and
-        # annotations
+        # skip NaNs, they would draw zero-height bars
         bar_xs = []
         bar_vs = []
         for xi, v in zip(xs, vals):
@@ -188,7 +151,7 @@ def make_plot(policy_data: dict[str, dict[int, float]],
     ax0.legend(loc="upper right", fontsize=9)
     ax0.grid(True, axis="y", alpha=0.3)
 
-    # ----------------------- MIDDLE: absolute ΔPPL --------------------------
+    # MIDDLE: absolute ΔPPL
     ax1 = axes[1]
     deltas = [p for p in policies if p != baseline]
     n_d = max(1, len(deltas))
@@ -222,7 +185,7 @@ def make_plot(policy_data: dict[str, dict[int, float]],
     if legend_handles:
         ax1.legend(loc="upper right", fontsize=9)
 
-    # ----------------------- BOTTOM: Δlog PPL ------------------------------
+    # BOTTOM: Δlog PPL
     ax2 = axes[2]
     legend_handles2 = []
     for di, pol in enumerate(deltas):
@@ -263,9 +226,7 @@ def make_plot(policy_data: dict[str, dict[int, float]],
     plt.close(fig)
 
 
-# ---------------------------------------------------------------------------
 # markdown table (one block per non-baseline policy + raw long table)
-# ---------------------------------------------------------------------------
 def write_table(policy_data: dict[str, dict[int, float]],
                 policies: list[str],
                 out_md: Path,
@@ -369,9 +330,7 @@ def write_table(policy_data: dict[str, dict[int, float]],
     out_md.write_text("\n".join(lines))
 
 
-# ---------------------------------------------------------------------------
 # main
-# ---------------------------------------------------------------------------
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-dir", type=Path,

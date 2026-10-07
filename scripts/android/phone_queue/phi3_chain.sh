@@ -1,12 +1,10 @@
 #!/system/bin/sh
-# 2026-09-19, phone-resident, root, detached. Two jobs in sequence:
-#  1. Phi-3-mini GPU repeats r2 and r3 for the five arms of the 6-page paper's Phi-3 block, with the
-#     exact build, prompt and flags of run_phi3_gpu_complete.sh (bin_vk_cur, unpinned, f16 KV,
-#     ctx 16384, 4096 generated), cooled per cell, charging off.
-#  2. Recharge to 90%, then a second real discharge through the energy-aware scheduler with
-#     Phi-3-mini (per-model cost table seeded from the Llama table). The USB input limit cannot be
-#     written on this phone, so the battery carries the load only once the cable is pulled; until
-#     then the loop runs one request per 20 min and flags each one usb_powered.
+# Runs on the phone as root, detached. Two jobs in sequence:
+#  1. Phi-3-mini GPU repeats r2 and r3 of five arms, same build, prompt and flags as
+#     run_phi3_gpu_complete.sh, cooled per cell, charging off.
+#  2. Recharge to 90%, then a discharge run through the energy-aware scheduler with Phi-3-mini.
+#     The USB input limit is not writable, so the battery carries the load only once the cable
+#     is pulled. Until then one request runs per 20 min, flagged usb_powered.
 ROOT=/data/local/tmp/endurkv; RES=$ROOT/phi3_rep; mkdir -p $RES; LOG=$RES/chain.log
 VK=$ROOT/bin_vk_cur; M=$ROOT/models/Phi-3-mini-128k-instruct-Q4_K_M.gguf; P=$ROOT/corpora/prompt_12k.txt
 log(){ echo "$(date '+%F %T') $*" >> $LOG; }
@@ -50,7 +48,7 @@ for r in 2 3; do
   cell phi3_snapkv_r$r --policy snapkv --obs-window 16 --snapkv-kernel 5 --n-sink 0 --k-nominal 1024
 done
 log "REPEATS_DONE"
-# ---- 2. recharge, then discharge with Phi-3 ----
+# 2. recharge, then discharge with Phi-3
 echo 1 > /sys/class/oplus_chg/battery/mmi_charging_enable
 t=0
 while [ $t -lt 480 ]; do

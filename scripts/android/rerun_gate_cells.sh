@@ -1,9 +1,7 @@
 #!/bin/bash
-# Re-run the two cells the gate BUG killed (snapkv, adakv). They died in the
-# state-API round-trip (4073.4 MiB second cache -> OS-kill) because the auto-
-# promote set fa_on_evict without forcing in-place compaction. Binary fixed and
-# pushed 2026-08-25; the campaign script is resumable, so re-invoking it redoes
-# exactly the cells with no meta.json. Runs LAST so it never races the CPU queue.
+# Re-run the snapkv and adakv cells that were OS-killed in the state round-trip (the gate's
+# auto-promote set fa_on_evict without in-place compaction). The campaign is resumable and
+# redoes only cells without meta.json. Runs after the CPU queue so the two never overlap.
 set -u
 LOG(){ echo "[$(date +%H:%M:%S)] $*"; }
 LOG "waiting for the CPU queue to finish ..."

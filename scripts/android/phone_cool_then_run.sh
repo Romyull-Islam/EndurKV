@@ -1,18 +1,9 @@
 #!/system/bin/sh
-# phone_cool_then_run.sh — Cool-and-measure wrapper for fair benchmarking.
+# Waits until the shell_front skin temperature is at most THRESH_C (default 38 C) or
+# MAX_WAIT seconds pass, records start temperatures in <out-dir>/cooldown.json, then
+# runs the command.
 #
-# Standard practice: wait until phone shell_front skin temp ≤ THRESH_C
-# (default 38°C) OR a max timeout (default 5 min), THEN run the command.
-# Records starting temps in <out-dir>/cooldown.json.
-#
-# Usage:
-#   sh phone_cool_then_run.sh --out-dir DIR --thresh-c 38 --max-wait 300 -- \
-#       <command to run>
-#
-# Behaviour:
-#   - Polls shell_front_temp every 5 s
-#   - Returns when temp ≤ thresh OR max-wait elapses
-#   - Writes cooldown.json: {start_skin_c, start_battery_c, cooldown_s, timed_out, peak_cpu_c}
+# Usage: sh phone_cool_then_run.sh --out-dir DIR [--thresh-c 38] [--max-wait 300] -- <command>
 
 set -e
 
@@ -35,7 +26,7 @@ done
 [ -z "$OUT_DIR" ] && { echo "--out-dir required" >&2; exit 1; }
 mkdir -p "$OUT_DIR"
 
-# Helper: read shell_front temp in °C (returns 0 if not found)
+# shell_front temp in degrees C, 0 if not found
 read_skin_c() {
     for z in /sys/class/thermal/thermal_zone*; do
         if [ "$(cat "$z/type" 2>/dev/null)" = "shell_front" ]; then

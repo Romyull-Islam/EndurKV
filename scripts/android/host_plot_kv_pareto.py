@@ -1,19 +1,7 @@
 #!/usr/bin/env python3
-"""Pareto plots for KV cache eviction policies.
-
-Reads pareto_summary.csv produced by host_simulate_kv_baselines.py and renders
-one Pareto curve per policy. Field-standard format used by KVzip / PruLong /
-R-KV: x-axis = actual cache budget (avg_actual_K), y-axis = quality metric.
-
-Three plot variants:
-  * attn_mass_retained  — fraction of attention mass retained (higher better)
-  * mean_kl             — KL divergence (lower better)
-  * needle_hit_rate     — NIAH answer position retention (higher better; only
-                          rendered if at least one row has non-NaN values)
-
-Each variant emits a PNG; the script also prints a critical-KV-footprint table
-(smallest actual_K at which each policy hits F=90% of the best policy's
-quality at full cache).
+"""Pareto plots (avg_actual_K vs quality) per policy from host_simulate_kv_baselines.py's
+pareto_summary.csv, for attn_mass_retained, mean_kl and needle_hit_rate (if present).
+Also prints the smallest actual_K at which each policy reaches 90% of the best quality.
 """
 import argparse
 import sys
@@ -26,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 
-# Color/marker per policy — stable across plots.
+# Color/marker per policy - stable across plots.
 STYLE = {
     "perhead_v1":   ("#d62728", "o", "perhead_v1 (ours)"),
     "perhead_tova": ("#1f77b4", "s", "TOVA"),
@@ -39,21 +27,13 @@ STYLE = {
 
 
 def pareto_frontier(xs, ys, x_better: str = "lower", y_better: str = "higher"):
-    """Return the indices of the points lying on the Pareto frontier.
-
-    A point dominates another iff it is no worse on both axes and strictly
-    better on at least one. With x_better='lower' and y_better='higher', this
-    means: sort by x ascending (ties broken by 'better' y), sweep, and keep
-    only points whose y strictly improves the running best.
-
-    Returns (frontier_indices, dominated_indices) as Python lists of ints into
-    the original arrays.
-    """
+    """Return (frontier_indices, dominated_indices). Sweeps points from best x and keeps
+    those whose y strictly improves on the running best."""
     n = len(xs)
     if n == 0:
         return [], []
     idx = list(range(n))
-    # Sort by x in the direction such that earlier == "lower-cost" candidates.
+    # best x first, ties broken by better y
     idx.sort(key=lambda i: (xs[i] if x_better == "lower" else -xs[i],
                             -(ys[i] if y_better == "higher" else -ys[i])))
     frontier = []
@@ -92,9 +72,7 @@ def plot_pareto(df: pd.DataFrame, metric: str, ylabel: str, higher_is_better: bo
         color, marker, label = STYLE.get(pol, ("#777777", "o", pol))
         xs = sub["avg_actual_K"].tolist()
         ys = sub[metric].tolist()
-        # Filter to the Pareto frontier (lower budget + better quality
-        # dominates). Plot frontier as solid line + bold markers and the
-        # dominated points as faded scatter for honesty.
+        # frontier as a solid line, dominated points as faded markers
         front_idx, dom_idx = pareto_frontier(
             xs, ys,
             x_better="lower",
@@ -179,7 +157,7 @@ def main() -> int:
                 out_path=out_dir / "pareto_mean_kl.png",
                 title_suffix="lower is better")
 
-    # Needle hit rate plot — only if non-NaN data exists
+    # Needle hit rate plot - only if non-NaN data exists
     if "needle_hit_rate" in df.columns and df["needle_hit_rate"].notna().any():
         plot_pareto(df, "needle_hit_rate",
                     "NIAH needle hit rate (kept-head fraction)",

@@ -1,45 +1,11 @@
 #!/bin/bash
-# ============================================================================
-# run_phone_watchdog_compaction_matrix.sh -- muKV on the phone GPU across the two
-# levers that are ours to set: the thermal watchdog and the compaction mode.
-# (2026-08-08, OnePlus 15 / Adreno 840)
-#
-# THE MATRIX. 7 cells:
-#   vanilla                                   (NO watchdog -- baselines never get it)
-#   muKV x {watchdog off, LOW, HIGH} x {round-trip, in-place compaction}
-#
-# WHY THESE TWO LEVERS TOGETHER. They are believed independent but have never been
-# measured that way: the watchdog trades clock for thermal headroom, compaction trades
-# peak memory for decode speed. Crossing them shows whether the watchdog's cost is the
-# same under both compaction modes -- and in particular whether in-place compaction's
-# lower memory peak buys thermal headroom the round-trip cannot.
-#
-# WATCHDOG VERSIONS -- the project's two REAL ladders, not invented ones. Both are the
-# v5 daemon; they differ ONLY in trigger temperature (verified by diffing the two files:
-# the sole differences are bat_tier/skin_tier constants and the log banner). Same tiers
-# 1200/1050/967/902/826 MHz, same gpuss-junction backstop, zones resolved BY NAME:
-#   v5LOW  battery 36.0/36.5/37.0/37.5/38.0   skin 39.5/40.0/40.5/41.0/41.5  (early)
-#   v5HIGH battery 47.0/48.0/48.5/49.0/49.5   skin 50.0/51.0/51.5/52.0/52.5  (shipped)
-# An earlier version of this script used made-up thresholds (shell 38.5/40.5, bat 35/37)
-# that matched NEITHER ladder; those runs were discarded.
-# The watchdog is REDUCE-ONLY and muKV-only. Vanilla runs on native GPU DVFS.
-#
-# QUALITY IS MEASURED ON 3 CELLS, NOT 7, AND THAT IS DELIBERATE. The watchdog changes
-# only the GPU clock; it cannot change which cells are kept or any arithmetic, so PPL is
-# invariant across the three watchdog settings by construction. Compaction CAN in
-# principle differ (it changes attention tiling), so PPL is run for vanilla and for both
-# compaction modes. Running all 7 would spend hours re-measuring a constant.
-#
-# COOLING GATE BEFORE EVERY CELL: DDR <= 35 C, battery <= 33 C, charging OFF while
-# cooling. A failed gate SKIPS the cell rather than running it hot -- a timed or energy
-# cell taken from a warm start is not comparable and is worse than a missing one.
-# charging_restore runs on EXIT, not only on success: a killed script used to leave the
-# phone with charging disabled.
-#
-# ENERGY comes from the USB rail via sample_sensors.sh:
-#   E = SUM( usb_voltage_uv/1e6 * |usb_current_ua|/1e6 * dt ),  dt from monotonic_s,
-#   capped at 5 s per sample so a stalled sampler cannot invent joules.
-# ============================================================================
+# muKV on the phone GPU across thermal watchdog (off, LOW, HIGH) and compaction mode
+# (round-trip, in-place), plus vanilla with no watchdog: 7 gen cells.
+# Both watchdogs are the v5 daemon with GPU tiers 1200/1050/967/902/826 MHz and differ
+# only in trigger temps: LOW battery 36.0..38.0, skin 39.5..41.5 C; HIGH battery
+# 47.0..49.5, skin 50.0..52.5 C. PPL runs only for vanilla and the two compaction modes,
+# since the watchdog changes only the clock. A cell whose cool gate fails is skipped.
+# Energy comes from the USB rail via sample_sensors.sh.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 
@@ -49,20 +15,15 @@ DEV=/data/local/tmp/endurkv/logs/wdmx_$TS
 BIN=/data/local/tmp/ukv
 MODEL=/data/local/tmp/endurkv/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 WD_STOP=/data/local/tmp/gpu_wd.stop
-SCR=/tmp/claude-1001/-home-mislam22-EndurKV-workspace/1d283ef2-8bcb-4a99-8b56-fd8d8af9f80d/scratchpad
+SCR="${SCR:-$(cd "$(dirname "$0")/../.." && pwd)/eval_corpora}"
 
 adb_safe_shell "mkdir -p $DEV" < /dev/null
-# FIXED 2026-08-08: this used to prefer a SCRATCHPAD copy of the eval slice and fall
-# back to the repo one. The scratchpad copy is contaminated -- 98.5% of its 60-char
-# windows appear verbatim in the prompt -- so the PPL cells measured VERBATIM RECALL of
-# retained text, not prediction. That hands the win to whichever policy evicted least:
-# vanilla scored PPL 1.07 and muKV 13.35, which says nothing about language modelling.
-# The repo slices are the checked-in, offset-documented ones (see benchmarks/ppl/README).
+# Use the checked-in slices (see benchmarks/ppl/README). An eval slice that overlaps
+# the prompt turns PPL into a verbatim recall test.
 PROMPT_SRC=/home/mislam22/EndurKV_workspace/EndurKV/benchmarks/ctx_sweep/llama1b_12288tok.txt
 EVAL_SRC=/home/mislam22/EndurKV_workspace/EndurKV/benchmarks/ppl/wiki_eval_disjoint.txt
 
-# ASSERT disjointness rather than trusting the filename. A slice named "disjoint" that
-# is not disjoint is exactly how the above went unnoticed; this makes it loud instead.
+# Check disjointness instead of trusting the filename.
 python3 - "$PROMPT_SRC" "$EVAL_SRC" <<'PYEOF' || { echo "FATAL: eval slice overlaps the prompt -- refusing to run PPL cells"; exit 1; }
 import sys
 P=open(sys.argv[1],errors="replace").read(); E=open(sys.argv[2],errors="replace").read()
@@ -80,7 +41,7 @@ adb push /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/gpu_watchdog_v
 adb push /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/sample_sensors.sh \
          /data/local/tmp/sample_sensors.sh < /dev/null >/dev/null 2>&1
 
-# charging must come back on however this script ends, including a kill.
+# Restore charging and the GPU clock however the script ends.
 cleanup(){ adb_safe_shell "su -c 'touch $WD_STOP; sleep 1; echo 1200 > /sys/kernel/gpu/gpu_max_clock; echo 1 > /sys/class/oplus_chg/battery/mmi_charging_enable'" < /dev/null; }
 trap cleanup EXIT INT TERM
 
@@ -146,14 +107,14 @@ cell(){ # $1 tag  $2 policy-key  $3 watchdog-mode  $4 eval-mode
   fi
 }
 
-# ---- gen cells: all 7 arms -------------------------------------------------
+# gen cells: all 7 arms
 cell vanilla        vanilla off  gen
 for WD in off low high; do
   cell "mukv_rt_$WD" mukv_rt "$WD" gen
   cell "mukv_ip_$WD" mukv_ip "$WD" gen
 done
 
-# ---- ppl cells: quality cannot depend on the watchdog (clock only) ---------
+# ppl cells: quality cannot depend on the watchdog (clock only)
 cell vanilla        vanilla off  ppl
 cell mukv_rt_off    mukv_rt off  ppl
 cell mukv_ip_off    mukv_ip off  ppl

@@ -1,23 +1,16 @@
 #!/bin/bash
-# ============================================================================
-# GPU 8B THROTTLE PROBE (2026-07-20). Goal: find at what BATTERY / SKIN temp the
-# Adreno GPU clock (gpu_clk_hz) drops to its minimum under a sustained Bonsai-8B
-# (1-bit) decode -- i.e. the REAL throttle trigger, to anchor gpu_watchdog_v5.
-# NO watchdog here (natural). Prior GPU data is Llama-1B only; 8B is far heavier
-# and may actually throttle, which 1B never did (held 1200 MHz to 94C junction).
-#
-# STEP 0 SMOKE: confirm Bonsai-8B (Q1_0) actually runs on the Vulkan GPU backend
-#   (Q1_0 is a Prism-custom format; Vulkan may lack its shader -> would fall back
-#   to CPU, making the "GPU" probe meaningless). Abort with a clear message if so.
-# STEP 1 PROBE: sustained natural decode, sensors @5Hz, log gpu_clk vs bat/skin.
-# ============================================================================
+# run_gpu_8b_throttle_probe.sh: find the battery / skin temperature at which the Adreno
+# GPU clock drops under sustained Bonsai-8B (1-bit) decode, to anchor gpu_watchdog_v5.
+# No watchdog. Llama-1B never throttled on the GPU, so the heavier 8B model is used.
+# Step 0: smoke test that Q1_0 runs on the Vulkan backend and does not fall back to CPU.
+# Step 1: sustained decode with sensors at 5 Hz (enable the probe_run line after step 0).
 set -u
 export ANDROID_ADB_SERVER_PORT=5151            # tunnel port (NOT 5037)
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 OUT_HOST=/tmp/gpu_8b_probe; mkdir -p "$OUT_HOST"
 TS=$(date +%Y%m%d_%H%M%S); OUT=/data/local/tmp/endurkv/logs/gpu8b_$TS
 adb_safe_shell "mkdir -p $OUT" < /dev/null
-SCR=/tmp/claude-1001/-home-mislam22-EndurKV-workspace/1d283ef2-8bcb-4a99-8b56-fd8d8af9f80d/scratchpad
+SCR="${SCR:-$(cd "$(dirname "$0")/../.." && pwd)/eval_corpora}"
 adb push "$SCR/wikitext_16k_p12k_d4k.txt" "$OUT/prompt.txt" < /dev/null >/dev/null 2>&1
 MODEL=/data/local/tmp/endurkv/models/Bonsai-8B-Q1_0.gguf
 VKLIB=/data/local/tmp/endurkv/bin_vulkan
@@ -33,20 +26,17 @@ adb_safe_shell "LD_LIBRARY_PATH=$VKLIB $VKBIN --prompt $OUT/prompt.txt --prompt-
   > $OUT/smoke.out 2> $OUT/smoke.err" < /dev/null
 adb pull "$OUT/smoke.json" "$OUT_HOST/smoke.json" < /dev/null >/dev/null 2>&1
 adb pull "$OUT/smoke.err"  "$OUT_HOST/smoke.err"  < /dev/null >/dev/null 2>&1
-echo "--- smoke.err (backend / device / any 'not supported' / fallback) ---"
+echo "smoke.err (backend / device / any 'not supported' / fallback)"
 adb_safe_shell "grep -iE 'vulkan|adreno|gpu|offload|not support|no shader|fallback|error|assert|device' $OUT/smoke.err | head -20" < /dev/null
-echo "--- smoke decode_tps ---"
+echo "smoke decode_tps"
 adb_safe_shell "grep -oE '\"decode_tps\": *[0-9.]+' $OUT/smoke.json 2>/dev/null" < /dev/null
 echo
 echo "  >>> INSPECT ABOVE: if it shows a Vulkan/Adreno device and layers offloaded to GPU, continue."
 echo "  >>> If it fell back to CPU (no Vulkan device / q1_0 not supported), STOP -- 8B GPU not feasible."
 echo "  (This script pauses here by design; re-run STEP 1 block after confirming GPU offload.)"
 
-# ---------------------------------------------------------------------------
-# STEP 1 (run after smoke confirms GPU offload): sustained natural throttle probe.
-# Uncomment to run. vanilla = heaviest sustained load -> throttles soonest ->
-# cleanest anchor. Sensors @5Hz capture gpu_clk_hz + battery + shell_front + gpuss.
-# ---------------------------------------------------------------------------
+# STEP 1, after the smoke test confirms GPU offload: uncomment the probe_run line below.
+# Vanilla is the heaviest sustained load, so it throttles first.
 probe_run(){ local CELL=$1; shift
   local PD=$OUT/$CELL; adb_safe_shell "mkdir -p $PD" < /dev/null
   echo "[$(date +%H:%M:%S)] === STEP 1 probe: $CELL (natural, no watchdog) ==="

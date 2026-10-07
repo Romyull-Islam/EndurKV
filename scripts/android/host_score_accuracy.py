@@ -1,26 +1,7 @@
-"""Accuracy harness — score model outputs (from per-step entropy.csv) against
-ground_truth in the prompt jsonl files.
-
-For each prompt:
-  1. Reconstruct the model's generated text from <prompt_id>.entropy.csv
-     (each row has token_id + token_text, concatenated in order)
-  2. Apply task-specific answer extraction
-  3. Score vs prompts/<file>.jsonl's ground_truth using the appropriate metric
-
-Per-task metrics (matches LongBench / GSM8K convention):
-  gsm8k, aime24                    : exact_match on extracted boxed/last-number
-  niah                             : substring match for the needle phrase
-  qasper, narrativeqa, hotpotqa,   : token-level F1 (set-overlap on lowercase
-   multifieldqa_en, 2wikimqa,        tokenized words, modulo stopwords/punct)
-   musique, triviaqa
-  gov_report, qmsum, multi_news,   : ROUGE-L (simple LCS-based, no external dep)
-   samsum, xsum, cnn_dailymail
-  trec                             : exact_match on first category token
-  lcc, repobench-p                 : edit_similarity (1 - lev/maxlen, like LongBench)
-
-Outputs:
-  logs/_accuracy/<study_dir>_scores.csv   per-prompt scores
-  logs/_accuracy/<study_dir>_summary.csv  per-task aggregates (mean + 95% CI)
+"""Accuracy harness: rebuild each prompt's generated text from <prompt_id>.entropy.csv and
+score it against the jsonl ground_truth with its task's LongBench/GSM8K metric (TASK_METRIC).
+Writes per-prompt scores and per-task means with 95% CI to
+logs/_accuracy/<study_dir>_scores.csv and <study_dir>_summary.csv.
 """
 from __future__ import annotations
 import argparse
@@ -37,13 +18,13 @@ WORKSPACE = Path(os.environ.get("WORKSPACE", str(Path(__file__).resolve().parent
 LOGS = WORKSPACE / "logs"
 
 
-# ----- answer extractors -------------------------------------------------------
+# answer extractors
 
 _BOX_RE  = re.compile(r"\\boxed\{([^}]+)\}")
 _NUM_RE  = re.compile(r"-?\d+(?:\.\d+)?")
 
 def extract_boxed_or_last_number(text: str) -> str:
-    """For GSM8K / AIME — extract \\boxed{} if present, else last number."""
+    """For GSM8K / AIME: extract \\boxed{} if present, else the last number."""
     m = _BOX_RE.search(text)
     if m:
         return m.group(1).strip()
@@ -54,7 +35,7 @@ def extract_boxed_or_last_number(text: str) -> str:
 
 
 def extract_first_line(text: str) -> str:
-    """For QA / classification — output until first newline."""
+    """For QA / classification: output up to the first newline."""
     return text.strip().split("\n")[0].strip()
 
 
@@ -66,7 +47,7 @@ def normalize_answer(s: str) -> str:
     return s
 
 
-# ----- metrics -----------------------------------------------------------------
+# metrics
 
 def exact_match(pred: str, gold: str | list) -> float:
     """1.0 if normalized pred equals any normalized gold (gold can be list)."""
@@ -158,7 +139,7 @@ def edit_similarity(pred: str, gold: str | list) -> float:
 
 
 def niah_match(pred: str, gold: str | list) -> float:
-    """Needle in a Haystack — 1.0 if gold substring appears (case-insensitive) in pred."""
+    """Needle in a Haystack: 1.0 if a gold substring appears in pred (case-insensitive)."""
     if isinstance(gold, str):
         gold = [gold]
     p = pred.lower()
@@ -191,7 +172,7 @@ TASK_METRIC = {
 }
 
 
-# ----- data loading -----------------------------------------------------------
+# data loading
 
 def load_ground_truth(prompt_jsonl: Path) -> dict[str, dict]:
     """Returns {prompt_id: {"task": ..., "ground_truth": ...}}"""
@@ -221,7 +202,7 @@ def reconstruct_output(entropy_csv: Path) -> str:
     return "".join(text_parts)
 
 
-# ----- scoring -----------------------------------------------------------------
+# scoring
 
 def score_study_dir(study_dir: Path, gt: dict, out_dir: Path) -> tuple[Path, Path]:
     """Score all prompts in a study dir; write per-prompt + per-task CSVs."""
@@ -259,7 +240,7 @@ def score_study_dir(study_dir: Path, gt: dict, out_dir: Path) -> tuple[Path, Pat
         for r in rows:
             w.writerow(r)
 
-    # Per-task aggregate w/ Wilson 95% CI for binary metrics
+    # Per-task mean with a 95% CI
     by_task = defaultdict(list)
     for r in rows:
         if r["score"] is None: continue
@@ -268,7 +249,7 @@ def score_study_dir(study_dir: Path, gt: dict, out_dir: Path) -> tuple[Path, Pat
     for task, scores in sorted(by_task.items()):
         n = len(scores)
         mean = sum(scores) / n
-        # 95% normal CI via t-approx (good for n >= 20; OK to report on n>=10 with caveat)
+        # normal-approximation CI, reliable for n >= 20
         if n > 1:
             var = sum((s - mean) ** 2 for s in scores) / (n - 1)
             se = (var / n) ** 0.5

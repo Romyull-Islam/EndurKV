@@ -1,12 +1,8 @@
 #!/system/bin/sh
-# 2026-07-21 — resilient μKV Bonsai/Prism 8B hybrid-GPU runner.
-#
-# Full offload (99) allocates a 2,304 MiB f16 Vulkan KV cache at ctx=16k and
-# has previously been killed/DeviceLost.  A partial layer split distributes KV
-# buffers by layer between Vulkan and CPU RAM.  Try the fastest safe split
-# first; after a Vulkan failure, record it and restart at a smaller split.
-# This preserves inference availability; it cannot guarantee an Android driver
-# will never reset.
+# run_mukv_bonsai8b_gpu_guarded_device.sh: muKV on Bonsai-8B with a partial GPU layer split.
+# Full offload allocates a 2,304 MiB f16 Vulkan KV cache at ctx 16k and can be killed
+# (DeviceLost), so try 24/18/12/0 GPU layers in turn, moving to a smaller split after
+# each failure. Runs on the phone.
 
 set -u
 OUT=${1:?output directory required}

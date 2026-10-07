@@ -1,17 +1,8 @@
 #!/usr/bin/env python3
-"""What the cache budget K costs on the phone GPU: energy and time per request. (2026-09-21)
-
-WHY. The bandits could not choose K because the scheduler's GPU cost table has only K = 1024 plans.
-The accuracy side is now measured (campaigns/lb_ksweep_llama, RTX 4500, LongBench 5 tasks x 50):
-relative to K = 1024, average accuracy is -4% at K = 512 and +1 to +2% at K = 2048 / 4096. This
-measures the other side: the same request (9737-token prompt, 1024 output tokens, Llama-3.2-1B, muKV,
-GPU at 1200 MHz) at K = 512, 1024, 2048 and 4096, three rounds interleaved so drift spreads evenly.
-
-It reuses run_bandit_online.py's per-request runner unchanged (cool gate, CPU pinned at 1785.6 /
-1497.6 MHz, 2 Hz sampler, USB rail + battery pack), so these numbers sit on the same scale as the
-24-request clock ladder. Only K changes.
-Usage: ANDROID_SERIAL=... run_k_energy_gpu.py [--rounds 3]
-"""
+"""Energy and time per request on the phone GPU at cache budget K = 512, 1024, 2048, 4096, in
+interleaved rounds. Uses run_bandit_online.py's runner unchanged (9737-token prompt, 1024 output
+tokens, Llama-3.2-1B, muKV, GPU 1200 MHz, cool gate), so only K changes.
+Usage: ANDROID_SERIAL=... run_k_energy_gpu.py [--rounds 3]"""
 import argparse, json, os, statistics as st, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

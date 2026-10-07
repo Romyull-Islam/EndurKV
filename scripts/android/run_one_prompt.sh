@@ -1,22 +1,10 @@
 #!/system/bin/sh
-# run_one_prompt.sh — single-prompt orchestrator for the OnePlus 15.
+# run_one_prompt.sh: run the probe on one prompt on the phone with sample_sensors.sh
+# in the background, then write <prompt_id>.run.json with start/end timestamps,
+# thermal snapshots and exit code so the host can join probe and sensor logs.
+# Outputs per prompt: .entropy.csv, .sensors.csv, .probe.stderr, .run.json
 #
-# What it does, in order:
-#   1. Starts sample_sensors.sh in the background (thermal + UFS + meminfo, 10 Hz).
-#   2. Records the wall-clock epoch when the probe starts (joins probe's
-#      relative wall_clock_us back to the sampler's wall-clock seconds).
-#   3. Runs entropy_probe on a single prompt.
-#   4. Stops the sampler.
-#   5. Writes a join metadata file with start/end timestamps and exit code.
-#
-# Designed so the host driver (PC) can adb-shell this for each prompt and
-# pull the four output files per prompt:
-#   <prompt_id>.entropy.csv    per-step entropy / top-k
-#   <prompt_id>.sensors.csv    per-sample thermal / UFS / mem
-#   <prompt_id>.probe.stderr   probe log (steps, total_ms, eos_step)
-#   <prompt_id>.run.json       join metadata
-#
-# Usage on phone (already cd'd to /data/local/tmp/endurkv):
+# Usage on phone (from /data/local/tmp/endurkv):
 #   run_one_prompt.sh \
 #       --probe ./bin/entropy_probe \
 #       --model ./models/Llama-3.2-1B-Instruct-Q4_K_M.gguf \
@@ -66,27 +54,21 @@ SEN_CSV="$OUT_DIR/${PROMPT_ID}.sensors.csv"
 STD_ERR="$OUT_DIR/${PROMPT_ID}.probe.stderr"
 RUN_META="$OUT_DIR/${PROMPT_ID}.run.json"
 
-# attention_probe takes an extra --output-attn flag and disables flash-attn
-# under the hood to expose kq_soft_max tensors. We detect it by the binary
-# basename so the host orchestrator can switch probes via --probe alone.
+# attention_probe needs --output-attn. Detect it by basename so --probe alone
+# selects the probe.
 PROBE_BASENAME=$(basename "$PROBE")
 EXTRA_PROBE_ARGS=""
 if [ "$PROBE_BASENAME" = "attention_probe" ]; then
     EXTRA_PROBE_ARGS="--output-attn $ATTN_BIN"
 fi
 
-# Make sure LD_LIBRARY_PATH points at the bundled .so files (they sit next to
-# the probe binary thanks to the $ORIGIN rpath we set in CMakeLists, but
-# Android's loader still consults LD_LIBRARY_PATH first and we want to be
-# robust against the rpath being stripped by some build flag).
+# Point LD_LIBRARY_PATH at the bundled .so files in case the $ORIGIN rpath
+# was stripped by the build.
 PROBE_DIR=$(dirname "$PROBE")
 export LD_LIBRARY_PATH="$PROBE_DIR:$PROBE_DIR/../lib:$LD_LIBRARY_PATH"
 
-# ---- 0. Optional pre-cooldown ----
-# If $COOLDOWN_TEMP_C is set, wait until the hottest non-trip thermal zone is
-# below that threshold (in degrees C) before starting the sampler/probe. This
-# enforces a cold-baseline start for repeatable thermal measurements.
-# Tip: set COOLDOWN_TEMP_C=55 for routine repeatability; 45 for controller A/B.
+# 0. Optional pre-cooldown: if COOLDOWN_TEMP_C is set, wait (up to 5 min) until the
+# hottest thermal zone is at or below it, so every run starts from a similar temperature.
 if [ -n "$COOLDOWN_TEMP_C" ]; then
     threshold_mc=$((COOLDOWN_TEMP_C * 1000))
     wait_start=$(date +%s)
@@ -113,15 +95,14 @@ if [ -n "$COOLDOWN_TEMP_C" ]; then
     done
 fi
 
-# ---- 1. start sampler ----
+# 1. start sampler
 SAMP_LOG="$OUT_DIR/${PROMPT_ID}.sampler.stderr"
 "$SAMPLER" --out "$SEN_CSV" --hz "$SENSORS_HZ" 2>"$SAMP_LOG" &
 SAMP_PID=$!
-# Brief settle so the sampler writes at least one row before the probe starts;
-# helps the join script confirm sampler is alive.
+# Let the sampler write at least one row before the probe starts.
 sleep 0.2
 
-# ---- 2. snapshot the start instant ----
+# 2. snapshot the start instant
 START_WALL=$(date +%s.%N)
 START_MONO=$(awk '{print $1; exit}' /proc/uptime)
 THERMAL_AT_START=$(for z in /sys/class/thermal/thermal_zone*; do
@@ -131,13 +112,8 @@ THERMAL_AT_START=$(for z in /sys/class/thermal/thermal_zone*; do
     printf '"%s":%s,' "$name" "$t"
 done | sed 's/,$//')
 
-# ---- 2b. Snapshot system-wide UFS write totals via dumpsys storaged ----
-# Heavier than sysfs reads (binder ~50-100ms) so we capture only at start and
-# end of each prompt instead of every sample. Output is one line per UID with
-# foreground/background read/write bytes. We sum bytes_written across all
-# UIDs and emit a single scalar. This is the closest non-root ground-truth
-# we have for "bytes written to UFS during this prompt" — strictly tighter
-# than pswpout x 4 KB because storaged tracks all writes, not just swap-out.
+# 2b. System-wide UFS bytes written, from dumpsys storaged (summed over UIDs).
+# It costs about 50-100 ms, so it is read only at the start and end of the prompt.
 storaged_total_bytes_written() {
     dumpsys storaged 2>/dev/null | awk '
         /^[0-9]+ / { fg_w += $7; bg_w += $9 }
@@ -146,7 +122,7 @@ storaged_total_bytes_written() {
 }
 STORAGED_W_AT_START=$(storaged_total_bytes_written)
 
-# ---- 3. run the probe ----
+# 3. run the probe
 "$PROBE" \
     --model       "$MODEL" \
     --prompt-file "$PROMPT" \
@@ -168,7 +144,7 @@ THERMAL_AT_END=$(for z in /sys/class/thermal/thermal_zone*; do
 done | sed 's/,$//')
 STORAGED_W_AT_END=$(storaged_total_bytes_written)
 
-# ---- 4. stop the sampler cleanly ----
+# 4. stop the sampler cleanly
 kill -TERM "$SAMP_PID" 2>/dev/null
 # Give it ~200ms to flush.
 i=0
@@ -178,7 +154,7 @@ while kill -0 "$SAMP_PID" 2>/dev/null && [ "$i" -lt 10 ]; do
 done
 kill -KILL "$SAMP_PID" 2>/dev/null
 
-# ---- 5. write join metadata ----
+# 5. write join metadata
 {
     printf '{\n'
     printf '  "prompt_id": "%s",\n' "$PROMPT_ID"

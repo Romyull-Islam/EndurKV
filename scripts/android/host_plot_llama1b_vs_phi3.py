@@ -1,51 +1,8 @@
 #!/usr/bin/env python3
-"""
-FIGURE 22 - Llama-1B vs Phi-3 cross-model head-to-head.
-
-A two-panel grouped bar chart comparing two model families under the same
-control / FA configuration on the OnePlus-15 (SD8-Gen5) hardware:
-
-  vanilla        - stock llama.cpp run, full KV
-  v1_K512        - v1 selective-stack with K=512 budget (no FA mod)
-  v1_FA_K512     - v1 selective-stack + custom FA kernel, K=512 budget
-
-Left panel  : decode throughput (tokens / s)  - higher is better
-Right panel : peak DDR memory temperature (C) - lower is better
-
-Headline (top-level title):
-  "Llama-1B is 5-7x faster than Phi-3 at decode AND ~10 C cooler -
-   model size dominates"
-
-PPL METRIC PROVENANCE (important; printed in the schema sidecar but NOT
-drawn in this figure):
-  - Llama-1B Wave-3   numbers: PPL is *sampling-NLL on narrativeqa*  (Wave-3
-    long-decode protocol). They are NOT directly cross-comparable with
-    Wave-11 held-out PPL. We therefore deliberately do NOT plot PPL bars
-    in this figure - the figure shows only operational metrics
-    (tps, peak DDR) that ARE directly comparable across the two models.
-  - Phi-3 Wave-3 numbers: same sampling-NLL protocol on the same prompts.
-  - Vanilla baselines listed below are from each model's Wave-3 vanilla
-    cell on the same device.
-
-Data (passed in by the orchestrator from Wave-3 / Wave-11 cells):
-  Llama-1B Wave-3      : PPL 2.03 (sampling), tps 7.05, peak DDR 49.4 C,
-                         swap 0 MB
-  Phi-3 Wave-3         : PPL 9.42 (sampling), tps 1.07, peak DDR 61.7 C,
-                         swap 172 MB
-  Llama-1B vanilla     :              tps 5.09, peak DDR 51.7 C,
-                         swap 7 MB,   PPL 2.42 (sampling)
-  Phi-3 vanilla        :              tps 1.00, peak DDR 57.9 C,
-                         swap 221 MB, PPL 3.55 (sampling)
-
-We extrapolate a v1_FA_K512 cell for each model from the Wave-3 / Wave-9
-delta we already know (Phi-3 v1_FA_K512 mean tps 4.65 -> +75% over v1_K512;
-Llama-1B has no separate FA cell in Wave-3, so we plot the v1_K512 number
-as the FA cell and flag it). All cells are clearly labeled.
-
-Output:
-  /home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/
-  22_llama1b_vs_phi3.png
-  + matching .schema.json sidecar (RES_SCHEMA)
+"""Figure 22: Llama-1B against Phi-3 on the phone (vanilla, v1 K=512, v1_FA K=512).
+Left panel decode tok/s, right panel peak DDR temperature, from hardcoded Wave-3 numbers.
+PPL is not drawn because Wave-3 sampling-NLL is not comparable with held-out PPL.
+Writes figures/relationship_plots/22_llama1b_vs_phi3.png and a .schema.json sidecar.
 """
 
 from __future__ import annotations
@@ -59,13 +16,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-# ----- inputs (handed in by the orchestrator) -------------------------------
-# Order on the x-axis is: vanilla, v1_K512, v1_FA_K512
+# x-axis order
 CONFIGS = ["vanilla", "v1_K512", "v1_FA_K512"]
 
-# Llama-1B numbers (from Wave-3 llama-1B cells).  v1_FA_K512 cell was not
-# separately recorded for Llama-1B in Wave-3, so we plot the v1_K512 number
-# in its place and flag that on the figure / schema.
+# Llama-1B, Wave-3 cells. There is no separate v1_FA_K512 cell, so the v1_K512
+# numbers stand in and are flagged as a proxy.
 LLAMA = {
     "model_label": "Llama-1B  (1.3 GB, Q4_K_M)",
     "color": "#1f77b4",          # blue
@@ -92,9 +47,7 @@ LLAMA = {
     "v1_FA_K512_is_proxy": True,
 }
 
-# Phi-3 numbers (from Wave-3 Phi-3 cells).  We have a separate Wave-4 v1_FA
-# cell for Phi-3 (4.65 tps, 62.5 C) but the prompt asked for the Wave-3
-# K=512 cell, so we plot v1_FA_K512 == v1_K512 for Phi-3 too.
+# Phi-3, Wave-3 cells. v1_FA_K512 reuses the v1_K512 numbers here too.
 PHI3 = {
     "model_label": "Phi-3-mini  (3.8 GB, Q4_K_M)",
     "color": "#d62728",          # red
@@ -133,7 +86,7 @@ HEADLINE = (
 )
 
 
-# ----- main -----------------------------------------------------------------
+# main
 
 def main() -> None:
     os.makedirs(os.path.dirname(OUT_PNG), exist_ok=True)
@@ -143,7 +96,7 @@ def main() -> None:
 
     fig, (ax_tps, ax_ddr) = plt.subplots(1, 2, figsize=(13.5, 6.0))
 
-    # ----- LEFT: tps comparison ------------------------------------------
+    # LEFT: tps comparison
     llama_tps = [LLAMA["tps"][c] for c in CONFIGS]
     phi3_tps  = [PHI3["tps"][c]  for c in CONFIGS]
 
@@ -209,7 +162,7 @@ def main() -> None:
         transform=ax_tps.transData,
     )
 
-    # ----- RIGHT: peak DDR comparison ------------------------------------
+    # RIGHT: peak DDR comparison
     llama_ddr = [LLAMA["peak_ddr_c"][c] for c in CONFIGS]
     phi3_ddr  = [PHI3["peak_ddr_c"][c]  for c in CONFIGS]
 
@@ -281,7 +234,7 @@ def main() -> None:
     ax_ddr.set_ylim(40, 72)
     ax_ddr.legend(loc="upper left", fontsize=10.0, framealpha=0.93)
 
-    # ----- caveat banner --------------------------------------------------
+    # caveat banner
     fig.text(
         0.50, 0.015,
         "Wave-3 protocol = sampling-NLL on narrativeqa; NOT directly "
@@ -300,7 +253,7 @@ def main() -> None:
     fig.savefig(OUT_PNG, dpi=160)
     print(f"[ok] wrote {OUT_PNG}")
 
-    # ----- schema sidecar -------------------------------------------------
+    # schema sidecar
     # speedup / delta summary table
     summary = {}
     for c in CONFIGS:

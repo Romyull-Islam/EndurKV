@@ -1,52 +1,12 @@
 #!/bin/bash
-# ============================================================================
-# run_gpu_sustained_thermal.sh -- the GPU counterpart to Fig. "bonsai thermal".
-# (2026-08-09)
-#
-# WHY THIS EXISTS. The thermal figure in both drafts (Fig. 4 in the 8-page, Fig. 6 in
-# the 2027 draft) shows the watchdog converting vanilla's throttle SAWTOOTH -- the prime
-# clock repeatedly collapsing to 883 MHz from ~40 min onward -- into a flat plateau at
-# 1267 MHz, with battery held just under the 50 C trigger. That is a real and strong
-# result, and it is the watchdog's actual value: SUSTAINED, STABLE operation, not mean
-# throughput. But it is a CPU measurement: the top panel is the prime (big-core) clock,
-# those runs record no GPU offload, and Bonsai-8B cannot run on Adreno at all (there is
-# no Q1_0 Vulkan shader). There is no GPU equivalent on disk -- the deployment run that
-# should have produced one failed its pulls and left /tmp/deploy empty.
-#
-# WHY A COLD-START A/B CANNOT ANSWER THIS. Two independent campaigns (n=3 on 2026-07-30,
-# n=1x6 on 2026-08-08) measured the GPU watchdog under the cool gate and both found
-# exactly nothing: zero clock steps, and wall/energy differences inside a 3-4% noise
-# band. That is not evidence the watchdog is useless -- it is a direct consequence of the
-# protocol. The gate (DDR<=35 C, battery<=33 C) exists to make timing comparable, and it
-# guarantees the phone starts far below any ladder: v5LOW triggers at 36 C battery,
-# v5HIGH at 47 C, and a cold-start 4096-token generation peaks at 35 C. The gate and the
-# watchdog test are mutually exclusive by construction.
-#
-# THE PROTOCOL HERE IS THE OPPOSITE ONE, deliberately. Cool ONCE at the start so every
-# arm begins from the same baseline, then drive the GPU back-to-back with no gate between
-# generations until it reaches thermal equilibrium. This is the regime the drafts call
-# "sustained-hot", and the only one in which a reduce-only watchdog can act.
-#
-# WHAT IS MEASURED. GPU clock at 2 Hz alongside battery/skin/DDR/gpuss, so the GPU
-# analogue of the prime-clock panel can be plotted: does vanilla's GPU clock develop the
-# same sawtooth, and does the watchdog replace it with a plateau? Per-iteration tok/s is
-# recorded too, because the claim to test is stability over time, not the mean -- an arm
-# whose throughput decays across iterations is throttling even if its average looks fine.
-#
-# WHICH LADDER FOR THE GPU: v5LOW is the one under test. The two ladders were calibrated
-# against different heat sources. v5HIGH (battery 47.0/48.0/48.5, skin 50.0/51.0/51.5) is
-# anchored to the CPU deep-throttle trigger measured at 50 C battery, which is right for a
-# sustained CPU workload like Bonsai-8B. A GPU workload heats the surface on a different
-# path and to lower absolute numbers: the cold-start GPU runs peaked at 39.5 C skin and
-# 35.4 C battery, so v5HIGH cannot fire on this workload however long it runs. v5LOW
-# (battery 36.0/36.5/37.0, skin 39.5/40.0/40.5) sits exactly where this workload lives.
-# v5HIGH is kept as a fourth arm to CONFIRM it stays dormant rather than assuming it.
-#
-# ARMS: vanilla (no watchdog, as always -- baselines never receive it), muKV without the
-# watchdog, muKV with v5LOW, and muKV with v5HIGH. The no-watchdog muKV arm matters: muKV may reach equilibrium
-# below the ladder on its own, in which case the watchdog is unnecessary on GPU rather
-# than ineffective, and those are different findings.
-# ============================================================================
+# GPU sustained-thermal run, Llama-3.2-1B. Cool once, then run back-to-back
+# 4096-token generations with no cooling in between until the phone reaches
+# thermal equilibrium. A cool gate before every run would keep the phone below
+# every watchdog ladder, so the watchdog can only act in this regime.
+# Logs GPU clock and temperatures at 2 Hz plus per-iteration tok/s.
+# Arms: vanilla (no watchdog), muKV without watchdog, muKV with v5LOW
+# (battery 36.0/36.5/37.0 C, skin 39.5/40.0/40.5 C) and muKV with v5HIGH
+# (battery 47/48/48.5 C, skin 50/51/51.5 C), a CPU-calibrated ladder.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 
@@ -72,12 +32,12 @@ arm(){ # $1 tag  $2 flags  $3 watchdog(none|v5high)
   local O="$HOST/$TAG"; [ -f "$O/iters.txt" ] && { echo "  [$TAG] cached"; return; }
   mkdir -p "$O"
 
-  # Cool ONCE, to the project's gate, so all three arms start from the same baseline.
+  # Cool once to the standard gate so every arm starts from the same baseline.
   echo "[$(date +%H:%M:%S)] $TAG: cooling to the standard gate (DDR<=35, batt<=33) ..."
   CG=$(adb_safe_shell "su -c '. /data/local/tmp/endurkv/scripts/cool_gate.sh; cool_ddr36'" < /dev/null)
   case "$CG" in *"cool ddr="*) : ;; *) echo "  [SKIP-HOT] $TAG"; return ;; esac
 
-  # GPU clock sampler: the panel the CPU figure has and this one needs.
+  # GPU clock and temperature sampler, 2 Hz.
   adb_safe_shell "su -c 'rm -f $DEV/${TAG}_clk.csv; nohup sh -c \"echo \\$\\$ > $DEV/${TAG}_clk.pid; echo t_s,gpu_clk,gpu_max,batt_mC,skin_mC,ddr_mC,gpuss_mC > $DEV/${TAG}_clk.csv; while true; do
       c=\\\$(cat /sys/class/kgsl/kgsl-3d0/devfreq/cur_freq 2>/dev/null || cat /sys/kernel/gpu/gpu_clock 2>/dev/null);
       m=\\\$(cat /sys/kernel/gpu/gpu_max_clock 2>/dev/null);
@@ -92,7 +52,7 @@ arm(){ # $1 tag  $2 flags  $3 watchdog(none|v5high)
     v5high) adb_safe_shell "su -c 'rm -f $WD_STOP; nohup sh /data/local/tmp/gpu_watchdog_v5_real.sh $DEV/${TAG}_wd.log $WD_STOP >/dev/null 2>&1 &'" < /dev/null ;;
   esac
 
-  # Back-to-back, NO cooling between iterations -- this is what builds the heat.
+  # No cooling between iterations, so heat builds up.
   : > "$O/iters.txt"
   for i in $(seq 1 $ITERS); do
     echo "[$(date +%H:%M:%S)]   $TAG iter $i/$ITERS"
@@ -111,11 +71,8 @@ if os.path.exists(f):
     print('    iter %s tps=%.2f wall=%.0fs'%('$i', j.get('decode_tps') or 0, j['total_ms']/1000))" | tee -a "$O/iters.txt"
   done
 
-  # FIXED 2026-08-09: teardown used pkill -f "cur_freq", which never matched the
-  # sampler's command line. Every arm's sampler therefore kept running to the end of the
-  # campaign, so each clock trace contained its own arm PLUS all later arms superimposed
-  # -- vanilla's "trace" spanned 287 min instead of 47. All clock-distribution analysis
-  # from that run was void (it showed a LOWER mean cap for the faster arm). Kill by PID.
+  # Kill the clock sampler by PID. pkill -f does not match its command line, and a
+  # leftover sampler would mix later arms into this arm's trace.
   adb_safe_shell "su -c 'touch $WD_STOP; pkill -f sample_sensors; [ -f $DEV/${TAG}_clk.pid ] && kill \$(cat $DEV/${TAG}_clk.pid) 2>/dev/null; sleep 1; echo 1200 > /sys/kernel/gpu/gpu_max_clock'" < /dev/null
   adb pull $DEV/${TAG}_clk.csv  "$O/clk.csv"     < /dev/null >/dev/null 2>&1
   adb pull $DEV/${TAG}_sens.csv "$O/sensors.csv" < /dev/null >/dev/null 2>&1

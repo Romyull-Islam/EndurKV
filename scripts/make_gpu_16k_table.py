@@ -1,22 +1,9 @@
 #!/usr/bin/env python3
-# ============================================================================
-# make_gpu_16k_table.py -- phone-GPU full-16K-context results table. (2026-08-02)
-#
-# WHY THIS EXISTS. The 256-token phone-GPU matrix reported a 2.12x Phi-3 decode
-# speedup that does not survive a longer run: with only 256 tokens, a fixed
-# post-prefill cost (~2.9s on vanilla, ~0.2s on muKV -- vanilla pays a larger
-# one-time FA graph/alloc cost) is amortised over far too few tokens and inflates
-# the ratio. Fitting decode_ms = n*t + C across the 256- and 4096-token runs
-# recovers a consistent steady-state t for both policies. This script reports the
-# 4096-token (full-ctx) numbers, which are the ones with no such contamination,
-# and prints BOTH decode-only and wall speedups because eviction cannot shrink
-# prefill and wall is prefill-dominated on this device.
-#
-# It also surfaces, per cell: whether compaction actually ran (compaction_applied
-# -- a silent fallback when the second FA-on context fails to allocate would
-# otherwise look like a policy result), retained cache, and how many times the
-# muKV-only GPU watchdog v5 actually changed a clock tier.
-# ============================================================================
+# Phone-GPU 16K-context table from 4096-token runs. Short runs inflate decode speedups
+# because a fixed post-prefill cost is spread over too few tokens.
+# Prints decode-only and wall speedups (wall is prefill-dominated and eviction cannot shrink
+# prefill), whether compaction actually ran, retained cache, and muKV watchdog tier changes.
+# Usage: make_gpu_16k_table.py [BASE_DIR]   (default /tmp/phone_gpu_16k)
 import json, re, os, sys, glob
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "/tmp/phone_gpu_16k"
@@ -74,7 +61,7 @@ for mt in ["llama1b", "phi3"]:
             j.get("compaction_applied"), "-" if t is None else t))
     print()
 
-# the honest framing: wall is prefill-dominated on Adreno
+# prefill share of wall time on Adreno
 for mt in ["llama1b", "phi3"]:
     v = meta(mt + "_vanilla")
     if v:

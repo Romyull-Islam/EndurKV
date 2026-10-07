@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
-"""Plot KV cache memory growth vs context length, per model.
-
-Generates two figures:
-  kv_growth_linear.png  — linear x-axis (4K..32K mobile-realistic regime)
-  kv_growth_log.png     — log x-axis (512..128K full range, cloud included)
-
-Phone-RAM reference lines (8 GB and 12 GB) overlaid so the reader sees where
-each model crosses the practical mobile envelope.
+"""Plot KV cache memory against context length per model, with 8 GB and 12 GB phone-RAM lines.
+Writes kv_growth_linear.png (linear x-axis, up to 32K) and kv_growth_log.png (512 to 128K).
 """
 import sys
 from pathlib import Path
@@ -22,14 +16,14 @@ from model_arch_specs import MODEL_SPECS, kv_bytes_per_token
 
 # Plot styling: order models by per-token memory so the legend is informative
 PLOT_ORDER = [
-    "phi3-mini-4k",      # 384 KB/token — MHA, worst
+    "phi3-mini-4k",      # 384 KB/token - MHA, worst
     "llama3.1-8b",       # 128 KB/token
     "mistral-7b",        # 128 KB/token (same)
     "r1distill-llama-8b",# 128 KB/token (same)
     "llama3.2-3b",       # 112 KB/token
     "gemma2-2b",         # 104 KB/token (global layers)
     "qwen2-7b",          # 56 KB/token
-    "llama3.2-1b",       # 32 KB/token — smallest
+    "llama3.2-1b",       # 32 KB/token - smallest
 ]
 COLORS = {
     "phi3-mini-4k":       "#d62728",

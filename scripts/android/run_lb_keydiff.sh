@@ -1,34 +1,17 @@
 #!/bin/bash
-# ============================================================================
-# run_lb_keydiff.sh -- KeyDiff on the phone LongBench set, so Table 3's empty
-# LongBench cells for KeyDiff can be filled. (2026-09-24)
-#
-# WHY. The LongBench-on-phone campaign (run_longbench_wide.sh, /tmp/lb_native)
-# ran every policy on one build, and KeyDiff needs its own (bin_cpu_kd), which
-# was ported after that campaign. So KeyDiff has no F1 and no cache share in
-# Table 3. Thirty KeyDiff cells already exist (hotpotqa and qasper, 15 each, at
-# k_nominal 2048, from run_kd_lb_headline.sh); the rest of the set is missing.
-#
-# WHAT. The SAME prompts the other policies ran: the (task, idx) pairs of the
-# existing mukv_* cells in /tmp/lb_native define the set, so nothing depends on
-# re-running the size filter. Same model, ctx, generation lengths, seed and
-# threads as run_longbench_wide.sh; KeyDiff at its published budget of 2048
-# with the flags Table 2's CPU row used (run_keydiff_full_ladder.sh). Cells
-# that already have gen.txt are skipped, so the script resumes after a cut.
-# Quality only: no cooling gate (F1 and live cells do not depend on clock), but
-# a heat guard waits while DDR is above 52 C so an unattended run cannot cook
-# the phone. Charging is off while it runs and restored at exit.
-# ============================================================================
+# run_lb_keydiff.sh: KeyDiff on the phone LongBench set, using its own build (bin_cpu_kd).
+# The prompt set is the (task, idx) pairs of the mukv_* cells in /tmp/lb_native, with the
+# same settings as run_longbench_wide.sh and KeyDiff at its published budget of 2048.
+# Existing cells are skipped, so the script resumes after a cut. No cooling gate (quality
+# only), but a heat guard waits while DDR is above 52 C. Charging is off until exit.
 set -u
 export ANDROID_SERIAL=${ANDROID_SERIAL:-3C15B8003ZA00000}
 export ADB_PORTS=${ADB_PORTS:-"5162 5161 5037"} ADB_CALL_TIMEOUT=${ADB_CALL_TIMEOUT:-1500}
 LOG(){ echo "[$(date +%H:%M:%S)] $*"; }
 
-# wait for the phone on either adb server before sourcing the helper.
-# 5161 is an ssh reverse tunnel to the laptop's adb server. If nothing listens there, a plain
-# "adb devices" STARTS a local adb server on that port, which then blocks the tunnel from ever
-# binding again (2026-09-24). So: only talk to a port something already listens on, and if the
-# listener is a stray local adb server on the tunnel port, kill it and free the port.
+# Wait for the phone on one of the adb servers. 5161 is an ssh reverse tunnel, and a plain
+# "adb devices" on a free port starts a local server there that blocks the tunnel. So only use
+# ports that already have a listener, and kill a stray local adb server on a tunnel port.
 port_ok(){
   local l; l=$(ss -ltnp 2>/dev/null | grep ":$1 ") || return 1
   if echo "$l" | grep -q '"adb"' && [ "$1" != 5037 ]; then

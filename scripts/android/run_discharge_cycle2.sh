@@ -1,29 +1,11 @@
 #!/bin/bash
-# ============================================================================
-# run_discharge_cycle2.sh -- second real-battery discharge cycle, a repeat of
-# the paper's discharge run (2026-09-05/06, /tmp/discharge_final). (2026-09-24)
-#
-# WHY. The paper's discharge result is one cycle (123 requests, 91 to 12%).
-# A second cycle under the same protocol turns it into a repeated measurement.
-#
-# WHAT. Same phone-resident loop (phone_discharge_loop.sh, detached, no host
-# in the loop), same prompt (prompt_12k.txt, 9737 tokens, --ignore-eos), same
-# floor (STOP_SOC 12), same seed: the shipped cost table
-# ukv_sched_table.txt. Its only change since cycle 1 is q for the CPU K<1024
-# rows (0.63/0.58 -> 0.74/0.74), which stays under every tier's floor, so the
-# walk behaves the same. The scheduler is the current ukv_sched.sh (v2.7); for
-# the default model its per-model table under $ROOT/tables is the shipped
-# table, so that copy and its bias file are removed too, otherwise the loop
-# would start from cycle 1's learned table and not from the cable seed.
-#
-# SEQUENCE. Wait for the phone; refuse if a bench is running; push scripts;
-# charge to >= 90% with charging ON; reset tables; launch the loop detached
-# under su with OUTD=$ROOT/discharge2; confirm it started; then print the
-# instruction to UNPLUG THE CABLE (on the cable the USB port carries 5 W of
-# every 6 W request, so the pack only discharges once the cable is out).
-# The loop runs on the phone alone for ~37 h; pull_discharge_cycle2.sh
-# collects the results when the phone is back on the cable.
-# ============================================================================
+# Real-battery discharge cycle, a repeat of the paper's discharge run under the same
+# protocol: phone_discharge_loop.sh runs detached on the phone, prompt_12k.txt (9737
+# tokens, --ignore-eos), stop at STOP_SOC 12, cost table seeded from ukv_sched_table.txt.
+# The per-model table and bias file are reset to the seed so the loop does not start from
+# a previously learned table. Output goes to $ROOT/discharge2. Unplug the cable once it
+# starts, since on the cable the USB port supplies most of each request's power.
+# The loop runs about 37 h on the phone alone.
 set -u
 export ANDROID_SERIAL=${ANDROID_SERIAL:-3C15B8003ZA00000}
 export ADB_PORTS=${ADB_PORTS:-"5162 5161 5037"} ADB_CALL_TIMEOUT=${ADB_CALL_TIMEOUT:-600}
@@ -72,13 +54,12 @@ adb push $A/ukv_sched_table.txt $ROOT/ukv_sched_table.seed.txt < /dev/null >/dev
 sh_su "chmod 755 $ROOT/ukv_sched.sh $ROOT/phone_discharge_loop.sh $ROOT/scripts/cool_gate.sh /data/local/tmp/sample_sensors.sh"
 sh_su "ls -la $ROOT/ukv_sched_table.seed.txt $ROOT/phone_discharge_loop.sh $ROOT/corpora/prompt_12k.txt" | sed 's/^/  /'
 
-# the laptop port does not charge this phone (2026-09-25: switch on, USB_CDP 1.5 A, battery current
-# 0, "Not charging"), so the wait for the start level lives ON THE PHONE: phone_discharge_start.sh
-# charges on any charger, resets the tables to the seed at the moment it starts, and execs the loop.
+# The laptop port does not charge this phone, so the wait for the start level runs on the phone:
+# phone_discharge_start.sh charges on any charger, resets the tables to the seed, then execs the loop.
 adb push $A/phone_discharge_start.sh $ROOT/phone_discharge_start.sh < /dev/null >/dev/null 2>&1
 sh_su "chmod 755 $ROOT/phone_discharge_start.sh; rm -f $ROOT/discharge2.start.log"
 sh_su "cp $ROOT/tables/$MKEY.txt $ROOT/tables/$MKEY.txt.bak_cycle2_$(date +%Y%m%d_%H%M%S) 2>/dev/null; true"
-# launch the loop on the phone, detached
+# Launch the loop on the phone, detached.
 sh_su "cd $ROOT; START_SOC=$MIN_SOC STOP_SOC=$STOP_SOC nohup sh $ROOT/phone_discharge_start.sh </dev/null >$ROOT/discharge2.nohup 2>&1 &"
 sleep 20
 PID=$(sh_su "pgrep -f [p]hone_discharge_start; pgrep -f [p]hone_discharge_loop" | tr -d '\r' | xargs)

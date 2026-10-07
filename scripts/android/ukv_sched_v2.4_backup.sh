@@ -1,46 +1,13 @@
 #!/system/bin/sh
-# ============================================================================
-# ukv_sched.sh -- energy-aware scheduler for muKV on the phone: two loops and a lever
-# (2026-09-08, v2.4: --model, per-model backend capability list ukv_backend.txt, output-validity check after every run, automatic CPU re-run when a GPU run fails or emits degenerate output, --no-feedback now also freezes the cost table; 2026-09-06, v2.3: start-anchored energy split with a 30 s gauge lag, bench in background; v2.2: loops act on model error, bias decays when both budgets are met, walk slack has a
-#  5% tolerance floor, table learning is clipped to 10% per request)
-#
-# ONE LEVER. L in [0, 1]: 1 = performance, 0 = energy. The battery tier only sets its
-# default position (mains and above 50%: 1.0; 21 to 50%: 0.5; 20% or below: 0.0); the
-# caller may move it (--lever L). L sets everything the two loops trade at:
-#     exchange rate  LAM(L) : a step down the ladder is taken only if it saves at least
-#                             LAM times as much energy (relative) as it costs in time
-#                             (1.5 at L=1, 0.8 at L=0.5, 0.5 at L=0)
-#     quality floor  QF(L)  : 1.0 / 0.9 / 0.75 of the K=1024 answer quality
-#     time budget    T_bud  : T_full * (1 + 0.03 + 0.37 * (1 - L))   performance loop
-#     energy budget  E_bud  : E_full * (1 - 0.25 * (1 - L))      energy loop
-#     output cap            : 4096 / 1024 / 512 when the caller left the length open
-#
-# TWO LOOPS, INTERCONNECTED THROUGH THE LEVER.
-#   performance loop: predicts T per plan from the table; a plan must fit T_bud; after the
-#                     request compares the metered T with T_bud and, if over, nudges the
-#                     lever toward performance for the next request in this context.
-#   energy loop     : predicts E per plan from the table; walks the ladder while the
-#                     exchange rate holds; after the request compares the metered E with
-#                     E_bud and, if over, nudges the lever toward energy.
-#   When both budgets are violated the larger relative error wins. The nudge is +-0.1 per
-#   request, clamped to +-0.3, kept per battery tier in ukv_lever_bias.txt.
-#   The loops share one memory: the cost table, updated from every request's meter (EMA 0.3).
-#
-# PLANS. Rows of the table: backend, GPU clock cap for prefill, cache K; a plan name that
-# contains d<MHz> (e.g. gpu1200d902_k1024) lowers the GPU cap to <MHz> for decode only,
-# via --gpu-mhz-decode in the engine. Prefill is compute-bound and pays for a cap in time;
-# decode is bandwidth-bound and does not, so split plans are where the two loops meet.
-#
-# OUTPUT LENGTH POLICY as before: --max-tokens honored; --size short|medium|long = 256,
-# 1024, 4096; a prompt whose last 600 bytes state a length is not capped; else by L.
+# Backup of an older ukv_sched.sh with one shared cost table and no --plan option.
+# Energy-aware muKV scheduler: a lever L in [0, 1] (1 = performance, 0 = energy), defaulted
+# by battery tier, sets the budgets, and two feedback loops nudge the per-tier lever bias.
 #
 # Usage:
-#   ukv_sched.sh --prompt FILE [--max-tokens N | --size S] [--lever L] [--no-feedback]
-#                [--force-soc S] [--force-status charging|discharging] [--cpu-only]
-#                [--ignore-eos] [--dry-run] [--tag NAME]
-# Files: table $ROOT/ukv_sched_table.txt, bias $ROOT/ukv_lever_bias.txt, log $ROOT/ukv_sched.log,
-#        per-request outputs $ROOT/sched/<tag>/.  Runs as root (su).
-# ============================================================================
+#   ukv_sched.sh --prompt FILE [--max-tokens N | --size short|medium|long] [--lever L]
+#                [--model NAME] [--no-feedback] [--force-soc S] [--force-status charging|discharging]
+#                [--cpu-only] [--ignore-eos] [--dry-run] [--tag NAME]
+# Writes $ROOT/ukv_sched_table.txt, $ROOT/ukv_lever_bias.txt, $ROOT/ukv_sched.log. Runs as root.
 ROOT=/data/local/tmp/endurkv
 BIN_GPU=/data/local/tmp/ukv            # Vulkan build for GPU plans
 BIN_CPU=$ROOT/bin_cpu_ea               # CPU-only build for CPU plans (the Vulkan build with
@@ -72,18 +39,18 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -f "$PROMPT" ] || { echo "need --prompt FILE" >&2; exit 1; }
-# --model NAME (a file under $ROOT/models) or a path; default Llama-3.2-1B. v2.4 (2026-09-08).
+# --model takes a file name under $ROOT/models or a path. Default Llama-3.2-1B.
 if [ -n "$MODELARG" ]; then case "$MODELARG" in */*) MODEL=$MODELARG;; *) MODEL=$ROOT/models/$MODELARG;; esac; fi
 [ -f "$MODEL" ] || { echo "model not found: $MODEL" >&2; exit 1; }
 MNAME=$(basename $MODEL)
-# Per-model backend capability, learned from failures: "<model file> gpu no <reason>". A model listed
-# here never gets a GPU plan. Seeded with Bonsai-8B-Q1_0 (its Vulkan kernels return non-finite logits).
+# Models listed as "<model file> gpu no <reason>" get no GPU plan. Lines are added on GPU failures.
+# Bonsai-8B-Q1_0 is seeded because its Vulkan kernels return non-finite logits.
 CAP=$ROOT/ukv_backend.txt
 [ -f $CAP ] || echo "Bonsai-8B-Q1_0.gguf gpu no non-finite logits on Adreno, 2026-08" > $CAP
 [ -z "$TAG" ] && TAG=sched_$(date +%Y%m%d_%H%M%S)
 OUT=$ROOT/sched/$TAG; mkdir -p $OUT
 
-# ---- 1. phone state -> tier -> default lever ----
+# 1. Phone state, battery tier and default lever
 BAT=$(dumpsys battery 2>/dev/null)
 SOC=$(echo "$BAT" | grep -m1 "level:" | sed 's/.*: *//' | tr -d ' \r')
 STAT=$(echo "$BAT" | grep -m1 "status:" | sed 's/.*: *//' | tr -d ' \r')
@@ -104,18 +71,18 @@ elif [ "$SOC" -gt 20 ]; then TIER=mid; L0=0.5
 else TIER=low; L0=0.0; fi
 BIASV=$(grep -m1 "^$TIER " $BIAS 2>/dev/null | awk '{print $2}'); [ -z "$BIASV" ] && BIASV=0
 if [ -n "$LEVER" ]; then L=$LEVER; LSRC="caller"; else L=$(awk -v a=$L0 -v b=$BIASV 'BEGIN{l=a+b; if(l<0)l=0; if(l>1)l=1; printf "%.2f", l}'); LSRC="tier $TIER default $L0 + feedback bias $BIASV"; fi
-# lever -> loop parameters, piecewise linear through the three tier anchors (L = 0, 0.5, 1)
+# Loop parameters from L, piecewise linear through the tier anchors L = 0, 0.5, 1
 eval $(awk -v L=$L 'function pl(a,b,c){ return (L<0.5)? a+(b-a)*(L/0.5) : b+(c-b)*((L-0.5)/0.5) }
   BEGIN{ printf "WQ=%.3f WT=%.3f WE=%.3f LAM=%.3f QF=%.3f TSLACK=%.3f ESAVE=%.3f",
     pl(0.20,0.35,0.55), pl(0.10,0.20,0.40), pl(0.70,0.45,0.05), pl(0.5,0.8,1.5), pl(0.75,0.90,1.00), 0.03+0.37*(1-L), 0.25*(1-L) }')
-# time slack is 3% at full performance (the healthy cells' own spread), 40% at the energy end;
-# no budget is tighter than the 5% model tolerance the loops use, or one over-budget sample
-# (the vendor limiter tripping early) would evict the split plan from the healthy walk
+# Time slack runs from 3% (L=1) to 40% (L=0), floored at the 5% model tolerance so one
+# over-budget sample does not drop the split plan from the walk.
 [ -z "$WQ" ] && { echo "lever mapping failed" >&2; exit 1; }
 TSLACK=$(awk -v s=$TSLACK 'BEGIN{printf "%.3f", (s<0.05)?0.05:s}')
 CAPL=$(awk -v L=$L 'BEGIN{print (L>=0.75)?4096:(L>=0.25)?1024:512}')
 
-# ---- 2. request shape and output length policy ----
+# 2. Output length: --max-tokens, else --size (256/1024/4096), else uncapped if the prompt
+# states a length in its last 600 bytes, else the lever cap (4096/1024/512).
 BYTES=$(stat -c %s "$PROMPT" 2>/dev/null || wc -c < "$PROMPT")
 NPROMPT=$(( BYTES * 10 / 45 ))
 LENRULE=""
@@ -127,7 +94,7 @@ elif tail -c 600 "$PROMPT" | grep -qiE "in (one|two|three|four|five|[0-9]+) (wor
   NOUT=4096; LENRULE="prompt states a length (in its last 600 bytes); not capped"
 else NOUT=$CAPL; LENRULE="lever cap for L=$L"; fi
 
-# ---- 3. score the plans: backend by weighted utility, then the ladder walk with both loops ----
+# 3. Pick the backend by weighted utility, then walk its ladder
 PLAN=$(awk -v np=$NPROMPT -v no=$NOUT -v wq=$WQ -v wt=$WT -v we=$WE -v gpu=$GPU_OK -v hot=$HOT -v lam=$LAM -v qf=$QF -v tslack=$TSLACK '
   /^#/ || NF<9 {next}
   { if ($2=="gpu" && gpu==0) next;
@@ -143,9 +110,8 @@ PLAN=$(awk -v np=$NPROMPT -v no=$NOUT -v wq=$WQ -v wt=$WT -v we=$WE -v gpu=$GPU_
         for (a=1;a<=m;a++) for (b=a+1;b<=m;b++) { i=o[a]; j=o[b]; if (Q[j]>Q[i] || (Q[j]==Q[i] && T[j]<T[i])) { o[a]=j; o[b]=i } }
         cur=o[1]; tfull=T[cur]; efull=E[cur]; tbud=tfull*(1+tslack)
         printf("  walk %s (T budget %.0f s = full %.0f s + %.0f%%): start %s", bk, tbud/1000, tfull/1000, 100*tslack, name[cur]) > "/dev/stderr"
-        # walk in time order: a plan that saves nothing or trades poorly against the current one
-        # is skipped (a later, larger step may still pay); the walk stops only when the next plan is
-        # over the time budget or under the quality floor, since both only get worse down the ladder
+        # Walk in time order. Skip a plan that saves nothing or trades poorly. Stop at the first
+        # plan over the time budget or under the quality floor, both only get worse down the ladder.
         for (a=2;a<=m;a++) { k=o[a]; dE=(E[cur]-E[k])/E[cur]; dT=(T[k]-T[cur])/T[cur]
           if (Q[k]<qf)  { printf(" -> %s: stop (quality)", name[k]) > "/dev/stderr"; break }
           if (T[k]>tbud){ printf(" -> %s: stop (over time budget)", name[k]) > "/dev/stderr"; break }
@@ -162,12 +128,8 @@ BACKEND=$(echo "$ROW" | awk '{print $2}'); GMHZ=$(echo "$ROW" | awk '{print $3}'
 DMHZ=$(echo "$PLAN" | sed -n 's/^gpu[0-9]*d\([0-9]*\)_.*/\1/p')
 PE=$(echo "$ROW" | awk -v np=$NPROMPT -v no=$NOUT '{printf "%.0f", (np*$5+no*$6)/1000}')
 PT=$(echo "$ROW" | awk -v np=$NPROMPT -v no=$NOUT '{printf "%.1f", (np*$7+no*$8)/1000}')
-# Budgets the loops check the meter against. Both are the plan's own commitments, with a 5%
-# model tolerance (the table's mean prediction error is 3.7%): the performance loop checks the
-# time budget the plan was chosen under (never tighter than the plan's prediction + 5%), the
-# energy loop checks the plan's predicted energy + 5%. So a nudge means the phone behaved
-# differently from the model (heat, another app), not that a tier wished for more saving; the
-# tier's saving is already fixed by where the lever put the ladder walk.
+# Loop budgets: the time budget the plan was chosen under (at least prediction + 5%) and the
+# predicted energy + 5%. A nudge then means the phone deviated from the model (heat, another app).
 TBUD=$(awk -v t=$TFULL -v s=$TSLACK -v pt=$PT 'BEGIN{b=t*(1+s)/1000; if (pt*1.05>b) b=pt*1.05; printf "%.0f", b}')
 EBUD=$(awk -v pe=$PE 'BEGIN{printf "%.0f", pe*1.05}')
 ETARGET=$(awk -v e=$EFULL -v s=$ESAVE 'BEGIN{printf "%.0f", e*(1-s)/1000}')
@@ -176,18 +138,15 @@ echo "[sched] request: ~$NPROMPT prompt tokens, output cap $NOUT ($LENRULE); loo
 echo "[sched] plan: $PLAN backend=$BACKEND gpu_mhz=$GMHZ${DMHZ:+ decode_mhz=$DMHZ} K=$K predicted E=${PE} J T=${PT} s" >&2
 [ "$DRY" = 1 ] && exit 0
 
-# ---- 4. apply ----
-# write the user cap (max_pwrlevel, composed with the thermal cap by max) and the clock, so the
-# vendor thermal engine's own writes to thermal_pwrlevel cannot clear our cap mid-request
+# 4. apply
+# Write max_pwrlevel as well as max_gpuclk so the vendor thermal engine cannot clear the cap mid-request.
 gpucap(){ ( cd /sys/class/kgsl/kgsl-3d0 && hz=$(( $1 * 1000000 )) && i=0 && for x in $(cat gpu_available_frequencies); do [ "$x" = "$hz" ] && echo $i > max_pwrlevel; i=$((i+1)); done; echo $hz > max_gpuclk ) 2>/dev/null; }
 if [ "$BACKEND" = gpu ]; then NGL=99; BIN=$BIN_GPU; PIN="taskset f0 nice -n -20"; gpucap $GMHZ; else NGL=0; BIN=$BIN_CPU; PIN=""; fi
 DECODE_FLAG=""; [ -n "$DMHZ" ] && DECODE_FLAG="--gpu-mhz-decode $DMHZ"
 pkill -f sample_sensors 2>/dev/null; rm -f $OUT/sensors.csv
 nohup sh $SAMPLER --out $OUT/sensors.csv --hz 2 >/dev/null 2>&1 &
-# The bench is run in the background and the sampler stopped when meta.json appears: on battery the
-# process takes up to two minutes to exit after decoding (observed 2026-09-06), and a sampler that
-# runs through that tail puts the end anchor of the energy split on idle time. The sampler keeps
-# going SETTLE seconds past the result so the fuel gauge's lagging coulomb counter catches up.
+# Stop the sampler once meta.json appears, since on battery the bench can take minutes to exit.
+# It runs SETTLE seconds longer so the lagging fuel gauge catches up.
 SETTLE=30
 ( cd $BIN && LD_LIBRARY_PATH=$BIN $PIN ./eviction_bench --model $MODEL --prompt $PROMPT \
   --prompt-id $TAG --eval-mode gen --max-tokens $NOUT $IGNEOS --ctx-size 16384 --seed 42 --threads 4 \
@@ -199,9 +158,8 @@ sleep $SETTLE
 pkill -f sample_sensors 2>/dev/null
 wait $BPID; RC=$?
 [ "$BACKEND" = gpu ] && gpucap 1200
-# ---- 4b. validity: a backend can fail loudly (rc != 0, no meta.json) or quietly (tokens at full speed
-# from non-finite logits, which decode as runs of "!"). Either way on the GPU: mark the model gpu=no
-# and run this request again on the CPU; nothing is learned from the failed attempt. v2.4.
+# 4b. A run fails loudly (rc != 0, no meta.json) or quietly (non-finite logits decode as runs of "!").
+# A failed GPU run marks the model gpu=no and reruns the request on the CPU without learning.
 BANGS=0; [ -s $OUT/gen.txt ] && BANGS=$(awk 'BEGIN{b=0;n=0} { n+=length($0); b+=gsub(/!/,"") } END{ if (n>0) printf "%d", 100*b/n; else print 0 }' $OUT/gen.txt)
 INVALID=""
 [ $RC -ne 0 ] && INVALID="bench rc=$RC"
@@ -217,18 +175,16 @@ if [ -n "$INVALID" ]; then
   exit 1
 fi
 
-# ---- 5. measure, learn the table, and let the two loops move the lever ----
+# 5. measure, learn the table, and let the two loops move the lever
 g(){ grep -m1 "\"$1\"" $OUT/meta.json | sed 's/.*: *//; s/,.*//' | tr -d ' '; }
 NP=$(g n_prompt_tokens); NS=$(g n_decode_steps); PMS=$(g prefill_ms); DMS=$(g decode_ms); TMS=$(g total_ms)
 MEAS=$(awk -F, -v pms=$PMS -v tms=$TMS -v lag=$SETTLE 'NR==1 { for (i=1;i<=NF;i++) c[$i]=i; next }
   { t=$c["monotonic_s"]+0; v=$c["usb_voltage_uv"]/1e6; a=$c["usb_current_ua"]; if (a<0) a=-a; a/=1e6;
     n++; T[n]=t; P[n]=v*a; Q[n]=$c["bat_charge_uah"]+0; V[n]=$c["bat_voltage_now_uv"]/1e6; G[n]=("gpu_clk_hz" in c)?$c["gpu_clk_hz"]+0:0 }
   END { if (n<4) { print "0 0"; exit }
-        # START-anchored split (2026-09-06): the bench starts prefill within seconds of the sampler
-        # (first sample with the GPU above 900 MHz, else sample 2 plus 3 s) and may spend minutes in
-        # teardown afterwards, so the end of the sampler window is not the end of decode. The rail
-        # integral covers exactly [t0, t0+tms]; the pack delta runs LAG s longer to catch the fuel
-        # gauge, which reports a discharge about 30 s late.
+        # Start-anchored split: t0 is the first sample with the GPU above 900 MHz (else sample 2
+        # plus 3 s), since teardown can take minutes. Rail power is integrated over [t0, t0+tms].
+        # The pack charge delta runs LAG s longer because the fuel gauge reports about 30 s late.
         t0=T[2]+3; for (i=2;i<=n;i++) if (G[i]>=9e8 && T[i]-T[1]<90) { t0=T[i]; break }
         tpf=t0+pms/1000; tend=t0+tms/1000; tq=tend+lag; ep=0; ed=0; qa=""; qb=""; qc=""; vs=0; vn=0
         for (i=2;i<=n;i++) { dt=T[i]-T[i-1]; if (dt>5) dt=5; if (dt<=0) continue;
@@ -241,8 +197,8 @@ MEAS=$(awk -F, -v pms=$PMS -v tms=$TMS -v lag=$SETTLE 'NR==1 { for (i=1;i<=NF;i+
 EP=$(echo $MEAS | awk '{print $1}'); ED=$(echo $MEAS | awk '{print $2}')
 ETOT=$(awk -v a=$EP -v b=$ED 'BEGIN{printf "%.0f", a+b}'); TTOT=$(awk -v t=$TMS 'BEGIN{printf "%.0f", t/1000}')
 if [ "$FEEDBACK" = 1 ] && [ "$NP" -gt 0 ] && [ "$NS" -gt 0 ] && awk -v e=$EP 'BEGIN{exit !(e>0)}'; then
-  # EMA, clipped: one request may move a row's cost by at most 10%, so a single disturbed request
-  # (another app, an external cap) cannot reorder the ladder, while a persistent shift still tracks
+  # Clipped EMA: one request moves a row by at most 10%, so a single disturbed request cannot
+  # reorder the ladder, but a lasting shift is still tracked.
   awk -v plan=$PLAN -v a=$ALPHA -v ep=$EP -v ed=$ED -v np=$NP -v ns=$NS -v pms=$PMS -v dms=$DMS '
     function upd(old, meas,  v) { v=(1-a)*old+a*meas; if (v>old*1.10) v=old*1.10; if (v<old*0.90) v=old*0.90; return sprintf("%.1f", v) }
     $1==plan && NF>=9 { $5=upd($5, ep*1000/np); $6=upd($6, ed*1000/ns); $7=upd($7, pms/np); $8=upd($8, dms/ns) }
@@ -256,8 +212,7 @@ LOOPS=$(awk -v e=$ETOT -v t=$TTOT -v eb=$EBUD -v tb=$TBUD -v bias=$BIASV -v fb=$
     if (tt>0 && (et<=0 || tt>=et)) { nb=bias+0.1; act="performance loop: over time budget -> lever +0.1" }
     else if (et>0)                 { nb=bias-0.1; act="energy loop: over energy budget -> lever -0.1" }
     else if (bias>0.001 || bias<-0.001) {
-      # both budgets met: the bias decays toward the tier default, so a past disturbance
-      # does not pin the lever after it has passed
+      # Both budgets met: decay the bias toward the tier default.
       nb=(bias>0)?bias-0.05:bias+0.05; if (nb<0.001 && nb>-0.001) nb=0
       act="hold: both budgets met -> bias decays toward the tier default" }
     else act="hold: both budgets met"

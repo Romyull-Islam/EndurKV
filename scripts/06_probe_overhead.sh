@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
-# Phase B — measure probe overhead.
-# Builds two variants of entropy_probe (ENABLE_PROBE on/off), runs each 10 times
-# on the same 128-token prompt, and reports mean decode times + overhead %.
-# Run from the EndurKV root:  bash scripts/06_probe_overhead.sh
-#
-# Pins to a single GPU (CUDA_VISIBLE_DEVICES=0) so the overhead numbers aren't
-# polluted by 8-way pipeline-parallel init/sync. Prints progress to stderr.
+# Measure entropy_probe overhead: build with ENABLE_PROBE on and off, run each 10 times
+# for 128 tokens on the same prompt, and report mean ms/step and overhead %.
+# Usage (from the EndurKV root): bash scripts/06_probe_overhead.sh
 
 set -e
 cd "$(dirname "$0")/.."
@@ -20,14 +16,14 @@ N_TOKENS=128
 
 [ -f "$MODEL" ] || { echo "ERROR: $MODEL missing."; exit 1; }
 
-# --- Build the off variant if not already built ---
+# Build the off variant if not already built
 if [ ! -x "$BUILD_OFF/entropy_probe" ]; then
-    echo "=== configure ENABLE_PROBE=OFF ==="
+    echo "configure ENABLE_PROBE=OFF"
     cmake -S "$SRC" -B "$BUILD_OFF" \
         -DLLAMA_CPP_DIR="$ROOT/llama.cpp" \
         -DCMAKE_BUILD_TYPE=Release \
         -DENABLE_PROBE=OFF
-    echo "=== build ==="
+    echo "build"
     cmake --build "$BUILD_OFF" -j
 fi
 
@@ -48,8 +44,7 @@ echo "[overhead] warmup..." >&2
 "$BUILD_ON/entropy_probe"  --model "$MODEL" --prompt-file "$PROMPT" --prompt-id warm --max-tokens 8 --seed 1 --output logs/overhead/warm_on.csv  >/dev/null 2>&1 || true
 "$BUILD_OFF/entropy_probe" --model "$MODEL" --prompt-file "$PROMPT" --prompt-id warm --max-tokens 8 --seed 1 --output /dev/null              >/dev/null 2>&1 || true
 
-# Run N_RUNS iterations of one binary, write per-step decode time to TSV-like list.
-# Prints progress to stderr; final TIMES list to stdout.
+# Run one binary N_RUNS times. Progress goes to stderr, TIMES/STEPS lines to stdout.
 run_n() {
     local BIN="$1" LABEL="$2" STASH="$3"
     mkdir -p "$STASH"
@@ -98,7 +93,7 @@ MEAN_OFF=$(mean_of "$OFF_STEPS")
 MEAN_ON=$( mean_of "$ON_STEPS")
 
 echo
-echo "=== summary (mean over $N_RUNS runs, max_tokens=$N_TOKENS, single GPU) ==="
+echo "summary (mean over $N_RUNS runs, max_tokens=$N_TOKENS, single GPU)"
 awk -v on="$MEAN_ON" -v off="$MEAN_OFF" 'BEGIN{
     overhead = (on - off) / off * 100.0;
     printf "mean_decode_time_no_probe_ms_per_step   = %.4f\n", off;

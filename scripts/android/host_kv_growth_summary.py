@@ -1,19 +1,8 @@
 #!/usr/bin/env python3
-"""
-host_kv_growth_summary.py — quantitative summary of the KV-growth thermal study.
+"""KV-growth thermal study summary (vanilla, v1 at K=2048/1024/256): peak temps, max KV
+cells, decode tok/s, DDR rise and Pearson r(DDR, KV cells), written to THERMAL_COUPLING.md.
 
-For each condition (A=vanilla, B=v1 K=2048, C=v1 K=1024, D=v1 K=256), computes:
-  - peak DDR temperature
-  - peak CPU temperature (max big-core)
-  - max KV cells held in cache
-  - mean decode tok/s
-  - peak — start DDR (the heating amount)
-  - Pearson r between DDR temp and KV cells (the coupling)
-
-Outputs a markdown table to <kvgrow_dir>/THERMAL_COUPLING.md plus prints it.
-
-Usage:
-  python host_kv_growth_summary.py <kvgrow_dir>
+Usage: python host_kv_growth_summary.py <kvgrow_dir>
 """
 import sys, csv, statistics
 from pathlib import Path
@@ -108,11 +97,9 @@ def main():
         ddr_rise = peak_ddr - ddrs[0] if len(ddrs) >= 1 else float("nan")
         max_kv = max((x[2] for x in st), default=meta.get("peak_kv_cells", 0))
         mean_tps = meta.get("decode_tps", 0.0)
-        # Pearson r between DDR temp and KV cells across the decode window
-        # we need to align by time — sensors at 5 Hz, steps at ~3 Hz; pick samples
+        # Pearson r between DDR temp and KV cells. Sensors (5 Hz) and steps
+        # (~3 Hz) are aligned by time, taking both clocks as starting together.
         if st and ddrs:
-            # Step wall_us is from t_start; sensor t_s is from sampler start (close enough).
-            # Build (t_s, n_kv) interpolation via step CSV
             t_kv = [(s_row[1]/1e6, s_row[2]) for s_row in st]   # (t in sec, n_kv)
             # paired (ddr, kv) at sensor times
             xs, ys = [], []

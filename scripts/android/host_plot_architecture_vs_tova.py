@@ -1,15 +1,6 @@
 #!/usr/bin/env python3
-"""Architectural side-by-side comparison: perhead_v1 (ours) vs TOVA.
-
-Layout:
-  Row 1: Title
-  Row 2: Two columns, each with its own pipeline + name
-         Left  = TOVA       (Oren et al., ACL 2024)
-         Right = perhead_v1 (EndurKV, this work)
-  Row 3: Formula boxes — what each algorithm uses to allocate per-head budget
-  Row 4: Per-head budget bars showing the actual K_h each algorithm uses
-  Row 5: Resulting KV cache layouts (same attention input)
-  Row 6: Summary of differences and measured advantage
+"""Side-by-side figure of TOVA (Oren et al., ACL 2024) and perhead_v1: budget formulas,
+per-head K_h bars, resulting cache layouts on the same attention input, and a summary box.
 """
 import sys
 from pathlib import Path
@@ -128,13 +119,13 @@ def main() -> int:
         left=0.04, right=0.985, top=0.965, bottom=0.03,
     )
 
-    # ─── Row 1: title ───
+    # Row 1: title
     ax_t = fig.add_subplot(gs[0, :]); ax_t.axis("off")
     ax_t.text(0.5, 0.5,
               "Architecture comparison — TOVA (Oren et al., ACL'24) vs perhead_v1 (EndurKV, ours)",
               ha="center", va="center", fontsize=16, weight="bold", color="#0f2e57")
 
-    # ─── Row 2: formula boxes ───
+    # Row 2: formula boxes
     # LEFT: TOVA
     ax_t_left = fig.add_subplot(gs[1, 0]); ax_t_left.axis("off")
     ax_t_left.add_patch(FancyBboxPatch(
@@ -216,7 +207,7 @@ def main() -> int:
         color="#222", transform=ax_t_right.transAxes,
     )
 
-    # ─── Row 3: K_h bar comparison ───
+    # Row 3: K_h bar comparison
     ax_b = fig.add_subplot(gs[2, :])
     xs = np.arange(N_HEAD)
     bw = 0.35
@@ -247,7 +238,7 @@ def main() -> int:
     ax_b.grid(alpha=0.25, axis="y")
     ax_b.set_ylim(-2.5, max(K_h_ours.max() + 4, K_NOMINAL + 4))
 
-    # ─── Row 4: cache layouts ───
+    # Row 4: cache layouts
     ax_cl = fig.add_subplot(gs[3, 0])
     for h in range(N_HEAD):
         for k in range(N_KV):
@@ -294,7 +285,7 @@ def main() -> int:
         fontsize=11, weight="bold", color="#a31616", pad=8)
     ax_cr.set_xlim(-0.5, N_KV - 0.5); ax_cr.set_ylim(N_HEAD - 0.5, -0.5)
 
-    # ─── Row 5: summary box ───
+    # Row 5: summary box
     ax_s = fig.add_subplot(gs[4, :]); ax_s.axis("off")
     ax_s.add_patch(FancyBboxPatch(
         (0.01, 0.05), 0.98, 0.90,

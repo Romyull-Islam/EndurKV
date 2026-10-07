@@ -1,30 +1,8 @@
 #!/usr/bin/env python3
-"""
-PLOT 25 — SoC + skin + battery temperature at throttle events.
+"""Plot 25: SoC, skin and battery temperature around throttle events.
 
-Three stacked subplots (one per wave / cell), each overlaying four traces
-on a single time axis:
-
-  * sys-therm-2          (HAL telemetry zone with low trip points 48-61 C)
-  * shell_front          (skin / chassis proxy)
-  * battery_temp         (BCL knee at 45-50 C)
-  * bat_current_ma       (scaled; BCL clamp signature)
-
-The throttle event for each cell is annotated with a vertical marker and a
-text callout listing the simultaneous sys-therm-2 / shell_front /
-battery_temp values from the sensors.csv at that moment. The titles are
-chosen to call out which sensor crossed its empirical trip first.
-
-Source cells:
-  * Wave-4 vanilla            (Llama-3.2-1B long-decode, no eviction)
-  * Wave-8 v1_fa2_selective   (no preemptive watchdog)
-  * Wave-9 v1_fa2_stack       (with preemptive watchdog)
-
-Outputs:
-  /home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/
-      25_throttle_event_soc.png
-  /home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/
-      25_throttle_event_soc.schema.json
+One panel per cell (wave-4 vanilla, wave-8 v1_fa2_selective, wave-9 v1_fa2_stack)
+with sys-therm-2, shell_front, battery_temp and battery current. Output: 25_throttle_event_soc.png.
 """
 from __future__ import annotations
 
@@ -40,7 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-# -------------------------- paths / config ------------------------------------
+# paths / config
 
 OUT_PATH = Path(
     "/home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/"
@@ -48,8 +26,8 @@ OUT_PATH = Path(
 )
 SCHEMA_PATH = OUT_PATH.with_suffix(".schema.json")
 
-# (label, sensors.csv path, throttle_t_seconds_relative_to_first_sample,
-#  pre_throttle_event annotations, title)
+# Per cell: sensors.csv, throttle time (s from first sample), snapshot values
+# at that time, and the panel title.
 CELLS = [
     {
         "wave":  "Wave-4 vanilla",
@@ -57,8 +35,7 @@ CELLS = [
             "/home/mislam22/EndurKV_workspace/phone-logs/"
             "wave4_longdecode_1780750084/vanilla/sensors.csv"
         ),
-        # detected from peak sys-therm-2 (55.67 C @ 2134 s relative)
-        # the supervisor-supplied snapshot lands at the 55.7 C crossing.
+        # Snapshot at the 55.7 C sys-therm-2 crossing, near its peak.
         "throttle_t_s": 2128.8,
         "snap_sys_therm_2": 55.7,
         "snap_shell_front": 49.0,
@@ -96,8 +73,7 @@ CELLS = [
             "/home/mislam22/EndurKV_workspace/phone-logs/"
             "wave9_v1fa2_stack_1780796320/v1_fa2_stack/sensors.csv"
         ),
-        # No empirical-trip throttle event in this cell; mark the run-peak
-        # of sys-therm-2 for context (the preemptive watchdog held below it).
+        # No throttle event in this cell, the panel reports run peaks.
         "throttle_t_s": None,
         "snap_sys_therm_2": 55.7,
         "snap_shell_front": 49.0,
@@ -111,8 +87,7 @@ CELLS = [
     },
 ]
 
-# Empirical trip thresholds for the three thermal channels.  These are the
-# "low trip points" actually published by the HAL on the OnePlus 15.
+# Trip points published by the thermal HAL on the OnePlus 15.
 TRIP_C = {
     "sys_therm_2_low": 48.0,
     "sys_therm_2_high": 60.0,   # passive trip near 60-61 C
@@ -129,7 +104,7 @@ COL_BAT_T      = "battery_temp_mc"
 COL_BAT_I      = "bat_current_ma"
 
 
-# --------------------------- helpers ------------------------------------------
+# helpers
 
 def _f(x) -> float:
     try:
@@ -177,7 +152,7 @@ def find_index_at_time(t_arr: np.ndarray, t_target: float) -> int:
     return int(np.argmin(np.abs(t_arr - t_target)))
 
 
-# ----------------------------- plot -------------------------------------------
+# plot
 
 def main() -> int:
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -198,7 +173,7 @@ def main() -> int:
             f"dur={data['t'][-1]/60.0:.1f}min"
         )
 
-    # ----- figure -----
+    # figure
     fig, axes = plt.subplots(
         3, 1, figsize=(12.8, 11.0),
         gridspec_kw={"hspace": 0.40},
@@ -215,7 +190,7 @@ def main() -> int:
     for ax, (cfg, data) in zip(axes, loaded):
         t_min = data["t"] / 60.0
 
-        # ---- left axis: temperatures (°C) ----
+        # left axis: temperatures (°C)
         ax.plot(t_min, data["sys2"],
                 color=COL_SYS2, lw=1.4,
                 label="sys-therm-2 (HAL, 48-61°C trips)")
@@ -246,7 +221,7 @@ def main() -> int:
             color=COL_BAT_T, fontsize=7, ha="right", va="bottom", alpha=0.85,
         )
 
-        # ---- right axis: battery current (mA) ----
+        # right axis: battery current (mA)
         ax_r = ax.twinx()
         ax_r.plot(t_min, data["bat_i"],
                   color=COL_BAT_I, lw=0.9, alpha=0.65,
@@ -259,7 +234,7 @@ def main() -> int:
             ymax_r = float(np.nanmax(bi_clean)) * 1.15
             ax_r.set_ylim(0, max(ymax_r, 600.0))
 
-        # ---- throttle event marker ----
+        # throttle event marker
         t_thr = cfg.get("throttle_t_s")
         if t_thr is not None:
             idx = find_index_at_time(data["t"], t_thr)
@@ -273,13 +248,12 @@ def main() -> int:
                 rotation=90, va="top", ha="right",
                 fontsize=8.5, color="black", fontweight="bold",
             )
-            # Pull observed snapshot values from the file as a sanity check
+            # Observed values at the throttle time, as a check on the snapshot
             obs_sys2  = float(data["sys2"][idx])  if idx >= 0 else float("nan")
             obs_shell = float(data["shell"][idx]) if idx >= 0 else float("nan")
             obs_bat_t = float(data["bat_t"][idx]) if idx >= 0 else float("nan")
             obs_bat_i = float(data["bat_i"][idx]) if idx >= 0 else float("nan")
-            # Compose callout — prefer supervisor-supplied snapshot, with
-            # observed value alongside for traceability.
+            # Callout: snapshot values with the observed values alongside.
             lines = [
                 f"sys-therm-2 = {cfg['snap_sys_therm_2']:.1f}°C "
                 f"(obs {obs_sys2:.1f})",
@@ -328,7 +302,7 @@ def main() -> int:
                 "first_crossed": cfg["first_crossed"],
             })
         else:
-            # No throttle event — annotate that fact and report run peaks.
+            # No throttle event - annotate that fact and report run peaks.
             sys2_peak  = float(np.nanmax(data["sys2"]))
             shell_peak = float(np.nanmax(data["shell"]))
             bat_peak   = float(np.nanmax(data["bat_t"]))
@@ -359,7 +333,7 @@ def main() -> int:
                 "first_crossed": cfg["first_crossed"],
             })
 
-        # ---- titles / axes ----
+        # titles / axes
         ax.set_title(cfg["title"], fontsize=10.5, fontweight="bold", loc="left")
         ax.set_xlabel("time since cell start (min)", fontsize=9)
         ax.set_ylabel("temperature (°C)", fontsize=9)
@@ -390,7 +364,7 @@ def main() -> int:
     plt.close(fig)
     print(f"[ok] wrote {OUT_PATH} ({os.path.getsize(OUT_PATH)/1024:.1f} KB)")
 
-    # ------------------------------- PLOT_SCHEMA ------------------------------
+    # PLOT_SCHEMA
     schema = {
         "kind": "PLOT_SCHEMA",
         "version": 1,

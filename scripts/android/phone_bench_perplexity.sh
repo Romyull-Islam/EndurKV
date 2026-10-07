@@ -1,16 +1,8 @@
 #!/system/bin/sh
-# phone_bench_perplexity.sh — Vanilla llama.cpp perplexity benchmark.
-#
-# Runs llama-perplexity on a corpus file with thermal/memory/timing capture.
-# Use this for perplexity metric (separate from generation latency runs).
-#
-# Usage:
-#   sh scripts/phone_bench_perplexity.sh \
-#       --model models/Llama-3.2-1B-Instruct-Q4_K_M.gguf \
-#       --corpus corpora/wiki.test.raw \
-#       --tag wiki2_llama1b_ctx4k \
-#       --ctx-size 4096 \
-#       --out-dir logs/ppl_$(date +%s)
+# Vanilla llama.cpp perplexity benchmark: llama-perplexity on a corpus, with thermal,
+# memory and timing capture. Separate from the generation latency runs.
+# Usage: sh scripts/phone_bench_perplexity.sh --model M.gguf --corpus corpora/wiki.test.raw \
+#          --tag TAG --ctx-size 4096 --out-dir logs/ppl_$(date +%s) [--threads N] [--sampler PATH]
 
 set -e
 
@@ -58,8 +50,6 @@ SAMPLER_PID=$!
 
 START_WALL=$(date +%s.%N)
 
-# llama-perplexity flags:
-#   -m model -f corpus_file -c ctx_size --perplexity is default
 "$LLAMA_PPL" \
     -m "$MODEL" \
     -f "$CORPUS" \
@@ -101,8 +91,8 @@ cat > "$META_JSON" <<EOF
 EOF
 
 echo "[bench_ppl] DONE pid=$LLAMA_PID exit=$EXIT_CODE"
-echo "===== perplexity summary ====="
+echo "perplexity summary"
 grep -E "^Final estimate|estimate" "$PPL_TXT" | tail -5
-echo "===== peak memory ====="
+echo "peak memory"
 sort -t, -k2 -n "$MEM_CSV" | tail -3
 exit $EXIT_CODE

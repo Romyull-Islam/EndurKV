@@ -1,49 +1,11 @@
 #!/bin/bash
-# ============================================================================
-# run_niah_vs_streamingllm.sh -- the one axis where muKV and StreamingLLM are not
-# equivalent by physics. (2026-08-15)
-#
-# WHY THIS IS THE DECIDING EXPERIMENT. The head-to-head at ctx 16384 (pinned, n=3,
-# /tmp/sllm_faithful) came back a tie on everything it measured:
-#     decode  muKV 29.05 +- 0.13   StreamingLLM 29.07 +- 0.18   tok/s   (0.07% apart)
-#     energy  muKV 1439 +- 35      StreamingLLM 1445 +- 33      J       (0.4% apart)
-#     PPL     muKV 22.980          StreamingLLM 23.218                  (1.0% apart)
-# and a roofline says that is not fixable by tuning: decode is bandwidth-bound, so
-# speedup = (W + KV_full)/(W + KV_kept), and on Llama-3.2-1B at 16K the weights are
-# 800 MB against a 319 MB full cache (KV/W = 0.40). Once both policies are down to
-# 1-2k cells the remaining difference is ~42 MB out of ~865 MB per step -- a 5% ceiling
-# on any advantage muKV could have, and we measured 0%.
-#
-# PERPLEXITY CANNOT SEPARATE THEM EITHER, and that is structural rather than bad luck.
-# StreamingLLM keeps a 2000-token RECENT window, and continuation perplexity is dominated
-# by recent context -- it is configured almost optimally for exactly what the metric
-# rewards. It will keep tying at any budget.
-#
-# WHAT IS DIFFERENT: WHERE THE KEPT BYTES ARE. StreamingLLM keeps 4 sinks plus the last
-# 2000 tokens and discards everything between -- at a 6099-token stimulus that is 67% of
-# the document, chosen by POSITION and without looking at it. muKV chooses by attention,
-# so its 723 cells can sit anywhere. A needle at shallow depth falls in the gap that
-# StreamingLLM deletes by construction and cannot fall in a gap muKV selected against.
-# Predicted, from the window arithmetic alone: at the 8K stimuli StreamingLLM should MISS
-# depths below roughly 67% (positions before 6099-2000 = 4099) and HIT above it; at the
-# 4K stimuli (3120 tokens) the 2000-token window covers depth 36% upward, so it should
-# hit nearly everything. If that pattern appears, the mechanism is confirmed by its shape
-# and not merely by a score.
-#
-# ARMS -- each at its OWN published budget, never a matched one:
-#   vanilla   full cache, the retrieval ceiling
-#   mukv      frozen config + in-place compaction, K=1024 (its deployment budget)
-#   sfown     StreamingLLM, FA-on + compacted, start_size 4 + recent_size 2000 = K 2004
-#             (mit-han-lab/streaming-llm, examples/run_streaming_llama.py argparse defaults)
-#
-# NO COOL GATE, DELIBERATELY: a needle is either in the keep-set or it is not, and clock
-# state cannot change that. Gating 42 cells would cost ~10 hours and buy nothing. Timing
-# from this campaign is therefore NOT comparable to the gated campaigns and must not be
-# quoted -- only the hit/miss column and the retained-cell column are valid here.
-#
-# NOT PINNED, for the same reason: pinning exists to stabilise throughput, which this run
-# does not measure.
-# ============================================================================
+# run_niah_vs_streamingllm.sh: needle retrieval, muKV vs StreamingLLM vs vanilla.
+# StreamingLLM keeps 4 sinks plus the most recent 2000 tokens and drops the middle by position,
+# while muKV selects by attention, so shallow needles should separate them.
+# Arms, each at its own published budget: vanilla (full cache), mukv (frozen config, K=1024),
+# sfown (StreamingLLM start_size 4 + recent_size 2000, the streaming-llm repo defaults).
+# No cool gate and no pinning: only hit/miss and retained cells are used, so timing from
+# this run is not comparable to the gated campaigns.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 BIN=/data/local/tmp/ukv_n3

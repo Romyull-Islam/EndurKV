@@ -1,35 +1,11 @@
 #!/bin/bash
-# ============================================================================
-# run_combined_levers.sh -- OPTION B: cache AND clock together. (2026-08-11)
-#
-# The other three campaigns measure each lever ALONE (cache tiers at native DVFS; clock
-# caps at fixed cache). This measures the policy that moves BOTH at once, which is what an
-# energy-aware controller would actually deploy if clock capping turns out to help.
-#
-# TWO OPTIONS PER DEVICE, so they can be compared directly at the same battery tier:
-#   Option A (cache only)      -- k-pct tier, clock left to the governor.   [other scripts]
-#   Option B (cache + clock)   -- same k-pct tier, PLUS a matching clock cap. [here]
-#
-# The tiers pair a cache budget with a clock rung, descending together:
-#   tier 0 (healthy battery)  k-pct 20  + no cap
-#   tier 1 (mid)              k-pct 10  + mid rung
-#   tier 2 (low)              k-pct  5  + low rung
-#
-# WHAT WOULD MAKE OPTION B WORTH SHIPPING. Only if it saves meaningfully more energy per
-# request than Option A at the same tier. The prior on this device says it will not:
-# dynamic CPU power measured here goes as f^1.10 (voltage pinned at Vmin), so E ~ f^0.10 and
-# a 40% clock cut buys ~5% energy for ~67% more time. If Option B lands within noise of
-# Option A on mJ/token but takes materially longer, the honest conclusion is that the clock
-# belongs to THERMAL control and the cache belongs to ENERGY control -- which is what the
-# drafts already argue, and this would be the measurement that backs it.
-# ============================================================================
+# Cache and clock levers together (option B). Each battery tier pairs a cache budget
+# with a clock cap, to compare against the cache-only runs at the same tier:
+#   tier 0  k-pct 20, no cap     tier 1  k-pct 10, mid rung     tier 2  k-pct 5, low rung
 set -u
-# FIXED 2026-08-11: use adb_safe_pull, never bare `adb pull`. adb_resilient.sh exports
-# ANDROID_ADB_SERVER_PORT after probing for the device, which conflicts with an
-# ADB_SERVER_SOCKET set by the caller -- so adb_safe_shell reached the phone and ran the
-# benchmark while every bare `adb pull` silently retrieved nothing. The first cell of the
-# tier sweep looked FAILED for exactly this reason although the run had completed on-device
-# (decode_tps=33.0, meta.json present). adb_safe_pull uses the resolved port and retries.
+# Pull with adb_safe_pull, not bare adb pull. adb_resilient.sh exports
+# ANDROID_ADB_SERVER_PORT, which can conflict with a caller ADB_SERVER_SOCKET, and
+# then a bare adb pull silently retrieves nothing.
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 BIN=/data/local/tmp/ukv
 M=/data/local/tmp/endurkv/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
@@ -77,11 +53,11 @@ cell(){ # tag  pct  gpu_layers  gpuclk(0=none)  cpuclk(0=none)  maxtok
   python3 /home/mislam22/EndurKV_workspace/EndurKV/scripts/clock_cell_report.py "$D" "$TAG" 2>/dev/null || echo "  [$TAG] FAILED"
 }
 
-echo "=== GPU, Option B: cache tier + matching GPU clock cap ==="
+echo "GPU, Option B: cache tier + matching GPU clock cap"
 cell gpu_B_t0 20 99 1200 0 4096
 cell gpu_B_t1 10 99  902 0 4096
 cell gpu_B_t2  5 99  726 0 4096
-echo "=== CPU, Option B: cache tier + matching prime-core cap ==="
+echo "CPU, Option B: cache tier + matching prime-core cap"
 cell cpu_B_t0 20  0 0 0       1024
 cell cpu_B_t1 10  0 0 1996800 1024
 cell cpu_B_t2  5  0 0 1500000 1024

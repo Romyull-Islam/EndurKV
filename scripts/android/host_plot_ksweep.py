@@ -1,19 +1,7 @@
 #!/usr/bin/env python3
-"""
-host_plot_ksweep.py
-
-Generates three paper-ready figures from the K-sweep measurement data:
-  1. ksweep_pareto.png            — 3-panel: K vs mean tps, K vs PPL, K vs peak DDR temp
-  2. ksweep_trajectories.png      — 2x2 grid of per-iter tps trajectories with DDR overlay
-  3. ksweep_2axis_pareto.png      — scatter of mean tps vs PPL, sized by peak DDR, with Pareto frontier
-
-By default the script LOADS metrics from
-``phone-logs/wave10_ksweep_*/K{nominal}/iter*/meta.json`` (per-iter tps + ppl)
-and ``sensors.csv`` (per-iter DDR temperature), so the figures are reproducible
-from the raw data. If no wave10 ksweep directory is present, it falls back to
-the FALLBACK_CELLS literal embedded below (kept only as a last resort so the
-dissertation figures can still be regenerated if the raw logs are unavailable;
-a warning is printed so reviewers know they are looking at frozen data).
+"""K-sweep figures (ksweep_pareto, ksweep_trajectories, ksweep_2axis_pareto) from
+phone-logs/wave10_ksweep_*/K*/iter*/meta.json and sensors.csv. Falls back to the
+embedded FALLBACK_CELLS, with a warning, when no wave10 ksweep directory exists.
 """
 
 from __future__ import annotations
@@ -36,11 +24,8 @@ PHONE_LOGS_ROOT = Path(
 )
 
 
-# ---------------------------------------------------------------------------
-# Fallback K-sweep measurement data (frozen snapshot of on-device runs).
-# Used ONLY when phone-logs/wave10_ksweep_*/K* is unavailable. Prefer the
-# live-loading path (see load_ksweep_cells) so figures track the raw data.
-# ---------------------------------------------------------------------------
+# Frozen snapshot of the on-device K-sweep, used only when
+# phone-logs/wave10_ksweep_*/K* is unavailable.
 FALLBACK_CELLS = [
     {
         "K": 1024,
@@ -124,11 +109,8 @@ FALLBACK_CELLS = [
 OUT_DIR = Path("/home/mislam22/EndurKV_workspace/EndurKV/figures/thermal_plots")
 
 
-# ---------------------------------------------------------------------------
-# Live data loader — reads phone-logs/wave10_ksweep_*/K*/iter*/meta.json and
-# phone-logs/wave10_ksweep_*/K*/sensors.csv into the same Cells shape as
-# FALLBACK_CELLS. This is the preferred path; FALLBACK_CELLS is a last resort.
-# ---------------------------------------------------------------------------
+# Load phone-logs/wave10_ksweep_*/K*/iter*/meta.json and sensors.csv into the
+# same shape as FALLBACK_CELLS.
 def _read_meta(meta_path: Path) -> Dict[str, Any]:
     try:
         with meta_path.open("r") as f:
@@ -138,10 +120,7 @@ def _read_meta(meta_path: Path) -> Dict[str, Any]:
 
 
 def _read_sensor_ddr(sensors_path: Path) -> List[float]:
-    """Returns sequence of peak DDR temperatures in °C, one per ~second tick.
-
-    Used only to overlay a coarse DDR trace on per-iter trajectories.
-    """
+    """DDR temperature trace in degrees C, one value per sensor row."""
     if not sensors_path.is_file():
         return []
     out: List[float] = []
@@ -156,7 +135,7 @@ def _read_sensor_ddr(sensors_path: Path) -> List[float]:
                     fv = float(val)
                 except (TypeError, ValueError):
                     continue
-                # Convert milli-degrees -> degrees if needed.
+                # milli-degrees to degrees if needed
                 if fv > 200:
                     fv = fv / 1000.0
                 out.append(fv)
@@ -171,10 +150,8 @@ def _peak_ddr_c(sensors_path: Path) -> Optional[float]:
 
 
 def load_ksweep_cells(phone_logs_root: Path) -> List[Dict[str, Any]]:
-    """Discover wave10 K-sweep cells under phone-logs and aggregate per-K
-    metrics from iter*/meta.json + sensors.csv. Returns [] when no run dir is
-    available so the caller can fall back to FALLBACK_CELLS.
-    """
+    """Per-K metrics from the latest wave10_ksweep_* run, or [] when there is none
+    so the caller can fall back to FALLBACK_CELLS."""
     run_dirs = sorted(glob.glob(str(phone_logs_root / "wave10_ksweep_*")))
     if not run_dirs:
         return []
@@ -227,7 +204,7 @@ def load_ksweep_cells(phone_logs_root: Path) -> List[Dict[str, Any]]:
             peak_ddr = 0.0
 
         ddr_trace = _read_sensor_ddr(kdir / "sensors.csv")
-        # Down-sample DDR trace to one sample per iteration (uniform stride).
+        # One DDR sample per iteration, uniform stride
         if ddr_trace and per_iter_tps:
             step = max(1, len(ddr_trace) // len(per_iter_tps))
             per_iter_ddr = [ddr_trace[min(len(ddr_trace) - 1, i * step)]
@@ -250,7 +227,7 @@ def load_ksweep_cells(phone_logs_root: Path) -> List[Dict[str, Any]]:
             "per_iter_ddr": per_iter_ddr,
             "evicted_total": evicted_total,
             "peak_ddr_c": peak_ddr,
-            "peak_cpu_c": 0.0,   # not aggregated here; thermal_full has it
+            "peak_cpu_c": 0.0,   # not aggregated here, see host_plot_kv_thermal_full.py
             "peak_rss_gb": 0.0,
             "swap_mb": 0.0,
             "watchdog_tier1_count": 0,
@@ -262,18 +239,10 @@ def load_ksweep_cells(phone_logs_root: Path) -> List[Dict[str, Any]]:
     return cells
 
 
-# ---------------------------------------------------------------------------
 # Pareto helpers
-# ---------------------------------------------------------------------------
 def pareto_front_max_min(points):
-    """
-    Returns indices of Pareto-optimal points where we want to MAXIMIZE the
-    first coordinate (mean_tps) and MINIMIZE the second (PPL).
-
-    A point i is dominated iff there exists j such that
-        mean_tps[j] >= mean_tps[i]  AND  ppl[j] <= ppl[i]
-    with at least one strict inequality.
-    """
+    """Indices of Pareto-optimal points, maximizing the first coordinate (mean_tps)
+    and minimizing the second (PPL)."""
     nd_idx = []
     for i, (xi, yi) in enumerate(points):
         dominated = False
@@ -289,10 +258,8 @@ def pareto_front_max_min(points):
 
 
 def pareto_front_3d(points):
-    """
-    3D Pareto: maximize mean_tps, minimize PPL, minimize peak_DDR_C.
-    points: list of (mean_tps, ppl, peak_ddr).
-    """
+    """3D Pareto front over (mean_tps, ppl, peak_ddr): maximize tps, minimize PPL
+    and peak DDR."""
     nd_idx = []
     for i, (xi, yi, zi) in enumerate(points):
         dominated = False
@@ -307,9 +274,7 @@ def pareto_front_3d(points):
     return nd_idx
 
 
-# ---------------------------------------------------------------------------
 # Plotting
-# ---------------------------------------------------------------------------
 def plot_three_panel_pareto(cells, out_path: Path):
     cells_sorted = sorted(cells, key=lambda c: c["K"])
     Ks = np.array([c["K"] for c in cells_sorted])
@@ -444,14 +409,10 @@ def plot_2axis_pareto(cells, out_path: Path):
     print(f"[ok] wrote {out_path}")
 
 
-# ---------------------------------------------------------------------------
 # Main
-# ---------------------------------------------------------------------------
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Prefer live data from phone-logs; fall back to the frozen FALLBACK_CELLS
-    # if no wave10_ksweep_* directory is available locally.
     CELLS = load_ksweep_cells(PHONE_LOGS_ROOT)
     if CELLS:
         print(f"[ok] loaded {len(CELLS)} K-sweep cells from {PHONE_LOGS_ROOT}")
@@ -467,7 +428,7 @@ def main():
     plot_trajectories(CELLS, OUT_DIR / "ksweep_trajectories.png")
     plot_2axis_pareto(CELLS, OUT_DIR / "ksweep_2axis_pareto.png")
 
-    # Echo Pareto verdict for the dissertation log
+    # Print the Pareto summary
     cells_sorted = sorted(CELLS, key=lambda c: c["K"])
     mean_tps = [c["mean_tps"] for c in cells_sorted]
     ppl = [c["ppl"] for c in cells_sorted]
@@ -477,7 +438,7 @@ def main():
     nd_2d = pareto_front_max_min(list(zip(mean_tps, ppl)))
     nd_3d = pareto_front_3d(list(zip(mean_tps, ppl, peak_ddr)))
 
-    print("\n=== Pareto summary ===")
+    print("Pareto summary")
     print(f"K values         : {Ks}")
     print(f"mean_tps         : {mean_tps}")
     print(f"PPL              : {ppl}")

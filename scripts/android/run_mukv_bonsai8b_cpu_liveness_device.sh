@@ -1,10 +1,8 @@
 #!/system/bin/sh
-# 2026-07-22 — reliable μKV Bonsai/Prism 8B CPU run.
-# Same WikiText workload as the CPU study. μKV uses mass + Solution-2 FA-on
-# and, because n_gpu_layers=0, the CPU defrag/state-transfer path is active.
-# Decode is guarded: abort and retain evidence after a 60-s stall or sustained
-# rate below 1 token/s across a 120-s window. This prevents infinite/too-slow
-# decode from being mistaken for a successful run.
+# μKV (FA-on eviction) on Bonsai-8B, CPU, with the WikiText workload of the CPU study.
+# With n_gpu_layers=0 the CPU defrag path is active. The run is aborted, keeping its
+# logs, after a 60 s stall or under 1 token/s over a 120 s window, so a hung or very
+# slow decode is not mistaken for a finished run.
 
 set -u
 OUT=${1:?output directory required}

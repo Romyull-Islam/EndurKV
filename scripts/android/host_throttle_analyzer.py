@@ -1,42 +1,24 @@
 #!/usr/bin/env python3
-"""
-host_throttle_analyzer.py — detect thermal-throttle events from sensors.csv.
-
-For each cell, finds:
-  1. THROTTLE EVENTS: when DVFS frequency drops below the cell's achieved max
-     for >1 sample, indicating active mitigation
-  2. CAUSING ZONE: which thermal zone was above its passive trip point at that
-     moment (likely cause)
-  3. DURATION + DEPTH: how long throttled + how much frequency reduced
-  4. RECOVERY: when frequency returned to max
-
-Snapdragon 8 Elite Gen 5 trip points (from /sys/class/thermal/thermal_zone*/trip_point_*):
-  cpullc-*: passive at 95°C (CPU LITTLE)  → big cores: ~95°C limit
-  nsphmx-2: passive at 105°C (NPU shared) → DDR: 105°C limit
-  Other zones: passive 112-135°C
-
-Usage:
-  python host_throttle_analyzer.py <wave3_cell_dir>
-  python host_throttle_analyzer.py /home/mislam22/EndurKV_workspace/phone-logs/wave3_real_1780680903/v1_K512
+"""Find thermal-throttle events in a cell's sensors.csv: sustained CPU frequency drops with
+cooling-device activity, their duration and depth, and the zone nearest its passive trip.
+Usage: python host_throttle_analyzer.py <cell_dir>
 """
 import sys, csv
 from pathlib import Path
 
-# Trip points discovered via /sys/class/thermal/*/trip_point_*_temp on the phone (Celsius)
-# Conservative passive points only (we don't care about hot/critical for the user-experienced throttle story)
+# Passive trip points (C) read from /sys/class/thermal/*/trip_point_*_temp on the phone.
 TRIP_C = {
     "cpullc":  95.0,    # big-core cluster passive
     "cpu-":    95.0,
-    "ddr":    105.0,    # DDR memory passive (very high, rarely triggers in our workload)
+    "ddr":    105.0,    # DDR memory passive
     "shell":   55.0,    # skin temperature comfort trip
     "battery": 45.0,    # battery health trip
     "nsphmx": 105.0,
 }
 
-# Sustained "throttle" definition: frequency dropped by at least DROP_PCT
-# below this cell's MAX observed freq, for at least DUR_SAMPLES consecutive samples.
-DROP_PCT = 0.10        # 10% reduction qualifies as a throttle
-DUR_SAMPLES = 3        # ≥3 samples (≥0.6s at 5 Hz) — filters single-sample noise
+# Throttle: frequency at least DROP_PCT below the cell's max for DUR_SAMPLES consecutive samples.
+DROP_PCT = 0.10
+DUR_SAMPLES = 3        # 0.6 s at 5 Hz, filters single-sample noise
 
 def find_col(cols, *needles):
     for c in cols:
@@ -77,7 +59,7 @@ def load_sensors(path):
                 "t":   t - t0,
                 "ddr_c":   g("ddr", 1/1000.0),
                 "skin_c":  g("skin", 1/1000.0),
-                # NOTE: the column is named *_freq_hz but the raw value is kHz on Snapdragon.
+                # column is named *_freq_hz but holds kHz on Snapdragon
                 "cpu0f_mhz": g("cpu0f", 1/1000.0),
                 "cpu6f_mhz": g("cpu6f", 1/1000.0),
                 "cpu7f_mhz": g("cpu7f", 1/1000.0),
@@ -107,16 +89,13 @@ def analyze(rows, cell_name=""):
     for k in ("cpu0f_mhz","cpu6f_mhz","cpu7f_mhz"):
         if max_f[k] is None: continue
         thresh = max_f[k] * (1.0 - DROP_PCT)
-        # Map k to cool_state column
         cs_key = k.replace("f_mhz", "cs")
-        # Find segments where freq is BELOW thresh AND > IDLE (>100 MHz) for ≥ DUR_SAMPLES samples
-        # AND cool_state > 0 (actual cooling-device intervention).
+        # throttled: below thresh, not idle (>100 MHz), and cool_state > 0
         below_streak = 0
         seg_start_i = None
         for i, r in enumerate(rows):
             f = r[k]; cs = r.get(cs_key)
             if f is None: continue
-            # Throttle = (freq < threshold) AND (freq > 100 = not idle) AND (cool_state > 0)
             is_throttled = (f < thresh) and (f > 100) and (cs is not None and cs > 0)
             if is_throttled:
                 if below_streak == 0:
@@ -130,7 +109,7 @@ def analyze(rows, cell_name=""):
                     seg_t_start = rows[seg_start_i]["t"]
                     seg_t_end   = rows[seg_end_i]["t"]
                     min_f = min(x[k] for x in sub if x[k] is not None)
-                    # Find the "cause" — which zone was above passive trip at seg_start?
+                    # Find the "cause" - which zone was above passive trip at seg_start?
                     cause_temp = {
                         "ddr": sub[0]["ddr_c"], "skin": sub[0]["skin_c"],
                         "cpu0": sub[0]["cpu0t_c"], "cpu6": sub[0]["cpu6t_c"], "cpu7": sub[0]["cpu7t_c"],

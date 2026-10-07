@@ -1,36 +1,8 @@
 #!/bin/bash
-# phone_wave3_stress.sh — sustained-stress test (the dissertation's Track-2 experiment).
-#
-# WHY:
-#   The Wave-1 sweep gave us COLD-STATE numbers: cell starts, phone cools to ≤38°C,
-#   policy runs, phone cools again. That hides the dissertation's main claim, which is
-#   that v1's model-internal-signal-driven eviction SUSTAINS throughput under thermal
-#   pressure where vanilla and TOVA can't.
-#
-# WHAT:
-#   For each policy P in {v1, tova, vanilla}:
-#     1. Fully cool phone (skin ≤ 35°C, wait up to 10 min).
-#     2. Start eviction_bench on Llama-3.2-1B, FA-off, GPU (ngl=16, ubatch=64).
-#        (Llama-1B GPU FA-off is the only stable GPU configuration we have.)
-#     3. Repeat: prefill long prompt → decode 256 tokens → reset KV → re-prefill.
-#        Total duration: 30 minutes continuous, NO cool-downs between iterations.
-#     4. Sensor sampling at 5 Hz throughout: skin temp, battery temp, CPU/GPU temps,
-#        battery current, instantaneous tok/s (derived from eviction_bench step CSV).
-#   Between policies: full cool-down (skin ≤ 35°C) before starting the next.
-#
-# OUTPUTS (per policy):
-#   logs/wave3_<ts>/<policy>/
-#     stress.csv         — iter, t_wall_s, prefill_ms, decode_tps, skin_c, batt_c, kv_mb
-#     sensors.csv        — full thermal/power trace at 5 Hz
-#     meta.json          — start/end thermal state, total tokens generated, mean tok/s by window
-#
-# ANALYSIS:
-#   Plot decode_tps vs t_wall for each policy. The shape of the curve is the result:
-#     - vanilla: starts highest, throttles fastest (no cache eviction → most DRAM bandwidth)
-#     - TOVA:    starts second, sustains middle
-#     - v1:      starts lowest, sustains best (adaptive budget reduces thermal pressure)
-#
-# Wall time: ~30 min × 3 policies + cool-downs ≈ 2-2.5 hours.
+# phone_wave3_stress.sh: sustained-stress test, 30 min per policy with no cool-down
+# between iterations. Each policy starts cold (skin <= 35 C), then repeats a full prefill
+# plus 256-token decode on Llama-3.2-1B (CPU) while sensors sample at 5 Hz.
+# Output per policy: phone-logs/wave3_<ts>/<policy>/ (stress.csv, sensors.csv, iter*/).
 
 set -e
 export PATH=/home/mislam22/tools/platform-tools:$PATH
@@ -50,7 +22,7 @@ COOL_START_C=35        # cool to 35°C before each policy
 COOL_MAX_WAIT_S=600    # up to 10 min cool-down between policies
 SAMPLE_HZ=5            # sensor sampling rate during stress
 
-# CPU-only stack — no Vulkan registered (matches Wave-1-redux + H2O sweep)
+# CPU-only build, no Vulkan backend registered
 BIN_DIR=bin_cpu
 
 OUT_BASE_PHONE="/data/local/tmp/endurkv/logs/wave3_$(date +%s)"
@@ -74,13 +46,13 @@ adb shell "mkdir -p $OUT_BASE_PHONE"
 
 for POLICY in $POLICIES; do
     echo "" | tee -a "$PROG_LOG"
-    echo "=========================================================================" | tee -a "$PROG_LOG"
+    echo "=" | tee -a "$PROG_LOG"
     echo "[$(date)] policy=$POLICY  starting $DURATION_S-second stress" | tee -a "$PROG_LOG"
-    echo "=========================================================================" | tee -a "$PROG_LOG"
+    echo "=" | tee -a "$PROG_LOG"
 
     POL_DIR_PHONE="$OUT_BASE_PHONE/$POLICY"
 
-    # vanilla flag handling — force FA-off for vanilla too so all policies share compute path
+    # FA-off for vanilla too, so all policies share one compute path
     EXTRA_FLAGS=""
     if [ "$POLICY" = "vanilla" ]; then
         EXTRA_FLAGS="--no-fa-vanilla"
@@ -98,9 +70,7 @@ sh scripts/phone_cool_then_run.sh \
 sh scripts/sample_sensors.sh --out $POL_DIR_PHONE/sensors.csv --hz $SAMPLE_HZ &
 SAMPLER=\$!
 
-# Stress loop: keep eviction_bench cycling for DURATION_S seconds.
-# Each call does one full prefill + 256-token decode → exits → next call.
-# This mimics 'user keeps asking, model keeps answering' usage.
+# Stress loop: one full prefill plus 256-token decode per call, for DURATION_S seconds.
 T_START=\$(date +%s)
 ITER=0
 echo \"iter,t_wall_s,exit,prefill_ms,decode_tps,peak_kv_mb,peak_rss_kb,evicted\" > $POL_DIR_PHONE/stress.csv
@@ -166,7 +136,7 @@ echo \"  done iters=\$ITER duration=\$ELAPSED s\"
 
     # Quick sustained-vs-peak comparison
     if [ -f "$LOCAL_DIR/$POLICY/stress.csv" ]; then
-        echo "  --- $POLICY tok/s by 5-min window ---" | tee -a "$PROG_LOG"
+        echo "$POLICY tok/s by 5-min window" | tee -a "$PROG_LOG"
         awk -F, 'NR>1 && $5>0 {
             bucket = int($2/300);
             sum[bucket]+=$5; n[bucket]++;

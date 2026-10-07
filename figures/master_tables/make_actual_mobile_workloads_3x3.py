@@ -1,14 +1,7 @@
 #!/usr/bin/env python3
-"""Actual mobile LLM workload signatures from existing benchmark traces.
-
-Rows:
-  1. Performance over time: prefill effective throughput and decode throughput.
-  2. USB-rail power over time.
-  3. KV-cache resident memory over time.
-  4. SoC/DDR thermal response over time.
-
-The selected runs are existing local traces with meta.json, sensors.csv, and
-steps.csv. This script does not touch the phone or run inference.
+"""Mobile LLM workload signatures from existing local traces (meta.json, sensors.csv, steps.csv).
+Rows over time: prefill and decode throughput, USB-rail power, KV-cache memory, SoC/DDR temps.
+Does not touch the phone or run inference.
 """
 
 import csv
@@ -85,9 +78,8 @@ def load_run(path):
         power = usb_power
         power_label = "USB rail"
     else:
-        # Older LongBench traces did not log USB rail power. Their battery
-        # current column is too coarse here, often quantized to 0 mA, so do
-        # not plot it as power.
+        # Older LongBench traces have no USB rail power, and their battery current
+        # is often quantized to 0 mA, so it is not plotted as power.
         power = np.full_like(t, np.nan)
         power_label = "not logged"
 

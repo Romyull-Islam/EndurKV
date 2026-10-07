@@ -1,56 +1,8 @@
 #!/usr/bin/env python3
-"""
-host_simulate_eviction_policies_v2.py — extended eviction-policy simulator
-with 3 published baselines (SnapKV, PyramidKV, CAKE-style cascade) and
-proper fair-budget comparison across 4 metrics:
-
-    mean_kl              — attention-preservation KL (lower is better)
-    avg_actual_K         — average number of cache slots actually used
-                           across (step, layer). USED FOR FAIRNESS CHECK.
-    throughput_rel       — 1 / avg_actual_K, normalized so full-cache = 1.0;
-                           proxy for decode speed.
-    dram_bytes_avg       — avg_actual_K × bytes_per_token (model-specific);
-                           the absolute DRAM footprint we'd see on phone.
-
-A comparison is FAIR if all policies share the same avg_actual_K within
-a few percent. Any policy whose avg_actual_K substantially exceeds the
-nominal K is flagged 'unfair' in the output and plotted separately.
-
-Policies implemented faithfully:
-    full          — no eviction (reference)
-    local         — keep K most recent (control)
-    streamingllm  — Xiao 2024: 4 sinks + (K-4) most recent
-    h2o           — Zhang 2023: K/2 heavy hitters (accumulated attention) +
-                    K/2 most recent
-    h2o_norec     — H2O with K/16 recent only (slide-24 finding)
-    snapkv        — Li 2024: observation window of last W steps during
-                    prefill; identify K-W heavy hitters from that window
-                    plus W recent. Approximated by using step 0's attention
-                    as the observation window score, then frozen.
-    pyramidkv     — Cai 2024: pyramidal per-layer budget, K_max -> K_min
-                    across depth, total avg = nominal K. K_max = 1.5K,
-                    K_min = 0.5K linearly.
-    cake          — Qin 2024: cascading layer-aware budgets, similar to
-                    PyramidKV but with attention-pattern-dependent depth
-                    profile. Approximated by giving deeper layers MORE
-                    budget (where attention is typically more diffuse).
-    endurkv       — proposal Rule 4: K_t = K * (1 + H_tilde). UNFAIR
-                    (uses ~1.5K avg). Kept as upper-bound reference.
-    endurkv_attn_spread — fair-budget: K_t = K * (1.3 - 0.6 * max_attn_norm),
-                    where max_attn_norm is the layer's max attention prob
-                    mapped from [0.4, 0.8] to [0, 1]. Avg ≈ K.
-    endurkv_adaptive — dynamic: combines pressure_ratio (n_kv / max_n_ctx)
-                    with attention concentration. Adapts to model size and
-                    context length automatically.
-
-Outputs in <log_dir>_eviction_v2/:
-    policy_results.csv       — long-form per-prompt per-policy per-K
-    pareto_summary.csv       — per (policy, K): mean_kl, avg_actual_K,
-                               throughput_rel, dram_bytes_avg
-    01_pareto_kl_vs_cache.png — Pareto plot: KL vs avg actual cache
-                                lower-left is better
-    02_fair_budget_table.png  — bar chart at fixed nominal K, all FAIR policies
-    03_per_task_kl.png        — per-task breakdown, FAIR policies only
+"""Host-side KV eviction-policy simulator over .attn.bin attention sidecars.
+Compares published baselines (StreamingLLM, H2O, SnapKV, PyramidKV, CAKE, TOVA, ...)
+and EndurKV variants on mean KL, avg cache slots used, throughput proxy and DRAM bytes.
+Writes policy_results.csv, pareto_summary.csv and plots to <log_dir>_eviction_v2/.
 """
 from __future__ import annotations
 
@@ -67,23 +19,10 @@ import pandas as pd
 WORKSPACE = Path(os.environ.get("WORKSPACE", r"D:/Research/EndurKV_workspace"))
 
 
-# ---------- attn.bin parser -------------------------------------------------
+# attn.bin parser
 def load_attn_full(path: Path, return_per_head: bool = False):
-    """Reads either:
-      - v1 "ATTN" sidecars (head-averaged): each (step, layer) block is one
-        n_kv-long float vector.
-      - v2 "ATNH" sidecars (per-head):      each (step, layer) block is an
-        n_head * n_kv flat float vector laid out as [head0..N, head1..N, ...].
-
-    Returns
-    -------
-    if return_per_head and v2:
-        attn_ph : float32 [n_steps, n_layers, n_head, max_kv]
-        n_kv_at : int32   [n_steps]
-    otherwise (v1 OR v2 with return_per_head=False):
-        attn    : float32 [n_steps, n_layers, max_kv]   (head-averaged)
-        n_kv_at : int32   [n_steps]
-    """
+    """Read an "ATTN" (head-averaged) or "ATNH" (per-head) sidecar.
+    Returns (attn [steps, layers, (heads,) max_kv], n_kv_at [steps])."""
     if not path.exists():
         return None, None
     with open(path, "rb") as f:
@@ -142,14 +81,14 @@ def load_attn_full(path: Path, return_per_head: bool = False):
     return attn, np.array(n_kv_at, dtype=np.int32)
 
 
-# ---------- KL helper ------------------------------------------------------
+# KL helper
 def kl(p_full, p_evicted, eps=1e-12):
     p_full = np.clip(p_full, eps, 1.0)
     p_evicted = np.clip(p_evicted, eps, 1.0)
     return float(np.sum(p_full * (np.log(p_full) - np.log(p_evicted))))
 
 
-# ---------- policies -------------------------------------------------------
+# policies
 # Each returns a boolean mask of shape (n_kv,) plus the actual K used.
 
 def m_full(n_kv, K, **kw):
@@ -190,19 +129,8 @@ def m_h2o_norec(n_kv, K, accum, **kw):
     return _hh_norec_mask(n_kv, K, accum, recent_frac=1.0/16)
 
 def m_snapkv(n_kv, K, snapkv_score, **kw):
-    """SnapKV (Li 2024) — selection FROZEN at end of prefill.
-
-    snapkv_score is precomputed by simulate() as:
-      - Sum attention across first L_obs decode steps (approximates the
-        paper's observation window of the last L_obs prompt tokens)
-      - Sum across layers (the paper does this per-layer; we use the
-        layer-summed version for cross-layer consistency in our sim)
-      - 1D max-pool with kernel_size=5 (paper's smoothing step)
-    Then this policy:
-      - Reserves L_obs (=16) slots for the observation window itself
-      - Picks top-(K - L_obs) heavy hitters by smoothed score
-      - Keeps both groups
-    """
+    """SnapKV (Li 2024), selection frozen after prefill. Keeps a recent window
+    plus top heavy hitters by the pooled, layer-summed score from simulate()."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     L_obs = 16
@@ -219,9 +147,8 @@ def m_snapkv(n_kv, K, snapkv_score, **kw):
     return m, int(m.sum())
 
 def m_endurkv_tova_spread(n_kv, K, attn_full, **kw):
-    """Hybrid: TOVA's current-attention scoring + EndurKV's attention-spread
-    budget gate. Selection is top-K_t by CURRENT step attention, where
-    K_t = K * (1.3 - 0.6 * max_attn_norm). Avg cache ≈ K."""
+    """TOVA scoring (top-K_t by current attention) with the attention-spread
+    gate K_t = K * (1.3 - 0.6 * max_attn_norm). Avg cache is about K."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     if attn_full is None or len(attn_full) == 0:
@@ -235,14 +162,11 @@ def m_endurkv_tova_spread(n_kv, K, attn_full, **kw):
     return m, int(m.sum())
 
 
-# ---- 2025-26 baselines we must beat -------------------------------------
+# 2025-26 baselines
 
 def m_lwkd(n_kv, K, attn_full, lwkd_state, layer_idx, **kw):
-    """LWKD / SAGE-KV (arXiv 2503.08879, Mar 2025) — single-shot post-prefill
-    selection using the LAST input token's attention. After the first decode
-    step, the mask is frozen; subsequent steps reuse it (newly appended
-    decode tokens are always kept).
-    """
+    """LWKD / SAGE-KV (arXiv 2503.08879): one-shot top-K by the first decode step's
+    attention, then frozen. Newly appended decode tokens are always kept."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     frozen = lwkd_state["frozen"][layer_idx]
@@ -263,16 +187,8 @@ def m_lwkd(n_kv, K, attn_full, lwkd_state, layer_idx, **kw):
 
 
 def m_ahakv(n_kv, K, recent_accum_l, **kw):
-    """AhaKV (arXiv 2506.03762, Jun 2025) — *approximation*. The paper
-    proposes three components: SG-softmax (scale-tuned softmax), recent-window
-    accumulation (bias-corrected), and value-prior refine. We can only
-    implement the recent-window accumulation faithfully from .attn.bin
-    (we don't have pre-softmax logits or V vectors).
-
-    Score: sum of attention over LAST W=16 decode steps, plus K/8 recent
-    positions reserved. This removes H2O's positional bias toward early
-    tokens without changing the rest.
-    """
+    """AhaKV (arXiv 2506.03762), recent-window accumulation part only (no logits or V
+    in .attn.bin). Score is attention summed over the last 16 steps, K/8 kept recent."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     K_rec = max(1, K // 8)
@@ -288,25 +204,16 @@ def m_ahakv(n_kv, K, recent_accum_l, **kw):
     return m, int(m.sum())
 
 
-# ---- EndurKV-Evict-v3 (v2 lessons learned) ------------------------------
+# EndurKV-Evict v3
 
 def m_endurkv_v3(n_kv, K, attn_full, attn_ewma_l, cross_layer_attn,
                  layer_idx, **kw):
-    """EndurKV-Evict v3 — keep v1's proven max-attention gate, add the
-    composite scoring from v2.
-
-    Lessons from v2 failure:
-      - Entropy gate shrinks too aggressively at long context (log(n_kv) grows).
-      - Cross-layer + EWMA scoring is good IF the gate gives it room to work.
-
-    v3 design:
-      - Budget gate from v1 (proven):  K_t = K * (1.3 - 0.6 * max_a_norm)
-      - Score from v2:                 0.55*current + 0.25*xlayer + 0.20*ewma
-    """
+    """v1 max-attention gate K_t = K * (1.3 - 0.6 * max_a_norm) with the v2 score
+    0.55*current + 0.25*cross_layer + 0.20*ewma."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
-    # v1 gate (proven)
+    # v1 gate
     max_a = float(a.max())
     norm = max(0.0, min(1.0, (max_a - 0.4) / 0.4))
     mult = 1.3 - 0.6 * norm
@@ -326,46 +233,34 @@ def m_endurkv_v3(n_kv, K, attn_full, attn_ewma_l, cross_layer_attn,
 
 def m_lazyeviction(n_kv, K, attn_full, accum, lazy_mri_l, lazy_last_high_l,
                    lazy_current_step, lazy_window, **kw):
-    """LazyEviction (arXiv 2506.15969, Jun 2025) — TIR-aware eviction.
-
-    Algorithm:
-      1. Eviction only fires at fixed window intervals (every W=16 steps).
-         Between windows, the cache grows normally.
-      2. Per token: time_since_last_high = current_step - last_high_step[i]
-      3. Keep token if it's been attended-to recently OR its MRI predicts a
-         recurrence soon: time_since_last_high < max(MRI, W).
-      4. Among candidates needing eviction, keep top-K by cumulative attention.
-    Beats TOVA by +7.8 pp on GSM8K @ 50% compression per the paper.
-    """
+    """LazyEviction (arXiv 2506.15969): evict only every W steps, protect tokens whose
+    recurrence interval (MRI) predicts reuse, fill the rest by cumulative attention."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
 
-    # Step 1: window-interval eviction — at non-window steps, keep ALL up to a cap
+    # Between eviction windows, keep top-(1.25 K) by accum to leave room for re-entry.
     if lazy_current_step % lazy_window != 0 and lazy_current_step > 0:
-        # Between windows: keep top-(K + buffer) to leave room for re-entry
         K_buf = min(n_kv, int(round(K * 1.25)))
         idx = np.argpartition(-accum, K_buf - 1)[:K_buf]
         m = np.zeros(n_kv, dtype=bool); m[idx] = True
         return m, int(m.sum())
 
-    # Step 2-4: window boundary — full TIR-aware eviction
-    # "Predicted to recur" — time_since_last_high < MRI
+    # At a window boundary, a token is predicted to recur if time since its
+    # last high attention is below max(MRI, W).
     time_since = lazy_current_step - lazy_last_high_l
-    # Where MRI is 0 (never had recurrence), use the window as default
     mri_safe = np.maximum(lazy_mri_l, lazy_window)
     predicted_to_recur = (time_since < mri_safe) & (lazy_last_high_l >= 0)
 
-    # Hard-protect predicted-recur tokens up to K-quota
     n_prot = int(predicted_to_recur.sum())
     if n_prot >= K:
-        # Too many; rank by recency (most recent high-attn first)
+        # Too many protected tokens, keep the most recently high ones.
         scores = -time_since.astype(np.float64)
         scores[~predicted_to_recur] = -1e18
         idx = np.argpartition(-scores, K - 1)[:K]
         m = np.zeros(n_kv, dtype=bool); m[idx] = True
         return m, int(m.sum())
     m = predicted_to_recur.copy()
-    # Fill remaining quota with top by cumulative attention from non-protected
+    # Fill the remaining quota by cumulative attention.
     K_rem = K - n_prot
     if K_rem > 0:
         cand = accum.copy()
@@ -381,45 +276,27 @@ def m_lazyeviction(n_kv, K, attn_full, accum, lazy_mri_l, lazy_last_high_l,
 
 def m_endurkv_v6(n_kv, K, attn_full, accum, lazy_mri_l, lazy_last_high_l,
                  lazy_current_step, lazy_window, **kw):
-    """*** EndurKV-Evict v6 *** — combines LazyEviction's TIR insight with v1's
-    proven spread gate.
-
-    Algorithm:
-      1. v1's spread gate sizes the per-step budget K_t = K * mult(max_attn).
-      2. TIR awareness (from LazyEviction): tokens with predicted recurrence
-         (time_since_last_high < MRI) get a SCORE BONUS, not hard protection
-         (because hard protection loses to the consensus-failure mode we saw
-         in v4). The bonus magnitude is proportional to how recent and
-         frequent the token's attention has been.
-      3. Final score = current_attn * (1 + recurrence_bonus), top-K_t wins.
-
-    Why this should work where v2-v5 failed:
-      - v2-v5 used signals that DUPLICATED current attention (cross-layer, EWMA).
-      - TIR (Maximum Recurrence Interval) is a TEMPORAL signal not derivable from
-        the current step. It adds information current attention doesn't have.
-    """
+    """EndurKV-Evict v6: v1 spread gate, score = current_attn * (1 + 0.5 * bonus), where
+    the LazyEviction recurrence (MRI) signal gives a soft bonus, not hard protection."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
 
-    # v1 spread gate (proven)
+    # v1 spread gate
     max_a = float(a.max())
     norm = max(0.0, min(1.0, (max_a - 0.4) / 0.4))
     mult = 1.3 - 0.6 * norm
     K_t = max(1, min(n_kv, int(round(K * mult))))
 
-    # TIR bonus: tokens predicted to recur soon get a multiplicative boost
-    # bonus in [0, 1] — 1 means "very confident it'll recur"
+    # Recurrence bonus in [0, 1], near 1 when time_since << MRI, decays to 0 past it.
     time_since = lazy_current_step - lazy_last_high_l
     mri_safe = np.maximum(lazy_mri_l, 1).astype(np.float64)
-    # bonus high when time_since << MRI, decays to 0 when time_since >> MRI
     bonus = np.where(
         lazy_last_high_l >= 0,
         np.exp(-time_since.astype(np.float64) / mri_safe),
         0.0,
     )
 
-    # Composite score: current attention scaled by recurrence-prediction bonus
     score = a * (1.0 + 0.5 * bonus)
 
     idx = np.argpartition(-score, K_t)[:K_t]
@@ -427,14 +304,10 @@ def m_endurkv_v6(n_kv, K, attn_full, accum, lazy_mri_l, lazy_last_high_l,
     return m, int(m.sum())
 
 
-# ===========================================================================
-# NOVEL MATHEMATICAL POLICIES — frequency-domain, calculus-based, optimal-transport
-# ===========================================================================
+# Experimental policies: frequency-domain, derivative and optimal-transport scores
 
 def _history_matrix(attn_history_l, n_kv, W):
-    """Return W x n_kv matrix of recent attention history (most-recent in last row,
-    zero-padded for early decode steps and for positions absent in older steps).
-    """
+    """W x n_kv matrix of recent attention, newest in the last row, zero-padded."""
     H = np.zeros((W, n_kv), dtype=np.float64)
     if attn_history_l is None or len(attn_history_l) == 0:
         return H
@@ -449,31 +322,20 @@ def _history_matrix(attn_history_l, n_kv, W):
 
 
 def m_endurkv_spectral(n_kv, K, attn_full, attn_history_l, **kw):
-    """SPECTRAL eviction (NOVEL): score by low-frequency FFT energy of each
-    token's attention time-series. Captures *persistence* without an arbitrary
-    window. Subsumes Scissorhands (single freq band) and TIR (specific harmonic)
-    as special cases.
-
-    score[i] = sum_{omega in [0, omega_c]} |FFT(history[i])[omega]|^2
-    blended with current attention to keep mass on actively-attended tokens.
-    """
+    """Score by low-frequency FFT energy (DC + 2 harmonics) of each token's
+    attention history, blended 60/40 with current attention."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
     W = 8
     H = _history_matrix(attn_history_l, n_kv, W)
-    # Add current step
     H[-1, :] = np.maximum(H[-1, :], a)
-    # FFT along time axis (real signal -> rfft)
     fft_H = np.fft.rfft(H, axis=0)
-    # Low-frequency energy: DC + first 2 harmonics
     n_freqs = min(3, fft_H.shape[0])
     energy = (np.abs(fft_H[:n_freqs, :]) ** 2).sum(axis=0)
-    # Normalize energy to [0, 1] range similar to attention
     energy_max = energy.max()
     if energy_max > 1e-12:
         energy = energy / energy_max
-    # Blend: 60% current, 40% spectral persistence
     score = 0.60 * a + 0.40 * energy
     idx = np.argpartition(-score, K)[:K]
     m = np.zeros(n_kv, dtype=bool); m[idx] = True
@@ -481,22 +343,17 @@ def m_endurkv_spectral(n_kv, K, attn_full, attn_history_l, **kw):
 
 
 def m_endurkv_differential(n_kv, K, attn_full, attn_history_l, **kw):
-    """DIFFERENTIAL eviction (NOVEL): score by Taylor-predicted future attention.
-    score[i] = a[i] + lambda1 * da/dt + lambda2 * d2a/dt2
-    Tokens whose attention is RISING get boosted (they'll matter soon).
-    Tokens whose attention has PEAKED and is falling get penalized.
-    """
+    """Score by Taylor-predicted attention a + 0.30*max(da/dt, 0) + 0.15*max(d2a/dt2, 0),
+    so tokens with rising attention are boosted."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
     W = 4
     H = _history_matrix(attn_history_l, n_kv, W)
     H[-1, :] = a  # current step
-    # First derivative (backward finite difference)
+    # backward finite differences
     d1 = H[-1, :] - H[-2, :] if H.shape[0] >= 2 else np.zeros(n_kv)
-    # Second derivative
     d2 = (H[-1, :] - 2 * H[-2, :] + H[-3, :]) if H.shape[0] >= 3 else np.zeros(n_kv)
-    # Asymmetric weighting: rising attention gets boost, falling gets normal weight
     score = a + 0.30 * np.maximum(d1, 0) + 0.15 * np.maximum(d2, 0)
     idx = np.argpartition(-score, K)[:K]
     m = np.zeros(n_kv, dtype=bool); m[idx] = True
@@ -504,14 +361,8 @@ def m_endurkv_differential(n_kv, K, attn_full, attn_history_l, **kw):
 
 
 def m_endurkv_wasserstein(n_kv, K, attn_full, **kw):
-    """WASSERSTEIN-1 quantile eviction (NOVEL): keep K positions at equal-mass
-    quantiles of the attention CDF. This is the 1D-optimal solution for
-    minimizing W1(pi_full, uniform_on_K_kept).
-
-    Unlike TOVA (top-K by attention) which clusters around peaks, this gives
-    spatial coverage proportional to attention mass — picks one rep per peak
-    rather than crowding all K around one peak.
-    """
+    """Keep K positions at equal-mass quantiles of the attention CDF (1D Wasserstein-1
+    optimum), which spreads the budget across peaks instead of crowding one."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
@@ -526,7 +377,7 @@ def m_endurkv_wasserstein(n_kv, K, attn_full, **kw):
     chosen = np.searchsorted(cum, targets, side="left")
     chosen = np.clip(chosen, 0, n_kv - 1)
     chosen = np.unique(chosen)
-    # If duplicates from searchsorted, fill with top-attention remaining
+    # searchsorted can return duplicates, fill the gap by top attention
     if len(chosen) < K:
         kept_mask = np.zeros(n_kv, dtype=bool); kept_mask[chosen] = True
         remaining = np.where(~kept_mask)[0]
@@ -539,7 +390,7 @@ def m_endurkv_wasserstein(n_kv, K, attn_full, **kw):
 
 
 def m_endurkv_v1_spectral(n_kv, K, attn_full, attn_history_l, **kw):
-    """v1 spread gate + SPECTRAL scoring."""
+    """v1 spread gate + spectral scoring."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
@@ -563,7 +414,7 @@ def m_endurkv_v1_spectral(n_kv, K, attn_full, attn_history_l, **kw):
 
 
 def m_endurkv_v1_differential(n_kv, K, attn_full, attn_history_l, **kw):
-    """v1 spread gate + DIFFERENTIAL (Taylor-predicted future) scoring."""
+    """v1 spread gate + differential (Taylor-predicted) scoring."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
@@ -583,7 +434,7 @@ def m_endurkv_v1_differential(n_kv, K, attn_full, attn_history_l, **kw):
 
 
 def m_endurkv_v1_wasserstein(n_kv, K, attn_full, **kw):
-    """v1 spread gate + WASSERSTEIN-quantile selection."""
+    """v1 spread gate + Wasserstein-quantile selection."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
@@ -613,7 +464,7 @@ def m_endurkv_v1_wasserstein(n_kv, K, attn_full, **kw):
 
 
 def m_endurkv_v1_spec_diff(n_kv, K, attn_full, attn_history_l, **kw):
-    """v1 gate + SPECTRAL + DIFFERENTIAL composite."""
+    """v1 gate + spectral + differential composite."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
@@ -638,21 +489,8 @@ def m_endurkv_v1_spec_diff(n_kv, K, attn_full, attn_history_l, **kw):
 
 
 def m_endurkv_v1_svd(n_kv, K, attn_full, attn_history_l, **kw):
-    """v1 gate + SVD-based scoring.
-
-    The attention-history matrix H (W x n_kv) has a singular-value decomposition
-    H = U S V^T.  The first r right singular vectors V[:r, :] form a basis for
-    the *dominant positional patterns* of attention over time.
-
-    A token aligned with these dominant patterns is structurally load-bearing.
-    A token orthogonal to them is noise.
-
-    score[i] = sum_k sigma_k * |V[k, i]|   for k = 0..r-1
-
-    This is genuinely orthogonal to current-step attention because it depends
-    on the SHAPE of attention distribution across positions, weighted by
-    singular values, not by any individual time-step's magnitude.
-    """
+    """v1 gate + SVD participation score sum_k sigma_k * |V[k, i]| over the top-r
+    right singular vectors of the attention history H, blended 50/50 with current."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
@@ -665,8 +503,7 @@ def m_endurkv_v1_svd(n_kv, K, attn_full, attn_history_l, **kw):
     H = _history_matrix(attn_history_l, n_kv, W)
     H[-1, :] = np.maximum(H[-1, :], a)
 
-    # SVD: H = U S V^T  (full_matrices=False -> compact)
-    # Shape: U=(W,r) S=(r,) V=(r, n_kv) where r = min(W, n_kv) <= W = 8
+    # compact SVD, r = min(W, n_kv)
     try:
         _, s, vt = np.linalg.svd(H, full_matrices=False)
     except np.linalg.LinAlgError:
@@ -675,16 +512,12 @@ def m_endurkv_v1_svd(n_kv, K, attn_full, attn_history_l, **kw):
         m = np.zeros(n_kv, dtype=bool); m[idx] = True
         return m, int(m.sum())
 
-    # Top-r participation score per position (r=3 since W=8 gives diminishing returns)
     r = min(3, len(s))
-    # score[i] = sum_k s[k] * |V[k, i]|
     svd_score = (s[:r, None] * np.abs(vt[:r, :])).sum(axis=0)
-    # Normalize to [0,1] range
     sv_max = svd_score.max()
     if sv_max > 1e-12:
         svd_score = svd_score / sv_max
 
-    # Blend with current attention so we don't fully abandon TOVA's signal
     score = 0.50 * a + 0.50 * svd_score
     idx = np.argpartition(-score, K_t)[:K_t]
     m = np.zeros(n_kv, dtype=bool); m[idx] = True
@@ -692,19 +525,8 @@ def m_endurkv_v1_svd(n_kv, K, attn_full, attn_history_l, **kw):
 
 
 def m_endurkv_v1_lowrank_err(n_kv, K, attn_full, attn_history_l, **kw):
-    """v1 gate + LOW-RANK RECONSTRUCTION ERROR scoring.
-
-    For each token, project its W-step attention history onto the top-r
-    singular vectors of H. Reconstruct, measure residual error.
-    - Low residual = token follows the dominant attention pattern (signal)
-    - High residual = token's behavior is structurally idiosyncratic (noise)
-
-    Keep tokens with LOW reconstruction error (= aligned with the principal
-    attention structure). This is essentially "subspace alignment" scoring,
-    which has not been used in any eviction policy.
-
-    score[i] = current_attention - lambda * reconstruction_error[i]
-    """
+    """v1 gate + low-rank reconstruction score: tokens whose attention history is
+    well explained by the rank-r SVD of H (low residual) score higher."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
@@ -725,18 +547,15 @@ def m_endurkv_v1_lowrank_err(n_kv, K, attn_full, attn_history_l, **kw):
         return m, int(m.sum())
 
     r = min(3, len(s))
-    # Rank-r reconstruction: H_r = U[:,:r] S[:r] V[:r,:]
     H_r = u[:, :r] * s[:r] @ vt[:r, :]
-    # Per-position reconstruction error: ||H[:,i] - H_r[:,i]||^2
+    # per-position squared residual, inverted so low error scores high
     err = ((H - H_r) ** 2).sum(axis=0)
-    # Normalize and invert (low error = high score)
     err_max = err.max()
     if err_max > 1e-12:
         alignment = 1.0 - err / err_max
     else:
         alignment = np.ones(n_kv)
 
-    # Blend: current attention + alignment with principal subspace
     score = 0.60 * a + 0.40 * alignment * a.max()
     idx = np.argpartition(-score, K_t)[:K_t]
     m = np.zeros(n_kv, dtype=bool); m[idx] = True
@@ -744,19 +563,8 @@ def m_endurkv_v1_lowrank_err(n_kv, K, attn_full, attn_history_l, **kw):
 
 
 def m_endurkv_v1_eigencentrality(n_kv, K, attn_full, attn_history_l, **kw):
-    """v1 gate + EIGENVECTOR CENTRALITY scoring.
-
-    Build a similarity matrix M where M[i,j] = correlation of attention histories
-    of positions i and j (cosine similarity over the W-step time window).
-
-    Then position centrality is the dominant eigenvector of M. Tokens at the
-    "center" of attention co-occurrence get high scores — they're part of the
-    most-connected attention community.
-
-    For n_kv up to ~12K this is O(n_kv^2) memory which is too much. We
-    APPROXIMATE: only consider the top-2K candidates by current attention,
-    compute eigencentrality among them, then promote top-K_t.
-    """
+    """v1 gate + eigenvector centrality on the cosine-similarity graph of attention
+    histories. Restricted to top-2K_t candidates since the full matrix is O(n_kv^2)."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
@@ -765,7 +573,7 @@ def m_endurkv_v1_eigencentrality(n_kv, K, attn_full, attn_history_l, **kw):
     mult = 1.3 - 0.6 * norm
     K_t = max(1, min(n_kv, int(round(K * mult))))
 
-    # Top-2*K_t candidates by current attention (cap on the eigenvalue problem size)
+    # candidates by current attention, caps the eigenproblem size
     n_cand = min(n_kv, max(2 * K_t, 256))
     if n_cand >= n_kv:
         cand_idx = np.arange(n_kv)
@@ -777,15 +585,14 @@ def m_endurkv_v1_eigencentrality(n_kv, K, attn_full, attn_history_l, **kw):
     H[-1, :] = a
     H_c = H[:, cand_idx]   # W x n_cand
 
-    # Normalise columns (L2) so dot products are cosine similarities
+    # L2-normalised columns, so M holds cosine similarities (n_cand x n_cand)
     norms = np.linalg.norm(H_c, axis=0, keepdims=True)
     norms = np.where(norms > 1e-9, norms, 1.0)
     Hn = H_c / norms
 
-    # Similarity matrix M = Hn^T Hn  (n_cand x n_cand)
     M = Hn.T @ Hn
 
-    # Dominant eigenvector via power iteration (cheap: 8-16 iterations)
+    # dominant eigenvector by power iteration
     v = np.ones(n_cand) / np.sqrt(n_cand)
     for _ in range(16):
         v_new = M @ v
@@ -793,12 +600,11 @@ def m_endurkv_v1_eigencentrality(n_kv, K, attn_full, attn_history_l, **kw):
         if nv < 1e-12: break
         v = v_new / nv
     centrality = np.abs(v)
-    # Normalise
     c_max = centrality.max()
     if c_max > 1e-12:
         centrality = centrality / c_max
 
-    # Build score over all positions (non-candidates get 0)
+    # non-candidates get 0
     centr_full = np.zeros(n_kv)
     centr_full[cand_idx] = centrality
 
@@ -809,14 +615,8 @@ def m_endurkv_v1_eigencentrality(n_kv, K, attn_full, attn_history_l, **kw):
 
 
 def m_endurkv_v1_spec_nodc(n_kv, K, attn_full, attn_history_l, **kw):
-    """v1 gate + spectral scoring with DC EXCLUDED.
-
-    Excluding DC (bin 0 = sum, which is correlated with current attention)
-    isolates the genuinely orthogonal signal: how strongly does attention
-    OSCILLATE on this position? Tokens with high harmonic-band energy are
-    those the model touches repeatedly with a stable rhythm — load-bearing
-    in a way current attention can't tell us.
-    """
+    """v1 gate + spectral energy in harmonics 1-3 only. DC is excluded because it
+    tracks summed attention, so the score measures oscillation strength."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
@@ -828,7 +628,7 @@ def m_endurkv_v1_spec_nodc(n_kv, K, attn_full, attn_history_l, **kw):
     H = _history_matrix(attn_history_l, n_kv, W)
     H[-1, :] = np.maximum(H[-1, :], a)
     fft_H = np.fft.rfft(H, axis=0)
-    # EXCLUDE DC (bin 0), use harmonics 1-3
+    # skip DC (bin 0)
     if fft_H.shape[0] > 3:
         ac_energy = (np.abs(fft_H[1:4, :]) ** 2).sum(axis=0)
     elif fft_H.shape[0] > 1:
@@ -838,7 +638,6 @@ def m_endurkv_v1_spec_nodc(n_kv, K, attn_full, attn_history_l, **kw):
     ac_max = ac_energy.max()
     if ac_max > 1e-12:
         ac_energy = ac_energy / ac_max
-    # Modest blend: 70% current, 30% AC-energy (oscillation strength)
     score = 0.70 * a + 0.30 * ac_energy
     idx = np.argpartition(-score, K_t)[:K_t]
     m = np.zeros(n_kv, dtype=bool); m[idx] = True
@@ -846,12 +645,8 @@ def m_endurkv_v1_spec_nodc(n_kv, K, attn_full, attn_history_l, **kw):
 
 
 def m_endurkv_v1_phase(n_kv, K, attn_full, attn_history_l, **kw):
-    """v1 gate + PHASE-based scoring.
-
-    Uses the PHASE of the FFT (not magnitude) at the first harmonic to detect
-    "in-phase" persistent tokens — those whose attention rises and falls in
-    a predictable rhythm. Genuinely orthogonal to magnitude-based scoring.
-    """
+    """v1 gate + phase score: |X1| * cos(angle X1) at the first FFT harmonic of
+    each token's attention history, blended 70/30 with current attention."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
@@ -863,11 +658,10 @@ def m_endurkv_v1_phase(n_kv, K, attn_full, attn_history_l, **kw):
     H = _history_matrix(attn_history_l, n_kv, W)
     H[-1, :] = np.maximum(H[-1, :], a)
     fft_H = np.fft.rfft(H, axis=0)
-    # Use magnitude × cos(phase) at first harmonic — favors phase-aligned tokens
     if fft_H.shape[0] > 1:
         first_harmonic = fft_H[1, :]
         phase_align = (np.abs(first_harmonic) * np.cos(np.angle(first_harmonic))).astype(np.float64)
-        # Shift to non-negative range and normalize
+        # shift to non-negative, then normalize
         phase_align = phase_align - phase_align.min()
         ph_max = phase_align.max()
         if ph_max > 1e-12:
@@ -881,14 +675,8 @@ def m_endurkv_v1_phase(n_kv, K, attn_full, attn_history_l, **kw):
 
 
 def m_endurkv_v1_logistic(n_kv, K, attn_full, **kw):
-    """v1 gate + LOGISTIC-scaled scoring.
-
-    Apply a logistic squash to the attention values before top-K. This
-    saturates extreme values and amplifies mid-range differentiation — keeps
-    the top peaks but better discriminates among middle tokens.
-
-    score[i] = sigmoid(beta * (a[i] - mean(a))) where beta is a contrast knob.
-    """
+    """v1 gate + logistic score sigmoid(3 * (a - mean) / std), which saturates the
+    peaks and spreads out mid-range tokens."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
@@ -896,7 +684,6 @@ def m_endurkv_v1_logistic(n_kv, K, attn_full, **kw):
     norm = max(0.0, min(1.0, (max_a - 0.4) / 0.4))
     mult = 1.3 - 0.6 * norm
     K_t = max(1, min(n_kv, int(round(K * mult))))
-    # Logistic squash centred at mean, with sharpness scaled by 1/std
     mean = a.mean()
     std = max(1e-9, a.std())
     z = (a - mean) / std  # standardized
@@ -907,13 +694,8 @@ def m_endurkv_v1_logistic(n_kv, K, attn_full, **kw):
 
 
 def m_endurkv_v1_geometric(n_kv, K, attn_full, attn_history_l, **kw):
-    """v1 gate + GEOMETRIC-MEAN of current and historical attention.
-
-    score[i] = (a[i] * mean(history[i])) ^ 0.5
-    Geometric mean penalises tokens with high current but no history
-    (transient peaks) and tokens with history but no current (cold). Both
-    must be present for a high score.
-    """
+    """v1 gate + sqrt(a * mean(history)), so a token needs both current and past
+    attention to score high."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
@@ -932,9 +714,8 @@ def m_endurkv_v1_geometric(n_kv, K, attn_full, attn_history_l, **kw):
 
 
 def m_endurkv_v1_all(n_kv, K, attn_full, attn_history_l, **kw):
-    """KITCHEN-SINK: v1 gate + spectral + differential + Wasserstein-aware
-    spatial diversity. Last 25% of budget reserved for quantile-spread positions.
-    """
+    """v1 gate + spectral + differential score, with 25% of K_t reserved for
+    Wasserstein-quantile positions."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
@@ -955,18 +736,16 @@ def m_endurkv_v1_all(n_kv, K, attn_full, attn_history_l, **kw):
     d1 = H[-1, :] - H[-2, :] if H.shape[0] >= 2 else np.zeros(n_kv)
     score = 0.50 * a + 0.25 * energy + 0.15 * np.maximum(d1, 0)
 
-    # Reserve ~25% of K_t for spatial-diversity quantiles, rest by score
     K_quant = max(1, K_t // 4)
     K_score = K_t - K_quant
 
     m = np.zeros(n_kv, dtype=bool)
 
-    # Score-based selection
     if K_score > 0:
         top = np.argpartition(-score, min(K_score, n_kv - 1))[:K_score]
         m[top] = True
 
-    # Wasserstein-quantile fill the remainder from positions not yet kept
+    # quantile positions not yet kept
     total = a.sum()
     if total > 1e-9 and K_quant > 0:
         cum = np.cumsum(a) / total
@@ -978,7 +757,7 @@ def m_endurkv_v1_all(n_kv, K, attn_full, attn_history_l, **kw):
                 m[c] = True
                 if int(m.sum()) >= K_t: break
 
-    # Fill any remaining slots with next-best by score
+    # fill any remaining slots by score
     needed = K_t - int(m.sum())
     if needed > 0:
         remaining = np.where(~m)[0]
@@ -989,45 +768,27 @@ def m_endurkv_v1_all(n_kv, K, attn_full, attn_history_l, **kw):
 
 
 def m_endurkv_v5(n_kv, K, attn_full, attn_history_l, **kw):
-    """EndurKV-Evict v5 — MATRIX-LEVEL redundancy reduction.
-
-    Builds an n_pre x n_pre cosine-similarity matrix from each candidate
-    token's attention PROFILE over the last W decode steps. Tokens whose
-    profiles are near-duplicates of better-scored tokens get dropped.
-
-    This is the first policy in our sim that does an actual matrix
-    operation (not just argpartition on a vector). It's the R-KV idea
-    with attention-profile similarity replacing key-vector similarity
-    (since we don't have K vectors in .attn.bin).
-
-    Pipeline:
-      1) v1 gate sizes K_t.
-      2) TOVA pre-select n_pre = min(n_kv, 3*K_t) candidates by current attn.
-      3) Build n_pre x n_pre cos-sim matrix from attention profiles over
-         the last W=8 steps.
-      4) For each candidate, redundancy = max sim to any HIGHER-scored peer.
-      5) Final score = a_i - lambda * redundancy.  Top-K_t wins.
-    """
+    """EndurKV-Evict v5: R-KV-style redundancy penalty using attention-profile cosine
+    similarity over the last 8 steps (no K vectors in .attn.bin). Score = a - 0.35*redundancy."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
 
-    # v1 gate (proven)
+    # v1 gate
     max_a = float(a.max())
     norm = max(0.0, min(1.0, (max_a - 0.4) / 0.4))
     mult = 1.3 - 0.6 * norm
     K_t = max(1, min(n_kv, int(round(K * mult))))
 
-    # Pre-select more than K_t to give the similarity step room
+    # pre-select 3*K_t candidates by current attention, sorted descending
     n_pre = min(n_kv, max(K_t, 3 * K_t))
     if n_pre >= n_kv:
         pre_idx = np.arange(n_kv)
     else:
         pre_idx = np.argpartition(-a, n_pre - 1)[:n_pre]
-    # Sort pre_idx by current attention (descending) — index 0 is highest-scored
     pre_idx = pre_idx[np.argsort(-a[pre_idx])]
 
-    # Build attention-profile matrix: rows are tokens, cols are recent steps
+    # profile matrix: rows are tokens, columns are recent steps
     W = 8
     hist = attn_history_l[-W:] if attn_history_l is not None else [a]
     profiles = np.zeros((len(pre_idx), len(hist)), dtype=np.float64)
@@ -1042,21 +803,17 @@ def m_endurkv_v5(n_kv, K, attn_full, attn_history_l, **kw):
     safe_norms = np.where(norms > 1e-9, norms, 1.0)
     profiles_n = profiles / safe_norms
 
-    # Pairwise cosine similarity (the MATRIX OPERATION)
     sim = profiles_n @ profiles_n.T
     np.fill_diagonal(sim, 0.0)
 
-    # Upper-triangular: for each i, redundancy = max sim with any j < i
-    # (j < i means j is BETTER-scored — we keep the better and drop the dup)
+    # redundancy[i] = max similarity to any better-scored token j < i
     redundancy = np.zeros(len(pre_idx))
     for i in range(1, len(pre_idx)):
         redundancy[i] = sim[i, :i].max()
 
-    # Final score: current attention minus redundancy penalty
     LAMBDA = 0.35
     final = a[pre_idx] - LAMBDA * redundancy
 
-    # Top-K_t of pre-selected by final
     if len(pre_idx) <= K_t:
         m = np.zeros(n_kv, dtype=bool); m[pre_idx] = True
         return m, int(m.sum())
@@ -1068,32 +825,19 @@ def m_endurkv_v5(n_kv, K, attn_full, attn_history_l, **kw):
 
 def m_endurkv_v4(n_kv, K, attn_full, attn_ewma_l, cross_layer_attn,
                  cross_layer_max, layer_idx, **kw):
-    """EndurKV-Evict v4 — Critical-Token Protection via cross-layer persistence.
-
-    Three principles, composed:
-      (1) ALWAYS keep 4 attention sinks + last 4 recent tokens
-          (StreamingLLM observation: cheap and high-value).
-      (2) PROTECT load-bearing tokens. A token is "load-bearing" if its
-          critical_score = EWMA_persistence * cross_layer_max  is above the
-          dynamic threshold (top-quartile of critical_score). These tokens
-          consume budget BEFORE TOVA scoring.
-      (3) ALLOCATE remaining budget by TOVA + cross-layer composite.
-
-    v1's max-attention gate sizes K_t per step (proven).
-    The cross-layer signal is genuinely novel for eviction — no published
-    method uses it as a hard-protection rule.
-    """
+    """EndurKV-Evict v4: v1 gate, 4 sinks + 4 recent, then about 1/3 of the rest for
+    tokens with high ewma * cross_layer_max, the remainder by the v3 composite score."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
 
-    # --- budget gate (v1 proven) ---
+    # v1 budget gate
     max_a = float(a.max())
     norm = max(0.0, min(1.0, (max_a - 0.4) / 0.4))
     mult = 1.3 - 0.6 * norm
     K_t = max(8, min(n_kv, int(round(K * mult))))
 
-    # --- reserve sinks + recent ---
+    # reserve sinks + recent
     n_sink = min(4, K_t // 4)
     n_recent = min(4, K_t // 4)
     m = np.zeros(n_kv, dtype=bool)
@@ -1105,16 +849,16 @@ def m_endurkv_v4(n_kv, K, attn_full, attn_ewma_l, cross_layer_attn,
     if K_used >= K_t:
         return m, K_used
 
-    # --- critical-token protection (NOVEL) ---
+    # critical-token protection
     ewma = (attn_ewma_l[:n_kv]
             if attn_ewma_l is not None and len(attn_ewma_l) >= n_kv
             else a)
     cl_max = (cross_layer_max[:n_kv]
               if cross_layer_max is not None and len(cross_layer_max) >= n_kv
               else a)
-    critical = ewma * cl_max  # geometric-mean-style product
+    critical = ewma * cl_max
 
-    # Candidate positions (not sink, not recent)
+    # candidates exclude sinks and recent
     candidate_mask = ~m
     cand_idx = np.where(candidate_mask)[0]
 
@@ -1123,17 +867,16 @@ def m_endurkv_v4(n_kv, K, attn_full, attn_ewma_l, cross_layer_attn,
 
     K_rem = K_t - K_used
 
-    # Reserve top-quartile of critical tokens (or what fits)
     crit_scores_cand = critical[cand_idx]
     if len(cand_idx) > K_rem and K_rem > 0:
-        # Critical takes ~1/3 of remaining budget; rest goes to composite
+        # critical tokens take about 1/3 of the remaining budget
         n_critical_keep = max(0, min(K_rem // 3, len(cand_idx)))
         if n_critical_keep > 0:
             top_crit = cand_idx[np.argpartition(-crit_scores_cand,
                                                 min(n_critical_keep, len(cand_idx) - 1))[:n_critical_keep]]
             m[top_crit] = True
 
-        # Remaining budget: TOVA + cross-layer composite over not-yet-kept
+        # remaining budget by the current + cross-layer + ewma composite
         K_used2 = int(m.sum())
         K_left = K_t - K_used2
         if K_left > 0:
@@ -1157,26 +900,8 @@ def m_endurkv_v4(n_kv, K, attn_full, attn_ewma_l, cross_layer_attn,
 
 def m_endurkv_v2(n_kv, K, attn_full, attn_ewma_l, cross_layer_attn,
                  layer_idx, **kw):
-    """EndurKV-Evict v2 — designed to beat LWKD/AhaKV/TOVA on Pareto.
-
-    Three additions over v1 (endurkv_tova_spread):
-
-      1) ENTROPY GATE (vs max-attention gate in v1):
-         norm_H = H_t / log(n_kv)  in [0,1] (0=peaked, 1=uniform)
-         mult   = 0.7 + 0.6 * norm_H        (range [0.7, 1.3])
-         Captures the full distribution shape, not just the peak.
-         Directly couples to the proposal's slide-22 H finding.
-
-      2) CROSS-LAYER VOTING (vs single-layer scoring):
-         A position the OTHER layers find important is information v1 ignored.
-         vote = mean attention across all layers at this step.
-
-      3) FORESIGHT EWMA (vs purely backward signals):
-         attn_ewma_l ← (1-β) * attn_ewma_l + β * a_t,  β=0.3
-         Smoothed past attention is a tractable predictor of next-step.
-
-    Composite score: 0.55 * current + 0.25 * cross_layer + 0.20 * ewma.
-    """
+    """EndurKV-Evict v2: entropy gate mult = 0.7 + 0.6 * H_t / log(n_kv), score
+    0.55*current + 0.25*cross-layer mean + 0.20*EWMA (beta 0.3)."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     a = attn_full[:n_kv]
@@ -1189,7 +914,7 @@ def m_endurkv_v2(n_kv, K, attn_full, attn_ewma_l, cross_layer_attn,
     mult = 0.7 + 0.6 * norm_H
     K_t = max(1, min(n_kv, int(round(K * mult))))
 
-    # 2) cross-layer vote (already aggregated by simulate())
+    # 2) cross-layer vote, aggregated in simulate()
     cl = (cross_layer_attn[:n_kv]
           if cross_layer_attn is not None and len(cross_layer_attn) >= n_kv
           else np.zeros(n_kv))
@@ -1199,7 +924,6 @@ def m_endurkv_v2(n_kv, K, attn_full, attn_ewma_l, cross_layer_attn,
             if attn_ewma_l is not None and len(attn_ewma_l) >= n_kv
             else a)
 
-    # composite score
     score = 0.55 * a + 0.25 * cl + 0.20 * ewma
 
     idx = np.argpartition(-score, K_t)[:K_t]
@@ -1208,10 +932,8 @@ def m_endurkv_v2(n_kv, K, attn_full, attn_ewma_l, cross_layer_attn,
 
 
 def m_tova(n_kv, K, attn_full, **kw):
-    """TOVA (Oren et al., 2024) — Token Omission Via Attention.
-    Keep top-K positions by the CURRENT step's attention. No accumulation,
-    no recent-window reservation. Selection is recomputed every step.
-    """
+    """TOVA (Oren et al., 2024): top-K by the current step's attention, recomputed
+    every step, no accumulation or recent window."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     cand = attn_full[:n_kv]
@@ -1221,16 +943,8 @@ def m_tova(n_kv, K, attn_full, **kw):
 
 
 def m_scissorhands(n_kv, K, scissor_score_l, **kw):
-    """Scissorhands (Liu et al., NeurIPS 2023) — Persistence Hypothesis.
-
-    Score positions by sliding-window attention (last W steps), discounting
-    older attention. Tokens with consistently low attention over recent
-    history are evicted. Reserves K/8 for the most recent positions to
-    avoid evicting newly-added tokens.
-
-    scissor_score_l is precomputed by simulate() as a sliding window of
-    the last W=16 steps' attention with exponential decay.
-    """
+    """Scissorhands (Liu et al., NeurIPS 2023): top heavy hitters by the decayed
+    window score from simulate(), with K/8 reserved for the most recent tokens."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
     K_rec = max(1, K // 8)
@@ -1247,7 +961,7 @@ def m_scissorhands(n_kv, K, scissor_score_l, **kw):
 
 
 def m_endurkv_unfair(n_kv, K, accum, H_tilde=0.5, **kw):
-    """Proposal Rule 4 literal. UNFAIR — uses ~1.5K avg cache."""
+    """Proposal Rule 4, K_t = K * (1 + H_tilde). Not budget-matched (about 1.5K avg)."""
     K_t = int(min(n_kv, K * (1.0 + max(0.0, H_tilde))))
     return _hh_norec_mask(n_kv, K_t, accum, recent_frac=1.0/16)
 
@@ -1263,22 +977,8 @@ def m_endurkv_attn_spread(n_kv, K, accum, attn_full=None, **kw):
 
 def m_endurkv_adaptive(n_kv, K, accum, attn_full=None,
                        max_n_ctx=4096, **kw):
-    """Dynamic formula adapting to memory pressure + attention concentration.
-
-    Key principles:
-      - K is a hard upper bound on the cache the policy will use; nominal K
-        is always respected.
-      - If n_kv <= K, no eviction is needed (cache already fits).
-      - Otherwise, the budget is modulated by:
-            pressure  = n_kv / max_n_ctx   (how close to context limit)
-            attn_conc = layer's max attn   (how peaked is current attention)
-        and the multiplier on K is selected by the pressure regime:
-            low pressure    → mult = 1.0 (use full K, no further restriction)
-            mid pressure    → mult = 1.3 - 0.6 * attn_conc_norm
-                              (more cache when attention is diffuse)
-            high pressure   → mult = 0.7 (aggressive eviction)
-    """
-    # If cache is already within budget, no eviction needed.
+    """Budget multiplier by pressure = n_kv / max_n_ctx: 1.0 below 0.5, the
+    attention-spread gate up to 0.85, then 0.7."""
     if n_kv <= K:
         m = np.ones(n_kv, dtype=bool); return m, int(m.sum())
 
@@ -1302,10 +1002,10 @@ def m_endurkv_adaptive(n_kv, K, accum, attn_full=None,
     return _hh_norec_mask(n_kv, K_t, accum, recent_frac=1.0/16)
 
 
-# ---------- PyramidKV / CAKE: layer-wise budget allocation -----------------
+# PyramidKV / CAKE: layer-wise budget allocation
 def layer_budget_pyramid(K, layer_idx, n_layers, ratio=0.5):
-    """K_max -> K_min linear across depth. K_max = K*(1+ratio), K_min = K*(1-ratio).
-    Average across layers = K."""
+    """Linear K_max to K_min across depth, K_max = K*(1+ratio), K_min = K*(1-ratio).
+    Average across layers is K."""
     if n_layers <= 1: return K
     frac = layer_idx / (n_layers - 1)   # 0 at first layer, 1 at last
     K_max = K * (1 + ratio)
@@ -1313,8 +1013,8 @@ def layer_budget_pyramid(K, layer_idx, n_layers, ratio=0.5):
     return max(1, int(round(K_max - (K_max - K_min) * frac)))
 
 def layer_budget_cake(K, layer_idx, n_layers, ratio=0.5):
-    """CAKE-style: deeper layers (more diffuse attention) get MORE budget.
-    Inverse of pyramid: K_min -> K_max across depth."""
+    """CAKE-style: deeper layers (more diffuse attention) get more budget,
+    linear K_min to K_max across depth."""
     if n_layers <= 1: return K
     frac = layer_idx / (n_layers - 1)
     K_max = K * (1 + ratio)
@@ -1331,21 +1031,21 @@ POLICIES_PER_LAYER = {
     "snapkv":              m_snapkv,
     "tova":                m_tova,                      # Oren 2024
     "scissorhands":        m_scissorhands,              # Liu NeurIPS 2023
-    # --- 2025-26 baselines we must beat ---
-    "lwkd":                m_lwkd,                      # Mar 2025 (SAGE-KV)
-    "ahakv":               m_ahakv,                     # Jun 2025 (approx)
-    "lazyeviction":        m_lazyeviction,              # Jun 2025 — explicit TOVA-beater
-    # --- endurkv family ---
-    "endurkv":             m_endurkv_unfair,            # UNFAIR
-    "endurkv_attn_spread": m_endurkv_attn_spread,       # FAIR
-    "endurkv_adaptive":    m_endurkv_adaptive,          # FAIR + dynamic
+    # 2025-26 baselines
+    "lwkd":                m_lwkd,                      # SAGE-KV, 2025
+    "ahakv":               m_ahakv,                     # 2025, approximation
+    "lazyeviction":        m_lazyeviction,              # 2025
+    # endurkv family
+    "endurkv":             m_endurkv_unfair,            # not budget-matched
+    "endurkv_attn_spread": m_endurkv_attn_spread,       # budget-matched
+    "endurkv_adaptive":    m_endurkv_adaptive,          # budget-matched, pressure-aware
     "endurkv_tova_spread": m_endurkv_tova_spread,       # v1: TOVA + attn-spread
-    "endurkv_v2":          m_endurkv_v2,                # v2: H-gate (FAILED)
+    "endurkv_v2":          m_endurkv_v2,                # v2: entropy gate
     "endurkv_v3":          m_endurkv_v3,                # v3: v1-gate + composite
-    "endurkv_v4":          m_endurkv_v4,                # v4: Critical-Token Protection
+    "endurkv_v4":          m_endurkv_v4,                # v4: critical-token protection
     "endurkv_v5":          m_endurkv_v5,                # v5: matrix redundancy
-    "endurkv_v6":          m_endurkv_v6,                # v6: v1-gate + TIR (LazyEviction insight)
-    # --- novel math policies (Fourier, calculus, optimal-transport) ---
+    "endurkv_v6":          m_endurkv_v6,                # v6: v1-gate + recurrence bonus
+    # Fourier, derivative and optimal-transport scores
     "endurkv_spectral":      m_endurkv_spectral,         # FFT low-freq energy alone
     "endurkv_differential":  m_endurkv_differential,     # Taylor-predicted future attn alone
     "endurkv_wasserstein":   m_endurkv_wasserstein,      # 1D-W1 quantile selection alone
@@ -1353,37 +1053,33 @@ POLICIES_PER_LAYER = {
     "endurkv_v1_differential": m_endurkv_v1_differential,  # v1 gate + derivative score
     "endurkv_v1_wasserstein":  m_endurkv_v1_wasserstein,   # v1 gate + quantile selection
     "endurkv_v1_spec_diff":    m_endurkv_v1_spec_diff,     # v1 gate + spec + diff composite
-    "endurkv_v1_all":          m_endurkv_v1_all,           # kitchen sink: v1 + spec + diff + W1
-    # --- iteration 2: signals orthogonal to current attention ---
+    "endurkv_v1_all":          m_endurkv_v1_all,           # v1 + spec + diff + W1
+    # signals other than current attention
     "endurkv_v1_spec_nodc":    m_endurkv_v1_spec_nodc,     # FFT magnitude in harmonics 1-3 only (excludes DC)
     "endurkv_v1_phase":        m_endurkv_v1_phase,         # FFT phase at first harmonic
     "endurkv_v1_logistic":     m_endurkv_v1_logistic,      # sigmoid-squashed standardized attention
     "endurkv_v1_geometric":    m_endurkv_v1_geometric,     # geometric mean of current and history
-    # --- linear algebra round ---
+    # linear algebra scores
     "endurkv_v1_svd":              m_endurkv_v1_svd,              # SVD principal-pattern participation
-    "endurkv_v1_lowrank_err":      m_endurkv_v1_lowrank_err,      # subspace alignment (low reconstruction err = aligned)
+    "endurkv_v1_lowrank_err":      m_endurkv_v1_lowrank_err,      # low-rank reconstruction error
     "endurkv_v1_eigencentrality":  m_endurkv_v1_eigencentrality,  # eigenvector centrality on co-attention graph
 }
-# Policies that require per-layer different K allocation:
+# Policies with a different K per layer.
 LAYERWISE_POLICIES = {
     "pyramidkv":     layer_budget_pyramid,
     "cake":          layer_budget_cake,
-    "cake_entropy":  None,   # special: per-layer budget driven by attn entropy
+    "cake_entropy":  None,   # per-layer budget from attention entropy, set in simulate()
 }
 
 
-# ---------- simulator ------------------------------------------------------
+# simulator
 def simulate(attn, n_kv_at, policy_name, K_nominal, H_norm=None,
              max_n_ctx=4096):
     n_steps, n_layers, max_kv = attn.shape
     accum = np.zeros((n_layers, max_kv), dtype=np.float64)
-    # ---- SnapKV's frozen observation-window score -------------------------
-    # The paper aggregates attention from the LAST L_obs tokens of the
-    # PROMPT against all earlier positions, then 1D-pools (kernel=5). We
-    # don't have prefill attention in attn.bin (only decode-step attention),
-    # but the first L_obs DECODE steps approximate this: each new Q token
-    # attends to the same KV cache that the last prompt tokens did.
-    # SnapKV (Li 2024) paper-spec: L_obs=32, max-pool kernel=7
+    # SnapKV (Li 2024) observation-window score, L_obs=32, max-pool kernel 7.
+    # attn.bin has no prefill attention, so the first L_obs decode steps stand
+    # in for the last L_obs prompt tokens.
     L_obs = 32
     pool_k = 7
     obs_steps = min(L_obs, n_steps)
@@ -1396,10 +1092,8 @@ def simulate(attn, n_kv_at, policy_name, K_nominal, H_norm=None,
     else:
         snapkv_score = np.zeros(max_kv)
 
-    # ---- CAKE entropy-driven per-layer budget allocation ------------------
-    # CAKE (Qin 2025) allocates per-layer budget based on observed attention
-    # diffuseness: high-entropy (more diffuse) layers need MORE cache.
-    # We use step-0 attention entropy per layer as the diffuseness proxy.
+    # CAKE (Qin 2025): more cache for more diffuse layers. Step-0 attention
+    # entropy per layer is the diffuseness proxy.
     if n_steps > 0:
         per_layer_H = np.zeros(n_layers)
         for l in range(n_layers):
@@ -1407,10 +1101,9 @@ def simulate(attn, n_kv_at, policy_name, K_nominal, H_norm=None,
             p = p[p > 1e-12]
             if len(p) > 0:
                 per_layer_H[l] = -np.sum(p * np.log(p))
-        # Normalize so weights sum to n_layers (so total budget = K * n_layers)
+        # weights sum to n_layers so the total budget is K * n_layers
         if per_layer_H.sum() > 0:
             cake_weights = (per_layer_H / per_layer_H.sum()) * n_layers
-            # clip to [0.5, 1.5] range
             cake_weights = np.clip(cake_weights, 0.5, 1.5)
         else:
             cake_weights = np.ones(n_layers)
@@ -1431,12 +1124,12 @@ def simulate(attn, n_kv_at, policy_name, K_nominal, H_norm=None,
         per_layer_K = [K_nominal] * n_layers
         policy_fn = POLICIES_PER_LAYER[policy_name]
 
-    # Scissorhands (Liu 2023) paper-spec: W_scissor=64, decay=0.95
+    # Scissorhands (Liu 2023) paper settings
     W_scissor = 64
     decay = 0.95
     scissor_score = np.zeros((n_layers, max_kv), dtype=np.float64)
 
-    # AhaKV recent-window accumulator (paper-spec window W=16 decode steps)
+    # AhaKV recent-window accumulator, 16 decode steps
     W_aha = 16
     aha_recent = np.zeros((n_layers, max_kv), dtype=np.float64)
     aha_history = []   # ring of past (n_layers, max_kv) attention slices
@@ -1445,15 +1138,15 @@ def simulate(attn, n_kv_at, policy_name, K_nominal, H_norm=None,
     ewma_beta = 0.30
     attn_ewma = np.zeros((n_layers, max_kv), dtype=np.float64)
 
-    # EndurKV-v5 attention HISTORY (per layer, ring of last W=8 steps' attention)
+    # per-layer history of the last 8 steps' attention
     W_v5 = 8
     attn_history = [[] for _ in range(n_layers)]   # list per layer of past slices
 
     # LWKD frozen-mask state (per layer)
     lwkd_state = {"frozen": [None] * n_layers}
 
-    # LazyEviction state: per (layer, position) maximum recurrence interval (MRI)
-    # and last_high_attn_step. We track only when attention exceeds tau threshold.
+    # LazyEviction state per (layer, position): max recurrence interval (MRI) and
+    # the last step where attention exceeded tau.
     lazy_state = {
         "mri":               np.zeros((n_layers, max_kv), dtype=np.int32),
         "last_high_step":    -np.ones((n_layers, max_kv), dtype=np.int32),
@@ -1466,14 +1159,13 @@ def simulate(attn, n_kv_at, policy_name, K_nominal, H_norm=None,
         n_kv = int(n_kv_at[s])
         if n_kv == 0: continue
         Ht = 0.5 if H_norm is None else float(H_norm[s] if s < len(H_norm) else 0.5)
-        # Update accum with current step
         for l in range(n_layers):
             accum[l, :n_kv] += attn[s, l, :n_kv]
-        # Update scissorhands sliding-window score (exp decay)
+        # Scissorhands score with exponential decay
         for l in range(n_layers):
             scissor_score[l, :n_kv] = scissor_score[l, :n_kv] * decay + attn[s, l, :n_kv]
 
-        # AhaKV: maintain recent-W accumulator (subtract step that just expired)
+        # AhaKV window sum, subtract the step that just expired
         aha_history.append(attn[s].copy())
         if len(aha_history) > W_aha:
             old = aha_history.pop(0)
@@ -1482,24 +1174,22 @@ def simulate(attn, n_kv_at, policy_name, K_nominal, H_norm=None,
         for l in range(n_layers):
             aha_recent[l, :n_kv] += attn[s, l, :n_kv]
 
-        # EndurKV-v2: update EWMA of attention per layer
+        # per-layer attention EWMA (v2, v3, v4)
         for l in range(n_layers):
             attn_ewma[l, :n_kv] = (1 - ewma_beta) * attn_ewma[l, :n_kv] + \
                                   ewma_beta * attn[s, l, :n_kv]
 
-        # Cross-layer vote: mean attention across layers at this step
+        # cross-layer mean (vote) and max (v4) at this step
         cross_layer_attn = attn[s, :, :n_kv].mean(axis=0)
-        # Cross-layer MAX: for "load-bearing" detection in v4 (NOVEL signal)
         cross_layer_max = attn[s, :, :n_kv].max(axis=0)
 
-        # v5: update per-layer attention history (last W_v5 steps' attn vectors)
+        # per-layer history of the last W_v5 steps
         for l in range(n_layers):
             attn_history[l].append(attn[s, l, :n_kv].copy())
             if len(attn_history[l]) > W_v5:
                 attn_history[l].pop(0)
 
-        # LazyEviction state update: TIR per (layer, position)
-        # Update last_high_step and MRI whenever attention crosses tau.
+        # LazyEviction: update last_high_step and MRI where attention exceeds tau
         lazy_state["current_step"] = s
         tau = lazy_state["tau"]
         for l in range(n_layers):
@@ -1562,7 +1252,7 @@ def normalize_entropy(H_nats, window=64):
     return out
 
 
-# ---------- main -----------------------------------------------------------
+# main
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--log-dir", required=True)
@@ -1610,8 +1300,7 @@ def main():
                                    max_n_ctx=args.model_ctx)
                 mean_kl = float(np.mean(kls))
                 avg_K   = float(np.mean(Ks))
-                # throughput proxy: inversely proportional to avg cache,
-                # normalized so full = 1.0 (full reference)
+                # throughput proxy, inversely proportional to avg cache, full = 1.0
                 full_avg_K = float(np.mean(n_kv_at))  # full-cache uses n_kv per step
                 tput_rel = full_avg_K / max(1.0, avg_K)  # >=1 means faster than full
                 dram_bytes = avg_K * args.bytes_per_token * n_layers
@@ -1632,7 +1321,7 @@ def main():
     df.to_csv(out_dir / "policy_results.csv", index=False)
     print(f"\n[sim] wrote policy_results.csv ({len(df)} rows)")
 
-    # ---------- Pareto summary (per policy, per nominal K) -----------------
+    # Pareto summary (per policy, per nominal K)
     summary = df.groupby(["policy", "K_nominal"]).agg(
         mean_kl=("mean_kl", "mean"),
         avg_actual_K=("avg_actual_K", "mean"),
@@ -1641,14 +1330,12 @@ def main():
         n_prompts=("prompt_id", "nunique"),
     ).reset_index()
 
-    # Mark policies as "budget-matched" only if avg_actual_K is within 10% of K_nominal.
-    # This is INFORMATIONAL ONLY — the headline comparison is Pareto-frontier
-    # across (mean_kl, avg_actual_K), not "same nominal K".
+    # budget_matched: avg_actual_K within 10% of K_nominal. Informational only,
+    # the main comparison is the Pareto frontier over (avg_actual_K, mean_kl).
     summary["budget_matched"] = (summary["avg_actual_K"] <= summary["K_nominal"] * 1.10).astype(bool)
     summary.to_csv(out_dir / "pareto_summary.csv", index=False)
 
-    # ---------- Pareto frontier computation --------------------------------
-    # In (avg_actual_K, mean_kl) space, find non-dominated points.
+    # Pareto frontier: non-dominated points in (avg_actual_K, mean_kl)
     pts = summary[["policy", "K_nominal", "avg_actual_K", "mean_kl"]].copy()
     pts = pts.sort_values("avg_actual_K").reset_index(drop=True)
     pareto = []
@@ -1659,12 +1346,12 @@ def main():
             best_kl = row.mean_kl
     pts["on_pareto"] = pts.index.isin(pareto)
     pts.to_csv(out_dir / "pareto_frontier.csv", index=False)
-    print("\n=== Pareto-frontier operating points (best quality at each cache size) ===")
+    print("Pareto-frontier operating points (best quality at each cache size)")
     print(pts[pts.on_pareto][["policy", "K_nominal", "avg_actual_K", "mean_kl"]]
           .to_string(index=False, float_format=lambda x: f"{x:.3f}"))
 
-    # ---------- print headline tables --------------------------------------
-    print("\n=== Per-policy at each K_nominal ===")
+    # print headline tables
+    print("Per-policy at each K_nominal")
     print("(fair = avg_actual_K within 10% of K_nominal)\n")
     pivot = summary.pivot_table(
         index="policy", columns="K_nominal",
@@ -1672,19 +1359,14 @@ def main():
     )
     print(pivot.to_string(float_format=lambda x: f"{x:7.3f}"))
 
-    # ---------- plots ------------------------------------------------------
+    # plots
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     plt.rcParams.update({"figure.dpi": 110, "savefig.dpi": 130, "font.size": 9})
 
-    # 01 — Pareto frontier across ALL budgets and ALL policies.
-    # Each policy traces a curve through (avg_actual_K, mean_kl) as K varies;
-    # the lower-left envelope is the Pareto frontier. Policies on the frontier
-    # are the candidates worth defending. Policies inside are dominated.
-    # Distinct color per policy, grouped by paper family.
-    # If you add a new policy above, add it here too — falling through to
-    # "tab:gray" produces the silent multi-line-collision bug we hit before.
+    # 01: each policy traces (avg_actual_K, mean_kl) as K varies, lower-left is better.
+    # Give every new policy a color here, otherwise lines fall back to the same gray.
     colors = {
         "full":                "#000000", "local":             "#bdc3c7",
         "streamingllm":        "#e67e22",
@@ -1695,7 +1377,7 @@ def main():
         "cake_entropy":        "#4a235a",
         "endurkv":             "#ffb3ba", "endurkv_adaptive":  "#ff7f7f",
         "endurkv_attn_spread": "#c0392b",
-        "endurkv_tova_spread": "#d6006e",   # *** EndurKV-Evict — ours ***
+        "endurkv_tova_spread": "#d6006e",   # EndurKV-Evict (ours)
     }
     display = {
         "endurkv_tova_spread": "EndurKV-Evict (ours)",
@@ -1743,7 +1425,7 @@ def main():
     plt.close(fig)
     print("  wrote 01_pareto_kl_vs_cache.png")
 
-    # 01b — same Pareto on DRAM bytes axis (operationally relevant)
+    # 01b: same Pareto plot on a DRAM bytes axis
     fig, ax = plt.subplots(figsize=(11, 7))
     for pname in summary.policy.unique():
         rows = summary[summary.policy == pname].sort_values("dram_bytes_avg")
@@ -1774,8 +1456,7 @@ def main():
     plt.close(fig)
     print("  wrote 01b_pareto_kl_vs_dram_mb.png")
 
-    # 02 — Bar chart at fixed K_nominal (informational; the Pareto plot is
-    # the authoritative comparison)
+    # 02: bar chart at fixed K_nominal (informational, the Pareto plot is primary)
     median_K = budgets[len(budgets)//2]
     sub = summary[summary.K_nominal == median_K]
     fair_only = sub[sub.budget_matched].sort_values("mean_kl")
@@ -1795,7 +1476,7 @@ def main():
     plt.close(fig)
     print("  wrote 02_fair_budget_bar.png")
 
-    # 03 — DRAM bytes vs KL  (the systems-relevant view)
+    # 03: DRAM bytes vs KL
     fig, ax = plt.subplots(figsize=(10, 6))
     for _, row in sub.iterrows():
         c = colors.get(row.policy, "tab:gray")

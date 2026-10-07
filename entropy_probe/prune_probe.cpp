@@ -1,27 +1,10 @@
-// prune_probe — Phase E.2 of the EndurKV measurement study.
+// prune_probe: tests whether low output entropy at step t means that evicting
+// the K oldest KV entries changes the next-token distribution only a little.
 //
-// Direct test of the safety-gate hypothesis:
-//   "Low output entropy at step t  =>  pruning K oldest KV entries at step t
-//    causes a small KL divergence in the next-token distribution."
-//
-// At each decode step we:
-//   1. Read the unpruned next-token distribution P_full and its entropy H.
-//   2. Save the pre-decode KV state.
-//   3. For each K in {16, 64, 256}:
-//        - restore the pre-decode state
-//        - evict K oldest KV entries via llama_memory_seq_rm
-//        - re-decode the same token to recompute logits
-//        - read P_pruned, compute KL(P_full || P_pruned)
-//   4. Restore to the post-decode state and continue normally.
-//
-// Output CSV: one row per (step, K) pair —
-//   prompt_id, step_index, K, n_kv_before, kept_kv_after,
-//   H_nats, top1_full, top1_prob_pruned,
-//   kl_nats, kl_top1_lost_prob, ms_step
-//
-// We DO NOT disable flash attention here (unlike attention_probe). prune_probe
-// only needs the next-token distribution, not internal attention tensors, so
-// FA stays on for speed.
+// Per decode step: record P_full and its entropy, then for each K restore the
+// pre-decode state, drop the K oldest entries (llama_memory_seq_rm), re-decode
+// the same token and log KL(P_full || P_pruned). Then restore and continue.
+// Output CSV has one row per (step, K).
 
 #include "compute_entropy.h"
 #include "llama.h"
@@ -125,12 +108,7 @@ float chosen_prob_from_logits(const float * logits, int n_vocab, int chosen) {
     return (float)std::exp((double)logits[chosen] - log_Z);
 }
 
-// KL(P_full || P_pruned) in nats.
-//   P_full[i]    = exp(logits_full[i] - log_Z_full)
-//   P_pruned[i]  = exp(logits_pruned[i] - log_Z_pruned)
-//   log_p_full   = logits_full[i] - log_Z_full
-//   log_p_prune  = logits_pruned[i] - log_Z_pruned
-//   KL = sum P_full[i] * (log_p_full[i] - log_p_prune[i])
+// KL(P_full || P_pruned) in nats, computed from logits with stable log-Z.
 double kl_full_vs_pruned(const float * lf, const float * lp, int n_vocab) {
     // log-Z for both, in stable form
     float mf = lf[0], mp = lp[0];
@@ -209,8 +187,7 @@ int main(int argc, char ** argv) {
     cparams.n_ctx           = needed > 4096 ? (uint32_t)needed : 4096u;
     cparams.n_batch         = (uint32_t)std::max(2048, n_prompt);
     cparams.no_perf         = true;
-    // Flash attention is FINE for prune_probe — we only read final-position logits, never
-    // intercept intermediate attention tensors.
+    // Only final logits are read, so flash attention can stay on.
     cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
 
     llama_context * ctx = llama_init_from_model(model, cparams);
@@ -236,8 +213,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    // We keep one rolling state snapshot — the state BEFORE the next per-step decode.
-    // After the prompt has been decoded, that snapshot is "KV = prompt".
+    // S_pre is the state before the next per-step decode (initially the prompt).
     auto save_state = [&]() -> std::vector<uint8_t> {
         const size_t sz = llama_state_seq_get_size(ctx, 0);
         std::vector<uint8_t> buf(sz);
@@ -266,39 +242,35 @@ int main(int argc, char ** argv) {
             break;
         }
 
-        // Snapshot of the current logits — they will be overwritten by the
-        // re-decodes below, so copy them out.
+        // Copy the logits, the re-decodes below overwrite them.
         std::vector<float> logits_full_copy(logits_full, logits_full + n_vocab);
 
         const auto m = entropy_probe::compute_entropy(logits_full_copy.data(), n_vocab);
         const llama_token tok = (llama_token)argmax_logits(logits_full_copy.data(), n_vocab);
         const float top1_full = m.top1_prob;
 
-        // Current KV size BEFORE any pruning: we need this for the "n_kv_before" column.
+        // KV size before pruning (n_kv_before column).
         const llama_pos pos_max = llama_memory_seq_pos_max(mem, 0);
         const int n_kv_before = (pos_max < 0) ? 0 : (int)pos_max + 1;
 
-        // === Prune-and-measure block (only for step >= 1; for step 0 the prior decode was the prompt batch) ===
+        // Prune and measure from step 1 on (step 0 follows the prompt batch).
         if (step >= 1 && have_prev) {
             for (int K : Ks) {
                 if (K <= 0) continue;
                 if (K >= n_kv_before - 1) {
-                    // Would empty the cache — skip; no meaningful pruning to measure.
+                    // Would empty the cache, so skip.
                     std::fprintf(csv,
                         "%s,%d,%d,%d,%d,%.7g,%.7g,%.7g,%.7g,%.7g,%.3f\n",
                         args.prompt_id.c_str(), step, K,
-                        n_kv_before, n_kv_before,  // unchanged — skipped prune
+                        n_kv_before, n_kv_before,  // unchanged, prune skipped
                         m.H_nats, top1_full, top1_full,
                         0.0, 0.0,
                         (ggml_time_us() - t_step_start) / 1000.0);
                     continue;
                 }
-                // Restore to "before the previous decode" state.
                 restore_state(S_pre);
-                // Evict K oldest tokens.
                 llama_memory_seq_rm(mem, 0, 0, K);
-                // Re-decode the previously chosen token. This recomputes logits
-                // for the same query position but with K oldest gone.
+                // Re-decode the previous token without the K oldest entries.
                 {
                     llama_token t_prev = chosen_prev;
                     llama_batch batch  = llama_batch_get_one(&t_prev, 1);
@@ -327,8 +299,7 @@ int main(int argc, char ** argv) {
                     kl, (lost < 0.0f ? 0.0f : lost),
                     (ggml_time_us() - t_step_start) / 1000.0);
             }
-            // After all K measurements, restore S_pre and re-do the unpruned decode,
-            // bringing the context back to where it would be without the pruning experiment.
+            // Restore S_pre and redo the unpruned decode to continue normally.
             restore_state(S_pre);
             {
                 llama_token t_prev = chosen_prev;
@@ -339,8 +310,7 @@ int main(int argc, char ** argv) {
                 }
             }
         } else if (step == 0) {
-            // Step 0 — emit one row per K with kl=0 (placeholder) so the analysis script
-            // sees consistent shape.
+            // Step 0: placeholder rows with kl=0 so every step has one row per K.
             for (int K : Ks) {
                 std::fprintf(csv,
                     "%s,%d,%d,%d,%d,%.7g,%.7g,%.7g,%.7g,%.7g,%.3f\n",
@@ -359,9 +329,8 @@ int main(int argc, char ** argv) {
             break;
         }
 
-        // Save the CURRENT state as S_pre for next iteration's prune measurement.
         S_pre = save_state();
-        // Decode the chosen token to advance the context.
+        // Advance with the chosen token.
         {
             llama_token next = tok;
             llama_batch batch = llama_batch_get_one(&next, 1);

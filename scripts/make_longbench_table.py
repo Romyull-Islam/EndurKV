@@ -1,23 +1,9 @@
 #!/usr/bin/env python3
-# ============================================================================
-# make_longbench_table.py -- emit the LongBench LaTeX table.  (2026-08-02)
-#
-# Rebuild-on-demand: cells land continuously, so this regenerates the table from
-# whatever is scored rather than freezing a snapshot by hand.
-#
-# THREE THINGS THE TABLE MUST STATE, because each was a real error we hit:
-#  1. ctx per model. LongBench truncates to the MODEL's max length, not a fixed
-#     number. Gemma-2-2B is n_ctx_train=8192; running it at 16384 overflowed its
-#     trained context and produced word salad scoring 6.60 F1 under three
-#     different policies -- a context bug that reads like a policy result.
-#  2. Which SnapKV. The paper retunes window/kernel per benchmark (NIAH 16/5,
-#     LongBench 32/7) and the FasterDecoding repo default is 64/5. We report all
-#     three separately instead of letting one row stand for "SnapKV".
-#  3. Retained cache in CELLS, not MiB. SnapKV cannot use quantized KV on this
-#     engine (a per-head evictor needs FA-off; llama.cpp requires flash-attention
-#     for quantized V), so it runs f16 at 1.88x the bytes per cell. Comparing MiB
-#     would conflate the realizability gap with the cache format.
-# ============================================================================
+# Emit the LongBench LaTeX table from whatever cells are scored so far.
+# Usage: make_longbench_table.py [RUNS_DIR]   (default /tmp/lb_cuda)
+# ctx follows each model's trained length (Gemma-2-2B 8192). Retained cache is in KV cells,
+# not MiB, because SnapKV must run f16 here (per-head eviction needs FA-off and llama.cpp
+# needs flash-attention for quantized V), so MiB would mix in the cache format.
 import json, re, os, glob, sys, statistics as st
 
 RUNS = sys.argv[1] if len(sys.argv) > 1 else "/tmp/lb_cuda"
@@ -32,22 +18,14 @@ LABEL = {"vanilla": "vanilla (full cache)", "mukv": r"\textbf{$\mu$KV}",
          "snapkv": "SnapKV (w16/k5)", "snapkv_lb": "SnapKV",
          "snapkv_repo": "SnapKV (w64/k5, repo)", "adakv": "Ada-KV", "h2o": "H2O",
          "tova": "TOVA", "streamingllm": "StreamingLLM"}
-# ONE SnapKV row, always the configuration SnapKV itself publishes for the
-# benchmark in question -- w32/k7 for LongBench. The paper must not contain three
-# different things all labelled "SnapKV"; the rule across every table is: use the
-# baseline's own published setting for that benchmark, and the FasterDecoding
-# default only where the baseline publishes none (e.g. WikiText). w16/k5 and
-# w64/k5 were also measured here and span 0.8 F1, so the choice is not load-bearing;
-# that goes in the caption, not in extra rows.
+# One SnapKV row, at SnapKV's published LongBench setting (w32/k7). Each baseline uses its own
+# published setting per benchmark, and the FasterDecoding default only where none is published.
 ORDER = ["vanilla", "mukv", "snapkv_lb", "adakv", "tova", "h2o", "streamingllm"]
 SENSITIVITY = ["snapkv", "snapkv_repo"]
 MODELS = [("llama1b", "Llama-1B"), ("gemma2b", "Gemma-2B"),
           ("phi3", "Phi-3"), ("bonsai8b", "Bonsai-8B")]
-# 2026-08-04: extended from 2 to 5 F1-scored LongBench tasks, spanning single-doc QA,
-# multi-doc QA and few-shot rather than 2 of the suite's 16. Summarization needs
-# ROUGE-L and is out of scope. A cell is only averaged when EVERY task is present,
-# so a partially-run policy shows "---" rather than an average over a different
-# task mix than its baseline (that mismatch is what produced the 110% retention bug).
+# Five F1-scored tasks (summarization needs ROUGE-L and is left out). A policy is averaged
+# only when every task is present, so it never averages over a different task mix.
 TASKS = [("hotpotqa", "HotpotQA"), ("2wikimqa", "2WikiMQA"),
          ("multifieldqa_en", "MultiFieldQA"), ("qasper", "Qasper"), ("triviaqa", "TriviaQA")]
 
@@ -84,15 +62,11 @@ for d in sorted(os.listdir(RUNS)):
             continue
         ctxs.setdefault(m, set()).add(j.get("ctx_size"))
         L, H, D = GEOM[m]
-        # LongBench passes no --cache-type, so every policy here is f16: the F1
-        # comparison is quantization-matched and cells are directly comparable.
+        # No --cache-type is passed, so every policy is f16 and cells are directly comparable.
         nc = j["retained_kv_bytes"] / (L * H * D * 2 * 2.0)
         cells.setdefault((m, pol), []).append(nc)
-        # FIXED 2026-08-02: the retained-% must be averaged PER CELL. Dividing a
-        # policy's mean cell count by a model-wide mean prompt length compares
-        # different task mixes -- policies that had only HotpotQA cells (longer
-        # prompts) came out >100%, and vanilla, which is 100% by definition, read
-        # as 92.1%. Ratio first, then average.
+        # Retained ratio per cell, averaged later. Dividing mean cells by a model-wide
+        # mean prompt length would mix task sets across policies.
         ratio.setdefault((m, pol), []).append(nc / max(1, j["n_prompt_tokens"]))
 
 print("% auto-generated by scripts/make_longbench_table.py -- do not hand-edit")
@@ -131,9 +105,7 @@ for key, disp in MODELS:
         c = cells.get((key, p))
         cpct = "---"
         if c and ratio.get((key, p)):
-            # % of the prompt still physically resident. This is the realizability
-            # number: muKV and StreamingLLM actually reach their budget, per-head
-            # policies do not, and it is independent of KV cache format.
+            # Percent of the prompt still physically resident, independent of cache format.
             cpct = "%.0f (%.1f\\%%)" % (st.mean(c), 100 * st.mean(ratio[(key, p)]))
         d = "" if avg is None or van is None or p == "vanilla" else " (%+.1f)" % (avg - van)
         print("  & %-26s & %s & %s%s & %s \\\\" % (

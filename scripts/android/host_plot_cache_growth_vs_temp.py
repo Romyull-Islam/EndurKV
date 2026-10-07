@@ -1,16 +1,7 @@
 #!/usr/bin/env python3
-"""
-Wave-4 (Phi-3 long-decode) smoking-gun plot:
-    cache growth -> DDR temp -> CPU temp time-series, three eviction variants.
-
-For each cell (vanilla, v1_K512, v1_fa_K512):
-  - sensors.csv      : monotonic_s, ddr_temp_mc, cpullc-0-0_temp_mc, cpu6_freq_hz
-  - stress.csv       : per-iter t_elapsed_s, peak_kv_cells
-  - iter*/steps.csv  : per-step wall_us, n_kv_cells
-
-Output: figures/relationship_plots/01_cache_vs_temp_timeseries.png
-
-Uses only stdlib + numpy + matplotlib (no pandas) to match the rest of the repo.
+"""Wave-4 (Phi-3 long-decode) time series of cache size, DDR and CPU temperature for
+vanilla, v1_K512 and v1_fa_K512, from sensors.csv, stress.csv and iter*/steps.csv.
+Writes figures/relationship_plots/01_cache_vs_temp_timeseries.png.
 """
 
 from __future__ import annotations
@@ -25,7 +16,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-# ----------------------------- config -----------------------------------------
+# config
 
 WAVE4_DIR = Path(
     "/home/mislam22/EndurKV_workspace/phone-logs/wave4_longdecode_1780750084"
@@ -44,7 +35,7 @@ VARIANTS = [
 DDR_THROTTLE_C = 65.0  # kernel DDR throttle trigger
 
 
-# ---------------------------- helpers -----------------------------------------
+# helpers
 
 def _to_float(x):
     try:
@@ -73,13 +64,8 @@ def load_sensors(cell_dir: Path):
 
 
 def load_cache_series(cell_dir: Path):
-    """Per-step (t_s, n_kv) concatenated across iters, aligned to run-wall-time.
-
-    steps.csv wall_us = microseconds since that iter's prefill start.
-    stress.csv t_elapsed_s gives the iter's start relative to run start, which
-    is the same reference as sensors' (monotonic_s - monotonic_s[0]).
-    """
-    # Read stress.csv to get per-iter t_elapsed_s
+    """Per-step (t_s, n_kv) across iters on the run clock: stress.csv t_elapsed_s
+    (iter start) plus steps.csv wall_us (time since that iter's prefill start)."""
     iter_start = {}
     with open(cell_dir / "stress.csv", newline="") as fh:
         for row in csv.DictReader(fh):
@@ -120,7 +106,7 @@ def steady_state_mean(t, y, tail_frac=0.6):
     return float(np.nanmean(y[mask]))
 
 
-# ------------------------------- plot -----------------------------------------
+# plot
 
 def main() -> int:
     if not WAVE4_DIR.exists():
@@ -150,7 +136,7 @@ def main() -> int:
     if "vanilla" in ddr_means and "v1_K512" in ddr_means:
         swing_c = ddr_means["vanilla"] - ddr_means["v1_K512"]
 
-    # ---------- figure: 3 stacked panels, shared x-axis ----------
+    # figure: 3 stacked panels, shared x-axis
     fig, axes = plt.subplots(
         3, 1, figsize=(11, 9.5), sharex=True,
         gridspec_kw={"hspace": 0.12},

@@ -1,16 +1,7 @@
 #!/usr/bin/env python3
-"""
-host_make_side_by_side.py — render every per-model plot in a 1B-left | 8B-right
-layout for direct visual comparison.
-
-Outputs to logs/sidebyside_figures/:
-    01_thermal_trace_1B_vs_8B.png
-    02_thermal_aggregate_1B_vs_8B.png
-    03_kv_cache_growth_1B_vs_8B.png
-    04_decode_latency_1B_vs_8B.png
-    05_entropy_vs_attention_1B_vs_8B.png
-    06_rho_per_task_1B_vs_8B.png
-    07_memory_trajectory_1B_vs_8B.png
+"""Render each per-model plot with 1B on the left and 8B on the right, into
+logs/sidebyside_figures/01..07_*_1B_vs_8B.png (thermal trace and aggregate, KV growth,
+decode latency, entropy vs attention, rho per task, memory trajectory).
 """
 import os
 import sys
@@ -105,9 +96,7 @@ def main():
     p8 = load_run(log_8b)
     print(f"[load] 1B prompts: {len(p1)}, 8B prompts: {len(p8)}")
 
-    # ------------------------------------------------------------------
-    # 01 — thermal trace, same 4 representative prompts for each model
-    # ------------------------------------------------------------------
+    # 01: thermal trace, same 4 representative prompts for each model
     pick = ("gov_report_001", "qasper_001", "samsum_001", "piqa_001")
     fig, axes = plt.subplots(4, 2, figsize=(14, 12), sharex=False)
     for col_idx, (model_prompts, model_name) in enumerate(
@@ -150,9 +139,7 @@ def main():
     fig.savefig(OUT / "01_thermal_trace_1B_vs_8B.png", bbox_inches="tight")
     plt.close(fig); print("  wrote 01_thermal_trace_1B_vs_8B.png")
 
-    # ------------------------------------------------------------------
-    # 02 — peak active-zone temp per task — paired boxplot
-    # ------------------------------------------------------------------
+    # 02: peak active-zone temp per task - paired boxplot
     def per_prompt_peak(prompts):
         out = []
         for p in prompts:
@@ -183,9 +170,7 @@ def main():
     fig.savefig(OUT / "02_thermal_aggregate_1B_vs_8B.png", bbox_inches="tight")
     plt.close(fig); print("  wrote 02_thermal_aggregate_1B_vs_8B.png")
 
-    # ------------------------------------------------------------------
-    # 03 — KV cache size (n_kv at decode step 0) across prompts
-    # ------------------------------------------------------------------
+    # 03: KV cache size (n_kv at decode step 0) across prompts
     fig, axes = plt.subplots(1, 2, figsize=(15, 5.5))
     for ax, prompts, name, color in [
             (axes[0], p1, "1B Q4_K_M", "tab:blue"),
@@ -203,9 +188,7 @@ def main():
     fig.savefig(OUT / "03_kv_cache_growth_1B_vs_8B.png", bbox_inches="tight")
     plt.close(fig); print("  wrote 03_kv_cache_growth_1B_vs_8B.png")
 
-    # ------------------------------------------------------------------
-    # 04 — decode latency per-task boxplot
-    # ------------------------------------------------------------------
+    # 04: decode latency per-task boxplot
     def latency_table(prompts):
         rows = []
         for p in prompts:
@@ -233,9 +216,7 @@ def main():
     fig.savefig(OUT / "04_decode_latency_1B_vs_8B.png", bbox_inches="tight")
     plt.close(fig); print("  wrote 04_decode_latency_1B_vs_8B.png")
 
-    # ------------------------------------------------------------------
-    # 05 — entropy vs attention scatter, both models in matched scale
-    # ------------------------------------------------------------------
+    # 05: entropy vs attention scatter, both models in matched scale
     fig, axes = plt.subplots(1, 2, figsize=(15, 6), sharex=True, sharey=True)
     for ax, prompts, name, color in [
             (axes[0], p1, "1B Q4_K_M", "#4a90e2"),
@@ -268,9 +249,7 @@ def main():
     fig.savefig(OUT / "05_entropy_vs_attention_1B_vs_8B.png", bbox_inches="tight")
     plt.close(fig); print("  wrote 05_entropy_vs_attention_1B_vs_8B.png")
 
-    # ------------------------------------------------------------------
-    # 06 — per-task rho bars
-    # ------------------------------------------------------------------
+    # 06: per-task rho bars
     def per_task_rho(prompts):
         rows = []
         groups = {}
@@ -310,9 +289,7 @@ def main():
     fig.savefig(OUT / "06_rho_per_task_1B_vs_8B.png", bbox_inches="tight")
     plt.close(fig); print("  wrote 06_rho_per_task_1B_vs_8B.png")
 
-    # ------------------------------------------------------------------
-    # 07 — MemAvailable timeline + Δpswpout boxplot per task
-    # ------------------------------------------------------------------
+    # 07: MemAvailable timeline + Δpswpout boxplot per task
     fig, axes = plt.subplots(2, 2, figsize=(15, 9))
     for col_idx, (prompts, name, color) in enumerate([
             (p1, "1B Q4_K_M", "tab:blue"),

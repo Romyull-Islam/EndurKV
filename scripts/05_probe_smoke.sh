@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase B — smoke-test the entropy_probe on one short prompt.
+# Phase B - smoke-test the entropy_probe on one short prompt.
 # Run from the EndurKV root:  bash scripts/05_probe_smoke.sh
 
 set -e
@@ -17,7 +17,7 @@ trap "rm -f $PROMPT_FILE" EXIT
 printf 'The capital of France is' > "$PROMPT_FILE"
 
 OUT=logs/smoke.csv
-echo "=== running entropy_probe (max_tokens=24) ==="
+echo "running entropy_probe (max_tokens=24)"
 "$PROBE" \
     --model "$MODEL" \
     --prompt-file "$PROMPT_FILE" \
@@ -27,15 +27,15 @@ echo "=== running entropy_probe (max_tokens=24) ==="
     --output "$OUT"
 
 echo
-echo "=== first 11 lines of $OUT (header + first 10 rows) ==="
+echo "first 11 lines of $OUT (header + first 10 rows)"
 head -n 11 "$OUT"
 
 echo
-echo "=== last 3 rows of $OUT ==="
+echo "last 3 rows of $OUT"
 tail -n 3 "$OUT"
 
 echo
-echo "=== column sanity ==="
+echo "column sanity"
 python3 - "$OUT" <<'PY'
 import csv, sys, math
 path = sys.argv[1]

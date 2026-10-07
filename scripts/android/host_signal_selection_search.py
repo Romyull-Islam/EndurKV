@@ -1,19 +1,7 @@
 #!/usr/bin/env python3
-"""Sweep over the SIGNAL and SELECTION axes of the eviction problem.
-
-The BUDGET axis is fixed at the winner of the gate-shape sweep:
-    sigmoid(α=1.5, β=0.5, c=0.4, γ=8.0)  →  K_h per head
-
-What varies:
-  SIGNAL    — the score that ranks each position for top-K selection
-  SELECTION — the rule that picks the top-K from those scores
-
-Designed to find which physics/math-inspired ranking beats TOVA's plain
-argmax-of-current-attention.
-
-Outputs:
-  EndurKV/figures/signal_selection_results.csv
-  EndurKV/figures/signal_selection_ranking.csv
+"""Sweep the scoring signal and the selection rule of per-head eviction at a fixed
+budget gate (sigmoid α=1.5, β=0.5, c=0.4, γ=8.0), compared with TOVA.
+Writes figures/signal_selection_results.csv and signal_selection_ranking.csv.
 """
 import sys, time
 from multiprocessing import Pool, set_start_method
@@ -25,19 +13,15 @@ sys.path.insert(0, str(Path(__file__).parent))
 from host_simulate_kv_baselines import load_attn_perhead
 
 
-# ---------------------------------------------------------------------------
-# Best gate (winner from gate_search_mp): sigmoid α=1.5, β=0.5, c=0.4, γ=8.0
-# ---------------------------------------------------------------------------
+# Budget gate from the gate-shape sweep: sigmoid α=1.5, β=0.5, c=0.4, γ=8.0
 def best_gate_K_h(max_a):
     """Returns multiplier on K_nominal for a head with this max_a."""
     sig = 1.0 / (1.0 + np.exp(8.0 * (max_a - 0.4)))
     return 0.5 + (1.5 - 0.5) * sig
 
 
-# ---------------------------------------------------------------------------
-# Signal computers — each returns score[h, i] for the current step+layer
+# Signal computers - each returns score[h, i] for the current step+layer
 # All take (a_now, cum_max, cum_sum) and return [n_head, n_kv] scores
-# ---------------------------------------------------------------------------
 def signal_current(a_now, cum_max, cum_sum):
     return a_now
 
@@ -81,9 +65,7 @@ SIGNALS = {
     "diffuse3_curr":  signal_diffuse3_current,
 }
 
-# ---------------------------------------------------------------------------
-# Selection rules — each takes (score[h], K_h) and returns boolean mask
-# ---------------------------------------------------------------------------
+# Selection rules - each takes (score[h], K_h) and returns boolean mask
 def sel_argmax(score_h, K_h, nk):
     if K_h >= nk:
         return np.ones(nk, dtype=bool)
@@ -107,8 +89,8 @@ def sel_wave_argmax(score_h, K_h, nk):
     return m
 
 def sel_threshold_then_topk(score_h, K_h, nk):
-    """Keep all positions with score > median + 0.5*MAD; cap at K_h.
-    Below cap, fewer than K_h positions may be kept (variable selection)."""
+    """Keep positions with score > median + 0.5*MAD, capped at K_h, so fewer than
+    K_h may be kept."""
     if K_h >= nk: return np.ones(nk, dtype=bool)
     med = np.median(score_h)
     mad = np.median(np.abs(score_h - med)) + 1e-9
@@ -125,7 +107,7 @@ def sel_threshold_then_topk(score_h, K_h, nk):
     return m
 
 def sel_gumbel_topk(score_h, K_h, nk):
-    """Add Gumbel noise then top-K — stochastic relaxation of argmax."""
+    """Top-K after adding Gumbel noise to the log scores."""
     if K_h >= nk: return np.ones(nk, dtype=bool)
     eps = 1e-9
     logits = np.log(np.maximum(score_h, eps))
@@ -144,11 +126,8 @@ SELECTIONS = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Custom simulator — like host_simulate_kv_baselines.simulate but maintains
-# cum_max AND cum_sum per (layer, head, position), and applies a configurable
-# (signal, selection) pair.
-# ---------------------------------------------------------------------------
+# Simulator like host_simulate_kv_baselines.simulate, but it keeps cum_max and
+# cum_sum per (layer, head, position) and takes a (signal, selection) pair.
 def kl(p, q, eps=1e-12):
     pf = np.clip(p.astype(np.float32, copy=False), eps, 1.0)
     pe = np.clip(q.astype(np.float32, copy=False), eps, 1.0)
@@ -194,9 +173,7 @@ def simulate_signal_select(attn_ph, n_kv_at, K_nominal, signal_name, selection_n
     return out_kl.mean(axis=1), out_K.mean(axis=1), out_mass.mean(axis=1)
 
 
-# ---------------------------------------------------------------------------
 # Runner
-# ---------------------------------------------------------------------------
 DIRS = [
     "/home/mislam22/EndurKV_workspace/logs/study_phone_phi3_longbench",
     "/home/mislam22/EndurKV_workspace/logs/study_phone_mistral_longbench",
@@ -284,11 +261,11 @@ def main():
     agg["cache_adj"] = agg["mean_delta_tova"] + agg["cache_pp_over"].clip(lower=0)
     agg = agg.sort_values("cache_adj")
     agg.to_csv(out_dir / "signal_selection_ranking.csv", index=False)
-    print("\n=== TOP-15 by cache-adjusted Δ TOVA ===")
+    print("TOP-15 by cache-adjusted Δ TOVA")
     print(agg.head(15).to_string(index=False))
-    print("\n=== Cache-neutral (cache ≤ 1.05) — sorted by raw Δ TOVA ===")
+    print("Cache-neutral (cache ≤ 1.05) — sorted by raw Δ TOVA")
     print(agg[agg.mean_cache <= 1.05].sort_values("mean_delta_tova").to_string(index=False))
-    print("\n=== Best signal per selection rule ===")
+    print("Best signal per selection rule")
     for sel in SELECTIONS:
         s = agg[agg.selection==sel].sort_values("cache_adj").head(1)
         if not s.empty:

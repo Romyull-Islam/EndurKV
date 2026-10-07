@@ -1,31 +1,7 @@
 #!/usr/bin/env python3
-"""
-KV cache growth vs SoC temperature.
-
-Sensor selection (per dataset note):
-  * Primary SoC = column socd_temp_mc (the dedicated SoC-die thermal zone,
-    millidegrees C).  In some phone-log captures this column is dead (all 0).
-    When that happens we fall back to the documented skin-style proxy
-    shell_front_temp_mc, so the figure always carries a meaningful curve.
-  * The figure annotates which sensor was used per cell.
-  * skin_temp_dc / soc_pmic_temp / msm_therm_aps / package_temp do NOT exist
-    in these CSVs and are intentionally not consulted.
-  * Memory temperature column referenced elsewhere is ddr_temp_mc, but this
-    figure only needs SoC.
-
-Cells used:
-  * Wave-4 long-decode trio   : vanilla, v1_K512, v1_fa_K512
-  * Wave-9 stack overlay      : v1_fa2_stack
-
-Figure: 2 panels
-  - Top    : time-series, KV cache size (left y, log) + SoC temp (right y, °C)
-             for every policy.
-  - Bottom : scatter cache_size vs SoC temp across all samples, with linear
-             regression line and R^2.
-
+"""KV cache size vs SoC temperature: time series (top) and scatter with linear fit (bottom).
+SoC temp is socd_temp_mc, or shell_front_temp_mc where socd is dead in a capture (noted per cell).
 Output: figures/relationship_plots/11_kv_cache_vs_soc_temp.png
-
-Stdlib + numpy + matplotlib only (matches the rest of the repo).
 """
 
 from __future__ import annotations
@@ -41,7 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-# ----------------------------- config -----------------------------------------
+# config
 
 PHONE_LOGS = Path("/home/mislam22/EndurKV_workspace/phone-logs")
 WAVE4_DIR = PHONE_LOGS / "wave4_longdecode_1780750084"
@@ -67,7 +43,7 @@ COL_SOC_PRIMARY = "socd_temp_mc"
 COL_SOC_FALLBACK = "shell_front_temp_mc"
 
 
-# ---------------------------- helpers -----------------------------------------
+# helpers
 
 def _to_float(x):
     try:
@@ -77,8 +53,7 @@ def _to_float(x):
 
 
 def _is_dead(values: np.ndarray) -> bool:
-    """A sensor column is 'dead' if it's all-NaN, all-zero, or essentially
-    constant (range < 0.1°C i.e. < 100 milli-deg)."""
+    """True if the column is all-NaN, all-zero, or nearly constant (range < 0.1 C)."""
     finite = values[np.isfinite(values)]
     if finite.size == 0:
         return True
@@ -116,12 +91,8 @@ def load_sensors(cell_dir: Path):
 
 
 def load_cache_series(cell_dir: Path):
-    """Per-step (t_s, n_kv) concatenated across iters, aligned to run wall-time.
-
-    steps.csv wall_us  : microseconds since that iter's prefill start.
-    stress.csv t_elapsed_s : iter start relative to run start (same reference
-                             as sensors' monotonic_s - monotonic_s[0]).
-    """
+    """Per-step (t_s, n_kv) across iters on the run clock: stress.csv t_elapsed_s
+    (iter start, same reference as the sensors) + steps.csv wall_us."""
     stress_p = cell_dir / "stress.csv"
     if not stress_p.exists():
         return np.array([]), np.array([])
@@ -158,9 +129,7 @@ def load_cache_series(cell_dir: Path):
 def resample_cache_at_times(sample_times: np.ndarray,
                             cache_t: np.ndarray,
                             cache_n: np.ndarray) -> np.ndarray:
-    """Step-wise resample of cache_n at sample_times.  Uses last-known cache
-    size at each sensor sample (held constant between decode steps).  Samples
-    earlier than the first cache event are returned as NaN."""
+    """Last-known cache size at each sample time, NaN before the first cache event."""
     out = np.full_like(sample_times, np.nan, dtype=float)
     if cache_t.size == 0:
         return out
@@ -171,7 +140,7 @@ def resample_cache_at_times(sample_times: np.ndarray,
     return out
 
 
-# ------------------------------- main -----------------------------------------
+# main
 
 def main() -> int:
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -193,7 +162,7 @@ def main() -> int:
         print("ERROR: no cells loaded", file=sys.stderr)
         return 1
 
-    # ---------- aggregate scatter data: align cache and SoC at sensor times ---
+    # aggregate scatter data: align cache and SoC at sensor times
     scat_x, scat_y, scat_c, scat_lbl = [], [], [], []
     for d in data:
         if d["t"].size == 0 or d["cache_t"].size == 0:
@@ -208,7 +177,7 @@ def main() -> int:
     scat_x = np.concatenate(scat_x) if scat_x else np.array([])
     scat_y = np.concatenate(scat_y) if scat_y else np.array([])
 
-    # Linear regression: y = a + b * x  (cache size linear, per user spec).
+    # linear fit y = a + b * x, cache size on a linear axis
     slope = intercept = r2 = float("nan")
     if scat_x.size >= 2:
         slope, intercept = np.polyfit(scat_x, scat_y, 1)
@@ -217,10 +186,10 @@ def main() -> int:
         ss_tot = float(np.sum((scat_y - scat_y.mean()) ** 2))
         r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
 
-    # -------------------------------- figure ---------------------------------
+    # figure
     fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(12, 10))
 
-    # ------- TOP: time-series, cache (left log) + SoC (right linear) ----------
+    # TOP: time-series, cache (left log) + SoC (right linear)
     ax_top_soc = ax_top.twinx()
 
     for d in data:
@@ -258,7 +227,7 @@ def main() -> int:
         bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="0.7", alpha=0.85),
     )
 
-    # ------- BOTTOM: scatter + linear fit -------
+    # BOTTOM: scatter + linear fit
     for d in data:
         if d["t"].size == 0 or d["cache_t"].size == 0:
             continue

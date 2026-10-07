@@ -1,27 +1,17 @@
 #!/bin/bash
-# ============================================================================
-# WATCHDOG DEMONSTRATION (GPU, Adreno 840) -- the load-bearing thermal test.
-# Proves the surface-aware reduce-only watchdog PREVENTS the kernel throttle.
-#
-# Three cells, each from a settled-idle start (natural equilibrium), NATIVE GPU
-# clock (uncapped -> heats), sustained 4096-token decode:
-#   1. vanilla_nowd  : baseline, no watchdog        -> heats, kernel THROTTLES
-#   2. mukv_nowd      : muKV fa-on-evict, NO watchdog -> muKV alone still throttles
-#   3. mukv_wd        : muKV fa-on-evict, WATCHDOG v4  -> watchdog glides clock DOWN
-#                       before onset -> NO throttle, temp bounded
-# The (2)-vs-(3) contrast isolates the watchdog on the SAME policy; (1) is the
-# baseline. The proof is in the GPU-clock trace (gpu_clk_hz): a THROTTLE is a
-# sudden cliff; the WATCHDOG is a gradual glide that keeps temp under threshold.
-#
-# CAPTURES per cell (5 Hz sensors.csv): GPU/DDR/skin temps + gpu_clk_hz + tps.
-# Watchdog cell also logs tier transitions (which sensor tripped, when).
-# ============================================================================
+# run_watchdog_demo_gpu.sh: GPU (Adreno 840) watchdog test. Three cells, each from a settled
+# idle start at the native GPU clock, 4096-token decode:
+#   vanilla_nowd  vanilla, no watchdog
+#   mukv_nowd     muKV fa-on-evict, no watchdog
+#   mukv_wd       muKV fa-on-evict with the surface-aware reduce-only watchdog v4
+# mukv_nowd vs mukv_wd isolates the watchdog. In gpu_clk_hz a kernel throttle is a sudden
+# drop, the watchdog a gradual step down. Sensors at 5 Hz, plus the watchdog tier log.
 set -u; export ANDROID_ADB_SERVER_PORT=5151
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 OUT_HOST=/tmp/wd_demo; mkdir -p "$OUT_HOST"
 TS=$(date +%Y%m%d_%H%M%S); OUT=/data/local/tmp/endurkv/logs/wddemo_$TS
 adb_safe_shell "mkdir -p $OUT" < /dev/null
-SCR=/tmp/claude-1001/-home-mislam22-EndurKV-workspace/1d283ef2-8bcb-4a99-8b56-fd8d8af9f80d/scratchpad
+SCR="${SCR:-$(cd "$(dirname "$0")/../.." && pwd)/eval_corpora}"
 adb push "$SCR/wikitext_16k_p12k_d4k.txt" "$OUT/prompt.txt" < /dev/null >/dev/null 2>&1
 adb push /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/gpu_watchdog_v4_surface_aware.sh /data/local/tmp/gpu_watchdog_v4.sh < /dev/null >/dev/null 2>&1
 MODEL=/data/local/tmp/endurkv/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
@@ -30,9 +20,9 @@ WD_STOP=/data/local/tmp/gpu_wd.stop
 
 start_wd(){ adb_safe_shell "su -c 'rm -f $WD_STOP; nohup sh /data/local/tmp/gpu_watchdog_v4.sh /data/local/tmp/gpu_wd_$1.log $WD_STOP >/dev/null 2>&1 &'" < /dev/null; }
 stop_wd(){ adb_safe_shell "su -c 'touch $WD_STOP; sleep 1; echo 1200 > /sys/kernel/gpu/gpu_max_clock'" < /dev/null; }
-# deep settle: GPU+DDR <=37C, stable >=90s, native GPU clock (uncapped, so it can heat)
+# Settle: GPU and DDR <= 37 C and stable for 90 s, GPU clock left uncapped.
 settle(){ local TAG=$1
-  # CRITICAL: kill any leftover bench/sensors first (a stray bench pins cores -> phone never cools)
+  # Kill leftover bench and sensor processes first, a stray bench keeps the phone from cooling.
   adb_safe_shell "su -c 'pkill -9 -f eviction_bench 2>/dev/null; pkill -9 -f sample_sensors 2>/dev/null; input keyevent 26 2>/dev/null; echo 0 > /sys/class/oplus_chg/battery/mmi_charging_enable; touch $WD_STOP; echo 1200 > /sys/kernel/gpu/gpu_max_clock; echo 160 > /sys/kernel/gpu/gpu_min_clock'" < /dev/null
   local T0=$(date +%s); local h1=999 h2=999 h3=999 h4=999 h5=999 h6=999 h7=999 h8=999 h9=999
   while true; do

@@ -1,34 +1,9 @@
 #!/bin/bash
-# ============================================================================
-# run_longbench_energy_tiers.sh -- does the energy-aware controller have a real
-# quality trade? LongBench F1 across its three tiers. (2026-08-16)
-#
-# WHY THIS EXISTS. The --energy-aware controller demonstrably closes its loop (n=3,
-# rotated order: K moves 1947 -> 974 -> 487 from battery state alone, backend-aware).
-# What it lacked was a REASON: on WikiText PPL and single-needle NIAH, k-pct 10 was
-# simultaneously the cheapest tier AND tied the retrieval ceiling, so both outer
-# tiers were dominated and the ladder collapsed to a constant. "Energy-aware" was a
-# mechanism without a benefit.
-#
-# LONGBENCH REOPENED THE QUESTION. At n=50 on the RTX, quality DOES move with
-# retention on some models (muKV at ~13% loses 2.8-3.7 F1 to vanilla on Gemma-2 and
-# Bonsai; SnapKV holds quality by retaining 83-94%). Multi-fact QA is the workload
-# where a bigger budget can buy something. If F1 at k-pct 20 > 10 > 5 with the
-# measured energy 364.5 / 340.1 / 345.2 mJ/token, the controller finally has a real
-# frontier: full QA quality above 50% charge, bounded F1 loss below 20% -- and
-# energy-awareness becomes a defensible claim instead of a collapsed ladder. If F1
-# is flat across tiers, the honest conclusion stays "pin k-pct 10" and the
-# controller is reported as a negative result. Either way this is the deciding cell.
-#
-# DESIGN. Llama-3.2-1B phone CPU, qasper + hotpotqa x 15 samples, the SAME prompts
-# and binary as /tmp/lb_native so vanilla and muKV@K=1024 cells there remain the
-# reference points. Three arms = the controller's tiers, driven as --k-pct so K
-# resolves per prompt exactly as the controller sets it. NO --ignore-eos (that
-# defect is fixed; see run_longbench_native_budgets.sh). No cool gate: F1 only, no
-# timing or energy may be quoted from these cells -- the energy column comes from
-# the cooled n=3 campaign (/tmp/ea_n3), which is the point: F1 from here, joules
-# from there, joined by tier.
-# ============================================================================
+# LongBench F1 across the energy-aware controller's three tiers (--k-pct 20, 10, 5).
+# Llama-3.2-1B on the phone CPU, qasper + hotpotqa x 15 samples, same prompts and binary
+# as /tmp/lb_native so its vanilla and muKV K=1024 cells stay the reference. No
+# --ignore-eos. No cool gate, so use these cells for F1 only. Energy per tier comes from
+# the cooled n=3 campaign in /tmp/ea_n3.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 BIN=/data/local/tmp/endurkv/bin_cpu_cur

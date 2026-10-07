@@ -1,17 +1,7 @@
-"""Statistical rigor for the robust ranker — 95% CIs + paired Wilcoxon vs TOVA
-+ Bonferroni-corrected p-values per cell, per K-budget. Required for
-publication-grade comparison (ASPLOS / NeurIPS reviewers will ask).
-
-For each (sim_kind, cell, K_nominal, policy):
-  - 95% CI via paired bootstrap (B=10000) over per-prompt KL deltas
-  - paired Wilcoxon signed-rank vs the cell's TOVA baseline
-  - Bonferroni-corrected p across the n_policies tested in that cell
-
-Inputs: per-prompt scores from each cell's policy_results.csv (NOT the aggregate
-pareto_summary.csv, which only has means).
-
-Output: logs/_consolidated/stats_per_policy.csv
-"""
+"""Per (sim_kind, cell, K_nominal, policy): paired-bootstrap 95% CI (B=10000) on per-prompt KL
+deltas, paired Wilcoxon vs the cell's TOVA baseline, and Bonferroni-corrected p within the cell.
+Reads per-prompt scores from each cell's policy_results.csv (pareto_summary.csv has only means).
+Writes logs/_consolidated/stats_per_policy.csv."""
 from __future__ import annotations
 import os
 import sys
@@ -91,7 +81,7 @@ def paired_wilcoxon_vs_baseline(per_prompt_df: pd.DataFrame, baseline: str
             idx = rng.integers(0, n, n)
             boot_means[b] = deltas[idx].mean()
         ci_lo, ci_hi = np.percentile(boot_means, [2.5, 97.5])
-        # Wilcoxon signed-rank (paired) — null: median delta = 0
+        # Wilcoxon signed-rank (paired) - null: median delta = 0
         try:
             w_stat, w_p = stats.wilcoxon(deltas, zero_method="wilcox",
                                           alternative="two-sided", method="auto")
@@ -115,7 +105,7 @@ def main() -> int:
     rows = []
     skipped = []
 
-    # Per-cell baseline: layer-avg cells → "tova"; per-head cells → "perhead_tova"
+    # Per-cell baseline: "tova" for layer-avg cells, "perhead_tova" for per-head cells
     for ppath in sorted(LOGS.rglob("policy_results.csv")):
         if "_consolidated" in ppath.parts or "_smoke" in str(ppath).lower():
             continue

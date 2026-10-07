@@ -1,9 +1,8 @@
 #!/system/bin/sh
-# phone_discharge_start.sh -- runs ON THE PHONE under su, detached: waits for the battery to reach
-# the start level with charging on (any charger; the laptop port left the phone at "Not charging"
-# on 2026-09-25), then resets the scheduler state to the cable seed and execs the discharge loop.
-# The cable can be pulled any time after the loop has started; the loop logs the USB flag itself.
-# Fallback: if the cable is already out and the level is at least MIN_SOC_UNPLUGGED, start anyway.
+# Runs on the phone under su, detached. Waits with charging on until SoC reaches
+# START_SOC, resets the scheduler tables to the seed and execs the discharge loop.
+# The cable can be pulled once the loop runs. If the cable is already out and SoC
+# is at least MIN_SOC_UNPLUGGED, it starts anyway.
 ROOT=/data/local/tmp/endurkv; LOGF=$ROOT/discharge2.start.log
 START_SOC=${START_SOC:-90}; MIN_SOC_UNPLUGGED=${MIN_SOC_UNPLUGGED:-85}
 MKEY=Llama-3.2-1B-Instruct-Q4_K_M

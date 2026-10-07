@@ -1,24 +1,7 @@
 #!/usr/bin/env python3
-"""
-PLOT 4: K-sweep ablation -- cache budget -> DDR/CPU temperature curves.
-
-Data: Wave-10 K-sweep at phone-logs/wave10_ksweep_1780815847/
-Each K subdirectory contains sensors.csv (high-rate thermals) and
-stress.csv (per-iter llama-cli summary). The shared watchdog.log
-contains every DDR-driven DVFS tier transition with unix-second
-timestamps so we can slice tier-1/tier-2 hits per K-phase by time.
-
-NOTE: The task lists K=256/384/512/1024, but the Wave-10 run on
-disk only contains 256/384/1024 (K=512 was skipped on the device).
-We plot the three K-values that were actually run.
-
-3-panel figure:
-  Panel 1: K vs peak DDR (bar, error bars from per-iter ddr_max)
-  Panel 2: K vs peak CPU (bar, error bars from per-iter cpu_max)
-  Panel 3: K vs mean decode_tps (from stress.csv)
-
-Each bar annotated with K-value and tier-1 transition count from
-watchdog.log restricted to that K's time window.
+"""Plot 4: K-sweep, peak DDR, peak CPU and mean decode tps per cache budget K.
+Data: phone-logs/wave10_ksweep_1780815847/ (K = 256, 384, 1024). Bars are annotated
+with watchdog tier-1 transitions from watchdog.log within each K's time window.
 """
 from __future__ import annotations
 
@@ -41,9 +24,7 @@ OUT_PATH = Path(
 K_VALUES = [256, 384, 1024]  # K=512 not present in this Wave-10 run.
 K_DIRS = {k: WAVE_DIR / f"K{k}" for k in K_VALUES}
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 def load_sensors(csv_path: Path) -> pd.DataFrame:
     df = pd.read_csv(csv_path, low_memory=False)
     df["wall_clock_s"] = pd.to_numeric(df["wall_clock_s"], errors="coerce")
@@ -65,13 +46,8 @@ def load_stress(csv_path: Path) -> pd.DataFrame:
 
 
 def per_iter_peaks(sensors: pd.DataFrame, stress: pd.DataFrame) -> pd.DataFrame:
-    """For each iter row, slice sensors by wall-clock window [t0, t1] and
-    return that iter's peak DDR and peak CPU temperature in C.
-
-    iter timing comes from stress.csv via t_elapsed_s anchored at the
-    first sensors wall_clock_s in the run (close enough -- iter 1 starts
-    a few seconds after sensor capture begins; we use the iter-end of
-    the previous row as the window start)."""
+    """Peak DDR and CPU temperature (C) per iter. Windows come from stress.csv t_elapsed_s
+    offset by the first sensors wall_clock_s."""
     if sensors.empty or stress.empty:
         return pd.DataFrame(columns=["iter", "ddr_peak_c", "cpu_peak_c"])
     t_origin = float(sensors["wall_clock_s"].iloc[0])
@@ -118,9 +94,7 @@ def tier_counts_in_window(events, t0: float, t1: float):
     return n1, n2
 
 
-# ---------------------------------------------------------------------------
 # Aggregate
-# ---------------------------------------------------------------------------
 def aggregate():
     events = parse_watchdog(WAVE_DIR / "watchdog.log")
     summary = []
@@ -151,9 +125,7 @@ def aggregate():
     return pd.DataFrame(summary)
 
 
-# ---------------------------------------------------------------------------
 # Plot
-# ---------------------------------------------------------------------------
 def plot(df: pd.DataFrame):
     df = df.sort_values("K").reset_index(drop=True)
     x_labels = [str(k) for k in df["K"]]
@@ -169,7 +141,7 @@ def plot(df: pd.DataFrame):
     color_map = {256: "#2c7fb8", 384: "#7fbf7b", 1024: "#d7301f"}
     bar_colors = [color_map[k] for k in df["K"]]
 
-    # ---------- Panel 1: peak DDR --------------------------------------
+    # Panel 1: peak DDR
     ax = axes[0]
     bars = ax.bar(
         x_pos, df["ddr_peak_mean"], yerr=df["ddr_peak_std"],
@@ -196,7 +168,7 @@ def plot(df: pd.DataFrame):
     ymax = (df["ddr_peak_mean"] + df["ddr_peak_std"].fillna(0)).max()
     ax.set_ylim(0, ymax * 1.22)
 
-    # ---------- Panel 2: peak CPU --------------------------------------
+    # Panel 2: peak CPU
     ax = axes[1]
     bars = ax.bar(
         x_pos, df["cpu_peak_mean"], yerr=df["cpu_peak_std"],
@@ -220,7 +192,7 @@ def plot(df: pd.DataFrame):
     ymax = (df["cpu_peak_mean"] + df["cpu_peak_std"].fillna(0)).max()
     ax.set_ylim(0, ymax * 1.22)
 
-    # ---------- Panel 3: decode tps (context) --------------------------
+    # Panel 3: decode tps (context)
     ax = axes[2]
     bars = ax.bar(
         x_pos, df["mean_decode_tps"], yerr=df["std_decode_tps"],
@@ -252,7 +224,7 @@ def plot(df: pd.DataFrame):
 
 def main():
     df = aggregate()
-    # Print summary so the CLI run is auditable.
+    # Print a summary.
     pd.set_option("display.width", 160)
     pd.set_option("display.max_columns", None)
     print("[wave10 K-sweep summary]")

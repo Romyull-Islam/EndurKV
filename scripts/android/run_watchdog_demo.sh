@@ -1,18 +1,14 @@
 #!/bin/bash
-# ============================================================================
-# WATCHDOG GLIDE DEMO (2026-07-18). Cold start -> muKV (fa-on) on Bonsai-8B with
-# the FIXED watchdog (zones-by-name + battery/skin ladders). Bonsai heats the
-# phone through battery 35/35.5/36, so the watchdog glides the big-core cap
-# 1632 -> 1497 -> 1382 -> 1267 gradually. High-rate (0.5s) log of:
-#   epoch, scaling_max (watchdog cap), cpu6 cur freq, battery_mc, skin_mc
-# so we can plot the glide vs the temperatures that drove it.
-# ============================================================================
+# run_watchdog_demo.sh: CPU watchdog demo. From a cold start, muKV (fa-on) on Bonsai-8B heats
+# the battery through 35, 35.5 and 36 C, and preempt_throttle_watchdog_v2 steps the big-core cap
+# down 1632, 1497, 1382, 1267 MHz. wd_logger.sh logs epoch, cap, cpu6 frequency, battery and
+# skin temperature every 0.5 s.
 set -u; export ANDROID_ADB_SERVER_PORT=5151
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 OUT_HOST=/tmp/wd_demo; mkdir -p "$OUT_HOST"
 OUT=/data/local/tmp/endurkv/logs/wddemo_$(date +%s 2>/dev/null || echo run)
 adb_safe_shell "mkdir -p $OUT" < /dev/null
-SCR=/tmp/claude-1001/-home-mislam22-EndurKV-workspace/1d283ef2-8bcb-4a99-8b56-fd8d8af9f80d/scratchpad
+SCR="${SCR:-$(cd "$(dirname "$0")/../.." && pwd)/eval_corpora}"
 adb push "$SCR/wikitext_16k_p12k_d4k.txt" "$OUT/prompt.txt" < /dev/null >/dev/null 2>&1
 adb push /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/preempt_throttle_watchdog_v2.sh \
          /data/local/tmp/preempt_throttle_watchdog_v2.sh < /dev/null >/dev/null 2>&1
@@ -34,14 +30,13 @@ while true; do
 done
 adb_safe_shell "su -c 'echo 0 > /sys/class/oplus_chg/battery/mmi_charging_enable'" < /dev/null
 
-# resolve battery/shell zones by name (same as the fixed watchdog)
+# Resolve battery, shell and DDR zones by name, as the watchdog does
 BZ=$(adb_safe_shell "su -c 'for z in /sys/class/thermal/thermal_zone*; do [ \"\$(cat \$z/type 2>/dev/null)\" = battery ] && { echo \$z; break; }; done'" < /dev/null | tr -d '\r')
 SZ=$(adb_safe_shell "su -c 'for z in /sys/class/thermal/thermal_zone*; do [ \"\$(cat \$z/type 2>/dev/null)\" = shell_front ] && { echo \$z; break; }; done'" < /dev/null | tr -d '\r')
 DZ=$(adb_safe_shell "su -c 'for z in /sys/class/thermal/thermal_zone*; do [ \"\$(cat \$z/type 2>/dev/null)\" = ddr ] && { echo \$z; break; }; done'" < /dev/null | tr -d '\r')
 echo "[zones] battery=$BZ shell=$SZ ddr=$DZ"
 
-# COLD GATE: start below the first battery threshold (34.5C) so the run heats
-# THROUGH 35/35.5/36 and shows the full glide from tier 0.
+# Start below 34.5 C battery so the run crosses every threshold from tier 0.
 echo "[$(date +%H:%M:%S)] cooling to battery<34.5 ..."
 T0=$(date +%s)
 while true; do
@@ -52,7 +47,7 @@ while true; do
   sleep 15
 done
 
-# start FIXED watchdog + high-rate logger
+# Start the watchdog and the 0.5 s logger
 adb_safe_shell "su -c 'rm -f $WD_STOP $LOG_STOP; nohup sh /data/local/tmp/preempt_throttle_watchdog_v2.sh /data/local/tmp/cpu_wd_demo.log $WD_STOP >/dev/null 2>&1 &'" < /dev/null
 adb_safe_shell "su -c 'nohup sh /data/local/tmp/wd_logger.sh $OUT/wd_trace.csv $LOG_STOP $BZ $SZ >/dev/null 2>&1 &'" < /dev/null
 sleep 2
@@ -70,4 +65,4 @@ adb pull /data/local/tmp/cpu_wd_demo.log "$OUT_HOST/cpu_wd_demo.log" < /dev/null
 adb pull "$OUT/gen.err" "$OUT_HOST/gen.err" < /dev/null >/dev/null 2>&1
 touch /tmp/wd_demo_DONE
 echo "[$(date +%H:%M:%S)] WATCHDOG DEMO DONE -> $OUT_HOST"
-echo "--- watchdog tier transitions ---"; grep -iE 'tier|engaged|MHz' "$OUT_HOST/cpu_wd_demo.log" 2>/dev/null | tail -12
+echo "watchdog tier transitions"; grep -iE 'tier|engaged|MHz' "$OUT_HOST/cpu_wd_demo.log" 2>/dev/null | tail -12

@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
-"""Wrap each LongBench prompt in the appropriate chat-template for each model.
-
-Output dir layout:
-    prompts_chat/<model_tag>/<prompt_id>.txt
-
-This avoids the Wave-1 issue where instruct/chat models received raw text and
-produced degenerate output.
-"""
+"""Wrap each LongBench prompt in each model's chat template, written to
+prompts_chat/<model_tag>/<prompt_id>.txt. Instruct models given raw text produce degenerate output."""
 import sys
 from pathlib import Path
 

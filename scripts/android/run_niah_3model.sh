@@ -1,24 +1,18 @@
 #!/bin/bash
-# ============================================================================
-# NIAH 3-model quality table (HotMobile, new armv8.7-a build, 2026-07-18).
-# 3 DIVERSE models x 8 policies x 14 needle stimuli (4K/8K x 7 depths) = 336 cells.
-# Retrieval hit-rate is thermally invariant, but ENERGY and tps are NOT, so every
-# cell waits on the standard cool gate (DDR<=35, batt<=34, charging off) before it runs.
-# muKV runs WITH its thermal watchdog (preempt_throttle_watchdog_v2, muKV-only by design).
-# SnapKV runs its own canonical protocol with NO watchdog, as published.
-# numbers. K=1024 (design target, matches the systems table). Resumable: skips any
-# cell whose meta.json already exists.
+# NIAH quality table on the phone CPU: models x policies x 14 needle stimuli
+# (4K/8K x 7 depths), K from $1 (default 1024). Hit rate does not depend on heat
+# but energy and tps do, so every cell waits on the cool gate first.
+# muKV runs with its watchdog (preempt_throttle_watchdog_v2), SnapKV without.
+# Resumable: cells with a meta.json are skipped.
 #   hit = gen contains "mango sorbet" or "bi-rite" (case-insensitive)
-#   retained_kv_bytes = TRUE compacted cache (llama_state_seq_get_size)
-# ============================================================================
+#   retained_kv_bytes = compacted cache size (llama_state_seq_get_size)
 set -u
-# 2026-07-27: was hardcoded ANDROID_ADB_SERVER_PORT=5152. The phone re-enumerated
-# onto the default server and the 5152 server lost it, stalling the campaign for 2h
-# with no error. Now auto-detect whichever server actually holds the device.
+# Use whichever adb server holds the device. The phone can re-enumerate onto
+# another server, so a fixed port can silently lose it.
 for _p in ${ADB_PORTS:-5152 5037 5151}; do
   [ -n "$_p" ] || continue
-  # skip ports with no listener: `adb devices` would START a server there and squat
-  # the port, which breaks the user's `ssh -R` tunnel (see adb_resilient.sh).
+  # Skip ports with no listener. `adb devices` would start a server there and
+  # take the port from the ssh -R tunnel (see adb_resilient.sh).
   (exec 3<>/dev/tcp/127.0.0.1/$_p) 2>/dev/null || continue
   exec 3<&- 2>/dev/null
   if ANDROID_ADB_SERVER_PORT=$_p adb devices 2>/dev/null | grep -qw device; then
@@ -48,10 +42,8 @@ declare -A MODELS=(
 cell(){ local MT=$1 POL=$2 STIM=$3 CTX=$4; shift 4; local id="${MT}__${POL}__${STIM%.txt}"; local PD=$OUT/$id
   if [ -f "$OUT_HOST/$id/meta.json" ]; then return; fi     # resume: skip done
   adb_safe_shell "mkdir -p $PD" < /dev/null
-  # 2026-07-27: the gate result was previously DISCARDED. If cooling failed the cell
-  # ran anyway from a hot start, silently contaminating its energy and wall time.
-  # Now: no cool -> no cell. We write no meta.json, so the resume logic retries it
-  # on a later pass instead of banking a bad measurement.
+  # No cool, no cell. Without a meta.json the cell is retried on a later pass
+  # instead of keeping a hot-start measurement.
   CG=$(adb_safe_shell "su -c '. /data/local/tmp/endurkv/scripts/cool_gate.sh; cool_ddr36'" < /dev/null)
   echo "$CG" | tail -1
   case "$CG" in
@@ -69,16 +61,15 @@ cell(){ local MT=$1 POL=$2 STIM=$3 CTX=$4; shift 4; local id="${MT}__${POL}__${S
 MU="--policy v1_fa2 --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70 --fa-on-evict"
 
 run_policies(){ local MT=$1 STIM=$2 CTX=$3
-  # 7 policies: vanilla=ceiling, mukv=ours (updated mass fa-on-evict, == WikiText muKV-mass-full),
-  # snapkv/adakv/h2o/tova=per-head near-full baselines, streamingllm=fails NIAH.
-  # tova = TOVA-layer (paper-preferred); tova_canonical dropped (generation-mode top-K, redundant).
-  # UNCHANGED baseline (keep existing data): cell "$MT" vanilla      "$STIM" "$CTX" --policy vanilla
+  # vanilla is the ceiling, snapkv/adakv/h2o/tova are per-head baselines (tova is
+  # the per-layer TOVA variant). Commented-out cells reuse existing data.
+  # cell "$MT" vanilla      "$STIM" "$CTX" --policy vanilla
   cell "$MT" mukv         "$STIM" "$CTX" $MU
   cell "$MT" snapkv       "$STIM" "$CTX" --policy snapkv --obs-window 64 --n-sink 0
-  # UNCHANGED baseline (keep existing data): cell "$MT" adakv        "$STIM" "$CTX" --policy adakv --n-sink 0 --obs-window 32
-  # UNCHANGED baseline (keep existing data): cell "$MT" h2o          "$STIM" "$CTX" --policy h2o --n-sink 0 --obs-window 64
-  # UNCHANGED baseline (keep existing data): cell "$MT" tova         "$STIM" "$CTX" --policy tova
-  # UNCHANGED baseline (keep existing data): cell "$MT" streamingllm "$STIM" "$CTX" --policy streamingllm --n-sink 4
+  # cell "$MT" adakv        "$STIM" "$CTX" --policy adakv --n-sink 0 --obs-window 32
+  # cell "$MT" h2o          "$STIM" "$CTX" --policy h2o --n-sink 0 --obs-window 64
+  # cell "$MT" tova         "$STIM" "$CTX" --policy tova
+  # cell "$MT" streamingllm "$STIM" "$CTX" --policy streamingllm --n-sink 4
 }
 for MT in phi3 llama1b gemma2b bonsai8b; do
   i=0; n=$(echo "$STIMS" | wc -w)

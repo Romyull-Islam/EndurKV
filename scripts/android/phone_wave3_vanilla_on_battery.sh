@@ -1,8 +1,6 @@
 #!/system/bin/sh
-# phone_wave3_vanilla_on_battery.sh — re-run vanilla under battery (no AC)
-# Same protocol as phone_wave3_real.sh, but only vanilla, to match the v1 / v1_fa
-# cells which were on battery (1.63 GHz cap). The original vanilla cell was on AC
-# (3.4 GHz peak) — that confound invalidated the comparison.
+# Vanilla only, on battery, with the phone_wave3_real.sh protocol, to match the
+# v1 / v1_fa cells that ran on battery at the 1.63 GHz cap.
 set -u
 
 DURATION_S=${DURATION_S:-1500}
@@ -90,16 +88,13 @@ run_policy() {
     echo "[$(date)] === DONE $label: iters=$ITER, ran=${ELAPSED}s ===" >> "$PROG"
 }
 
-# Pin DVFS to 1.63 GHz before vanilla cell — eliminates the cable-state
-# confound that contaminated the original REAL vanilla cell (which ran at 3.4 GHz
-# due to charging-enabled DVFS boost).
+# Pin DVFS to 1.63 GHz, since charging lets DVFS boost to 3.4 GHz.
 echo "[$(date)] pinning DVFS via pin_dvfs.sh" >> "$PROG"
 sh /data/local/tmp/endurkv/scripts/pin_dvfs.sh pin 2>> "$PROG"
 
-# Only vanilla — to match the on-battery condition of all v1 / TOVA / H2O cells
 run_policy vanilla vanilla 0
 
-# Restore DVFS to original state after the cell completes
+# Restore DVFS
 echo "[$(date)] restoring DVFS via pin_dvfs.sh" >> "$PROG"
 sh /data/local/tmp/endurkv/scripts/pin_dvfs.sh restore 2>> "$PROG"
 

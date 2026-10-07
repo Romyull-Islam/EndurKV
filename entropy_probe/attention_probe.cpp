@@ -1,26 +1,13 @@
-// attention_probe — runs greedy decoding through llama.cpp's public C API,
-// captures the per-decode-step attention softmax tensors via the cb_eval hook,
-// and writes:
-//   * a CSV identical in schema to entropy_probe (per-step entropy / top-k)
-//   * a binary sidecar with per-step, per-layer, per-head attention
-//     (post-softmax probabilities, per head), enabling per-head eviction
-//     policy studies (AdaKV / HeadKV / DuoAttention / AhaKV).
+// attention_probe: greedy decoding through the llama.cpp C API that captures
+// post-softmax attention per decode step (cb_eval hook). Writes the entropy_probe
+// CSV plus a binary sidecar of per-layer, per-head attention.
 //
-// Sidecar binary format v2 (little-endian, host order):
-//   bytes [0..3]   : magic "ATNH"   (was "ATTN" in v1; v1 was head-averaged)
-//   bytes [4..7]   : uint32 n_steps_written
-//   bytes [8..11]  : uint32 n_layers
-//   bytes [12..15] : uint32 n_head        (number of QUERY heads per layer)
-//   then for each (step, layer) pair, in step-major order:
-//     uint32 n_kv
-//     n_head * n_kv * float32   (attention from query at this step to source
-//                                position i, for each head; row-major over
-//                                heads then positions; each head's row sums to 1)
-// We write n_steps_written and n_layers as zero up front and patch them
-// after the run completes.
-//
-// Backward compat: if env var ATTNPROBE_AVERAGE_HEADS=1 is set, falls back to
-// v1 head-averaged format (magic "ATTN"). Default is v2.
+// Sidecar format "ATNH" (little-endian):
+//   magic "ATNH", uint32 n_steps, uint32 n_layers, uint32 n_head (query heads)
+//   then per (step, layer), step-major: uint32 n_kv, n_head * n_kv float32
+//   (row-major over heads then positions, each head's row sums to 1).
+// The header counts are written as zero and patched at the end.
+// "ATTN" is the older head-averaged format (n_kv floats per block).
 
 #include "compute_entropy.h"
 #include "llama.h"
@@ -105,8 +92,8 @@ std::string token_to_text(const llama_vocab * vocab, llama_token tok) {
     return big;
 }
 
-// RFC-4180-style CSV quote: double the inner quote, replace newline/CR with
-// literal two-char escapes (cosmetic — keeps each token on one CSV line).
+// RFC-4180-style CSV quote. Newline and CR become two-char escapes so each
+// token stays on one CSV line.
 std::string csv_escape(const std::string & s) {
     std::string out; out.reserve(s.size() + 2); out.push_back('"');
     for (char c : s) {
@@ -132,24 +119,18 @@ int argmax_logits(const float * logits, int n_vocab) {
     return best;
 }
 
-// -------- Attention capture state ---------------------------------------------
-//
-// One instance lives in main(); a pointer is passed to llama via cparams.cb_eval
-// and re-cast inside the callback. The callback fires once per ggml_tensor,
-// twice (ask=true, then ask=false=after-compute) only for the tensors we accept.
+// Attention capture state. One instance lives in main() and is passed to llama
+// through cparams.cb_eval. The callback runs with ask=true, then ask=false after
+// compute, for the tensors we accept.
 
 struct AttnCapture {
-    // For the just-completed llama_decode, store attention as
-    // per_layer_heads[layer_index] = flat float vector of length n_head * n_kv,
-    // laid out as [head0_pos0, head0_pos1, ..., head0_posN-1, head1_pos0, ...].
-    // Each head's slice already sums to 1 (post-softmax).
+    // Attention from the last llama_decode: per_layer_heads[layer] holds
+    // n_head * n_kv floats, head-major. Each head's slice sums to 1.
     std::map<int, std::vector<float>> per_layer_heads;
 
-    // 2026-05-24: K/V capture for KeyDiff + LaProx baseline reimplementation.
-    // Captures the FULL K and V tensors at the LAST decode step (positions never
-    // change once added; final-step capture lets the offline sim slice K[:,:,:s+1]
-    // for any earlier step s). per_layer_K[il] is a flat vector in the tensor's
-    // natural ne[0..3] layout, stored together with the shape header.
+    // K and V at the last decode step, for the KeyDiff and LaProx baselines.
+    // Past positions never change, so the offline sim can slice K[:,:,:s+1]
+    // for any earlier step s. Stored flat in the tensor's ne[0..3] layout.
     struct KVCap {
         std::vector<float> data;     // raw fp32 dump
         int64_t ne[4] = {0,0,0,0};   // tensor shape
@@ -165,9 +146,8 @@ struct AttnCapture {
 
     void reset() {
         per_layer_heads.clear();
-        // NOTE: don't clear K/V here — we only want the FINAL step's K/V.
-        // Reset is called between decode steps for attention; K/V we keep
-        // overwriting with the latest, so the last write wins.
+        // K/V are not cleared here. Each step overwrites them, so the last
+        // step's K/V is what remains.
         n_kv_last = 0;
     }
     void reset_full() {
@@ -208,18 +188,13 @@ bool eval_callback(struct ggml_tensor * t, bool ask, void * user_data) {
         return is_attn || is_K || is_V;
     }
 
-    // K/V capture path: dump the full tensor into per-layer K or V slot.
-    // We OVERWRITE on each call (per step), so after all steps the final state
-    // is the one written to disk — exactly what KeyDiff/LaProx need (K vectors
-    // for past positions don't change once added).
+    // K/V capture: overwrite the per-layer slot on every step so the final
+    // step's tensors are written to disk.
     if (is_K || is_V) {
         int layer = parse_layer_index(name);
         if (layer < 0) return true;
-        // BUG FIX (2026-05-24): old code computed nfloats = nbytes / sizeof(float),
-        // which is half the true logical element count for f16 tensors. With
-        // ggml_cont() added in llama-graph.cpp (the capture hook now copies the
-        // view to a contiguous tensor), ggml_nelements(t) is the correct logical
-        // element count and ggml_nbytes(t) is the correct byte count.
+        // The capture hook in llama-graph.cpp makes the view contiguous, so
+        // ggml_nelements is the logical count (nbytes/4 would be wrong for f16).
         const size_t n_elem = ggml_nelements(t);
         AttnCapture::KVCap kv;
         kv.data.resize(n_elem);
@@ -228,7 +203,7 @@ bool eval_callback(struct ggml_tensor * t, bool ask, void * user_data) {
         if (t->type == GGML_TYPE_F32) {
             ggml_backend_tensor_get(t, kv.data.data(), 0, n_elem * sizeof(float));
         } else if (t->type == GGML_TYPE_F16) {
-            // Convert fp16 → fp32 by reading into a temp buffer and casting
+            // fp16 to fp32
             std::vector<uint16_t> tmp(n_elem);
             ggml_backend_tensor_get(t, tmp.data(), 0, n_elem * sizeof(uint16_t));
             for (size_t i = 0; i < n_elem; ++i) {
@@ -257,8 +232,8 @@ bool eval_callback(struct ggml_tensor * t, bool ask, void * user_data) {
     std::vector<float> buf(nbytes / sizeof(float));
     ggml_backend_tensor_get(t, buf.data(), 0, nbytes);
 
-    // We want attention from the LAST query in the batch (single-token decode → only query;
-    // prompt prefill → the last prompt token, which is the one whose logits we'll read next).
+    // Use the last query in the batch: the only query during decode, and the
+    // last prompt token (whose logits are read next) during prefill.
     const int64_t q_idx = n_tokens - 1;
     const int64_t s_idx = 0; // single-stream
 
@@ -268,10 +243,7 @@ bool eval_callback(struct ggml_tensor * t, bool ask, void * user_data) {
     int layer = parse_layer_index(name);
     if (layer < 0) layer = (int)cap->per_layer_heads.size();
 
-    // Since 2026-05-24 dual-format probe revision: ALWAYS store per-head in cap.
-    // Dual-format AttnSink instances write both ATNH (verbatim) and ATTN (averaged
-    // on the fly) outputs, so we no longer need cap.average_heads. Per-head storage
-    // is a strict superset of head-averaged.
+    // Always store per-head. The ATTN sink averages over heads when writing.
     std::vector<float> per_layer_buf(static_cast<size_t>(n_head) * n_kv, 0.0f);
     for (int64_t h = 0; h < n_head; ++h) {
         const float * row = buf.data()
@@ -287,19 +259,16 @@ bool eval_callback(struct ggml_tensor * t, bool ask, void * user_data) {
     return true;
 }
 
-// Sidecar writer: we patch the header at the end with the real n_steps / n_layers / n_head.
-// v2 ATNH (primary):       per-step per-layer block holds n_head * n_kv floats (per-head).
-// v1 ATTN (secondary):     per-step per-layer block holds n_kv floats (head-averaged).
-// When v1_format=true and cap stores per-head data, write_step averages on the fly.
-// This lets main() open BOTH sinks so every capture produces both formats natively
-// for publication-quality provenance (see logs/STRATEGY.md, 2026-05-24 decision).
+// Sidecar writer. The header (n_steps, n_layers, n_head) is patched at close.
+// ATNH blocks hold n_head * n_kv floats. ATTN (v1_format) blocks hold n_kv
+// head-averaged floats, computed in write_step.
 struct AttnSink {
     std::FILE * fp = nullptr;
     uint32_t    n_steps   = 0;
     uint32_t    n_layers  = 0;
-    uint32_t    n_head    = 0;     // for v1: stored as 1; for v2: real head count
+    uint32_t    n_head    = 0;     // 1 for ATTN, real head count for ATNH
     bool        layer_count_locked = false;
-    bool        v1_format = false;     // true → magic "ATTN" + head-averaged on write
+    bool        v1_format = false;     // magic "ATTN", head-averaged on write
 
     bool open(const std::string & path, bool v1) {
         fp = std::fopen(path.c_str(), "wb");
@@ -324,8 +293,7 @@ struct AttnSink {
             n_head   = v1_format ? 1u : (uint32_t)cap.n_head;
             layer_count_locked = true;
         }
-        // cap always stores per-head data (n_head * n_kv floats per layer)
-        // since 2026-05-24 dual-format probe revision. v1 sink averages at write time.
+        // cap holds n_head * n_kv floats per layer. The ATTN sink averages here.
         const uint32_t real_n_head = (uint32_t)cap.n_head;
         for (uint32_t l = 0; l < n_layers; ++l) {
             auto it = cap.per_layer_heads.find((int)l);
@@ -338,7 +306,7 @@ struct AttnSink {
             n_kv = real_n_head > 0 ? (uint32_t)(vec.size() / real_n_head) : 0u;
             std::fwrite(&n_kv, sizeof(uint32_t), 1, fp);
             if (v1_format) {
-                // Head-average on the fly: mean_h(vec[h*n_kv + i]) for each i.
+                // Mean over heads for each position i.
                 std::vector<float> avg(n_kv, 0.0f);
                 for (uint32_t h = 0; h < real_n_head; ++h) {
                     const float * src = vec.data() + (size_t)h * n_kv;
@@ -367,9 +335,7 @@ struct AttnSink {
     }
 };
 
-// Derive the v1 (head-averaged) sidecar path from the primary ATNH path.
-// "foo/bar/baz.attn.bin"  →  "foo/bar/baz.v1.attn.bin"
-// Anything else → append ".v1.attn.bin" verbatim.
+// "baz.attn.bin" to "baz.v1.attn.bin". Other names get ".v1.attn.bin" appended.
 std::string derive_v1_path(const std::string & primary) {
     const std::string suffix = ".attn.bin";
     if (primary.size() > suffix.size()
@@ -379,8 +345,7 @@ std::string derive_v1_path(const std::string & primary) {
     return primary + ".v1.attn.bin";
 }
 
-// Derive the K/V sidecar path.
-// "foo/bar/baz.attn.bin"  →  "foo/bar/baz.kv.bin"
+// K/V sidecar path: "baz.attn.bin" to "baz.kv.bin".
 std::string derive_kv_path(const std::string & primary) {
     const std::string suffix = ".attn.bin";
     if (primary.size() > suffix.size()
@@ -390,24 +355,11 @@ std::string derive_kv_path(const std::string & primary) {
     return primary + ".kv.bin";
 }
 
-// Write the final-step K and V tensors per layer to a single sidecar.
-//
-// File format ("KVCP" v2, 2026-05-24):
-//   bytes [0..3]   : magic "KVCP"
-//   bytes [4..7]   : uint32 n_layers (max layer index + 1)
-//   then for each layer L in [0..n_layers-1]:
-//     uint32 has_K        (0 or 1)
-//     if has_K:
-//       uint32 K_ne[0..3]  (logical shape; may not match data_count due to
-//                          non-contiguous tensor views — use data_count for
-//                          read sizing)
-//       uint32 data_count  (actual float count written = ggml_nbytes/4)
-//       data_count × float32
-//     uint32 has_V        (0 or 1)
-//     if has_V:
-//       uint32 V_ne[0..3]
-//       uint32 data_count
-//       data_count × float32
+// Write the final-step K and V tensors per layer to one sidecar.
+// Format "KVCP": magic, uint32 n_layers, then per layer:
+//   uint32 has_K, [uint32 K_ne[4], uint32 data_count, data_count float32]
+//   uint32 has_V, [uint32 V_ne[4], uint32 data_count, data_count float32]
+// Readers should size reads by data_count, not ne.
 bool write_kv_sidecar(const std::string & path, const AttnCapture & cap) {
     FILE * fp = std::fopen(path.c_str(), "wb");
     if (!fp) {
@@ -495,12 +447,11 @@ int main(int argc, char ** argv) {
     n_prompt = n_tok;
 
     AttnCapture cap;
-    // 2026-05-24 dual-format revision: cap ALWAYS stores per-head. Output mode
-    // controlled by ATTNPROBE_OUTPUT env var:
-    //   "dual"  (default) → write BOTH X.attn.bin (ATNH) and X.v1.attn.bin (ATTN)
-    //   "atnh"           → write only X.attn.bin (ATNH per-head)
-    //   "attn"           → write only X.attn.bin renamed to ATTN (head-avg only)
-    // For backward compat: ATTNPROBE_AVERAGE_HEADS=1 → behave as "attn" mode.
+    // ATTNPROBE_OUTPUT selects the sidecars:
+    //   "dual" (default): X.attn.bin (ATNH) and X.v1.attn.bin (ATTN)
+    //   "atnh": X.attn.bin as ATNH only
+    //   "attn": X.attn.bin as head-averaged ATTN only
+    // ATTNPROBE_AVERAGE_HEADS=1 is the same as "attn".
     std::string output_mode = "dual";
     {
         const char * om = std::getenv("ATTNPROBE_OUTPUT");
@@ -508,9 +459,8 @@ int main(int argc, char ** argv) {
         const char * av = std::getenv("ATTNPROBE_AVERAGE_HEADS");
         if (av && av[0] == '1') output_mode = "attn";
     }
-    // 2026-05-24: K/V capture for KeyDiff + LaProx reimplementation.
-    // Env ATTNPROBE_CAPTURE_KV=1 enables; default off (preserves existing
-    // captures' file layout exactly). Adds one .kv.bin sidecar per prompt.
+    // ATTNPROBE_CAPTURE_KV=1 also writes a .kv.bin sidecar (KeyDiff, LaProx).
+    // Off by default.
     {
         const char * kv = std::getenv("ATTNPROBE_CAPTURE_KV");
         cap.capture_kv = (kv && kv[0] == '1');
@@ -569,7 +519,7 @@ int main(int argc, char ** argv) {
 
     const int64_t t0 = ggml_time_us();
 
-    // --- Decode the prompt as one batch (cap captures attention from last prompt query) ---
+    // Decode the prompt as one batch (cap captures attention from last prompt query)
     cap.reset();
     cap.active = true;
     {
@@ -610,9 +560,7 @@ int main(int argc, char ** argv) {
                      m.top1_prob,
                      (long long)(now - t0));
 
-        // Persist the attention snapshot that was captured during the most recent decode
-        // (= the decode that produced the logits we just consumed). Dual sinks: each
-        // writes the format it's configured for; per-head data in cap is the superset.
+        // Write the attention captured by the decode that produced these logits.
         if (want_atnh) sink_atnh.write_step(cap);
         if (want_attn) sink_attn.write_step(cap);
 
@@ -623,7 +571,7 @@ int main(int argc, char ** argv) {
             break;
         }
 
-        // Decode the chosen token. cap is reset so we capture only this one decode's attention.
+        // Reset so cap holds only the next decode's attention.
         cap.reset();
         llama_token next = tok;
         llama_batch batch = llama_batch_get_one(&next, 1);

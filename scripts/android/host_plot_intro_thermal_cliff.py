@@ -1,34 +1,8 @@
 #!/usr/bin/env python3
-"""
-FIGURE 1 (intro) - Thermal-cliff motivator.
-
-Tells the dissertation's opening story in two panels:
-  Top    - per-iteration decode tps for three Wave-3..10 runs:
-             Wave-4 vanilla (red)     -> drops 6.05 -> 4.08 over 9 iters
-             Wave-8 v1_fa2 selective  -> 9 flat iters, iter-10 kernel cliff
-             Wave-9 v1_fa2 stack      -> 10 iters >= 4.6 tps via watchdog
-  Bottom - DDR-temp trajectory per iter aligned on the same x-axis (iter idx).
-           Horizontal annotated line at 65 C marks the SD8-Gen5 kernel
-           freq-cliff trip point.
-
-Sources (ALL Wave-3..10 only; no Wave-11):
-  Wave-4 vanilla:      /home/mislam22/EndurKV_workspace/phone-logs/
-                       wave4_longdecode_1780750084/vanilla
-  Wave-8 v1_fa2 sel.:  /home/mislam22/EndurKV_workspace/phone-logs/
-                       wave8_v1fa2_sel_1780788550/v1_fa2_selective
-  Wave-9 v1_fa2 stack: /home/mislam22/EndurKV_workspace/phone-logs/
-                       wave9_v1fa2_stack_1780796320/v1_fa2_stack
-
-Each cell ships its own stress.csv (iter, t_elapsed_s, decode_tps, ...) and
-sensors.csv (wall_clock_s, ddr_temp_mc, ...). We use stress.csv for tps
-and per-iter wall-clock alignment, and join in DDR by sampling the sensors
-trace at each iteration's start/end window.
-
-Output:
-  /home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/
-  19_intro_thermal_cliff.png
-  + matching .schema.json sidecar (RES_SCHEMA)
-"""
+"""Figure 1 (intro): thermal cliff. Top, decode tok/s per iteration for wave4 vanilla, wave8
+v1_fa2 selective and wave9 v1_fa2 stack. Bottom, DDR temperature per iteration with the 65 C
+kernel cliff line. Reads stress.csv and sensors.csv from phone-logs/ and writes
+figures/relationship_plots/19_intro_thermal_cliff.png plus a .schema.json sidecar."""
 
 from __future__ import annotations
 
@@ -44,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 
-# ----- inputs ---------------------------------------------------------------
+# inputs
 
 PHONE_LOGS = "/home/mislam22/EndurKV_workspace/phone-logs"
 
@@ -96,7 +70,7 @@ CELLS = [
 ]
 
 
-# ----- helpers --------------------------------------------------------------
+# helpers
 
 def load_stress(src_dir: str) -> pd.DataFrame:
     df = pd.read_csv(os.path.join(src_dir, "stress.csv"))
@@ -148,7 +122,7 @@ def attach_ddr(stress: pd.DataFrame, sensors: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# ----- main -----------------------------------------------------------------
+# main
 
 def main() -> None:
     os.makedirs(os.path.dirname(OUT_PNG), exist_ok=True)
@@ -205,12 +179,12 @@ def main() -> None:
             }
         )
 
-    # ----- figure ----------------------------------------------------------
+    # figure
     fig, (ax_t, ax_d) = plt.subplots(
         2, 1, figsize=(11, 8.5), sharex=True
     )
 
-    # ----- TOP: per-iter tps trajectory ------------------------------------
+    # TOP: per-iter tps trajectory
     for c, df in per_cell:
         ax_t.plot(
             df["iter"], df["decode_tps"],
@@ -291,7 +265,7 @@ def main() -> None:
     ax_t.set_xticks(range(1, 12))
     ax_t.set_xlim(0.5, 11.5)
 
-    # ----- BOTTOM: DDR temp per iter ---------------------------------------
+    # BOTTOM: DDR temp per iter
     for c, df in per_cell:
         ax_d.plot(
             df["iter"], df["ddr_end_c"],
@@ -360,7 +334,7 @@ def main() -> None:
     fig.savefig(OUT_PNG, dpi=160)
     print(f"[ok] wrote {OUT_PNG}")
 
-    # ----- schema sidecar -------------------------------------------------
+    # schema sidecar
     schema = {
         "kind": "RES_SCHEMA",
         "version": 1,

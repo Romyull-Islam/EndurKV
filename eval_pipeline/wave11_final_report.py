@@ -1,82 +1,8 @@
 #!/usr/bin/env python3
-"""
-wave11_final_report.py — Wave-11 FINAL automated report generator.
+"""Wave-11 final report: scores the latest phone-logs/wave11_eval_*/ run (PPL, NIAH,
+paired tests, Pareto) and writes WAVE11_FINAL_REPORT.md, /tmp/wave11_fills.tsv and plots.
 
-Single-shot, idempotent pipeline that turns the on-device
-`phone-logs/wave11_eval_<latest>/` tree into the publication-ready Wave-11
-final report. Designed to run *while the sweep is still in progress* (it
-reports n_chunks honestly and refuses to fabricate plots) and again at the
-end without changing behaviour.
-
-What it does
-------------
-1.  Discover the *latest* `phone-logs/wave11_eval_*/` directory (by mtime).
-2.  Walk every (model, policy, bench) cell under that run AND any earlier
-    `wave11_eval_*` runs that overlap (so a re-run for a single (model,
-    policy) cell still benefits from the older numbers without
-    double-counting — the unioning logic is delegated to
-    `score_ppl.discover_meta_files` which already implements the
-    "new-layout-shadows-legacy" rule).
-3.  Compute aggregates via the already-validated `score_ppl.aggregate` +
-    `score_niah` helpers — token-weighted geometric-mean PPL with a
-    1000-sample percentile bootstrap CI, rule-based NIAH grading on the
-    canonical "sandwich at Dolores Park" needle.
-4.  Run paired significance tests via `score_sig` — paired t / Wilcoxon on
-    log(PPL) deltas and McNemar exact on NIAH contingency tables.
-5.  Pull system-level aux metrics (peak DDR °C, decode tok/s, throttle
-    count, evicted-tokens) straight from the iter-level meta.json + the
-    per-cell `sensors.csv` / `stress.csv` companion files.
-6.  Compute a 3-axis Pareto frontier on (mean_PPL ↓, peak_DDR_c ↓,
-    decode_tps ↑) per model.
-7.  Emit:
-        - figures/master_tables/WAVE11_FINAL_REPORT.md
-              Human-readable report: per-policy mean/CI/n, paired-test
-              table, NIAH heatmap (text), 3-axis Pareto flags.
-        - /tmp/wave11_fills.tsv
-              Two-column TSV (tag, value) for `fill_chapter_results.sh`.
-              Schema follows WAVE11_FILL_IN_PROTOCOL.md §3 verbatim.
-        - figures/eval_plots/wave11_final_ppl_bars.png
-              Grouped bar chart with 95% bootstrap CI error bars.
-        - figures/eval_plots/wave11_final_pareto.png
-              PPL × peak_DDR × tps bubble (3 axes via bubble size).
-        - figures/eval_plots/wave11_final_niah_heatmap.png
-              4 ctx × 8 depth grid per policy (or ordinal grid when the
-              run is using the launcher's iter<NN> stimulus layout).
-8.  Print a one-line summary with the overall verdict on stdout.
-
-Idempotency
------------
-Every output path is recomputed and overwritten on each run. There is no
-hidden state, no append-mode, no cache. Running the script twice
-back-to-back produces byte-identical results modulo timestamp; running it
-while new cells land on disk produces the right answer for the new state.
-
-Partial-data behaviour
-----------------------
-Cells with zero chunks are reported as "_pending_" rows in the report and
-their {{...}} placeholders in the fills TSV get the literal `"N/A"` value
-(which renders cleanly in the chapter table). Cells with 1..(8-1) chunks
-are reported with `n_chunks=<actual>` and a CI computed on the available
-data — the protocol's `n_chunks >= 6` invariant is checked and a WARN line
-is printed when it fails. Plots are written only if at least one cell has
-data; otherwise the script prints "[skip] no data; not writing <path>" so
-reviewers see "no figure" instead of a misleading placeholder PNG (this
-matches `wave11_interim_plot.py`'s policy).
-
-Dependencies
-------------
-stdlib only, plus matplotlib (used by the helper modules) and (optionally)
-scipy (used by `score_sig` for exact p-values). The script imports
-`score_ppl`, `score_niah`, and `score_sig` from the same `eval_pipeline/`
-directory, so no PYTHONPATH manipulation is required when invoked as
-`python eval_pipeline/wave11_final_report.py`.
-
-Usage
------
-    python eval_pipeline/wave11_final_report.py
-    python eval_pipeline/wave11_final_report.py --phone-logs-root /path
-    python eval_pipeline/wave11_final_report.py --workspace-root /path \
-        --bootstrap-samples 2000 --seed 0
+Usage: python eval_pipeline/wave11_final_report.py [--phone-logs-root P] [--bootstrap-samples N --seed S]
 """
 
 from __future__ import annotations
@@ -91,13 +17,8 @@ import re
 import sys
 import time
 
-# Determinism note: score_ppl.aggregate() seeds its per-cell bootstrap RNG
-# with `seed XOR hash((model, policy))`, where `hash(tuple)` depends on
-# Python's randomised string hash (PYTHONHASHSEED). To make this script
-# byte-deterministic across runs (so reviewers can diff the fills TSV), we
-# re-exec with PYTHONHASHSEED=0 if it isn't already set. This is a
-# best-effort guard — if the user already exported PYTHONHASHSEED they
-# clearly know what they're doing and we leave their setting alone.
+# score_ppl seeds its bootstrap RNG with hash((model, policy)), which depends on
+# PYTHONHASHSEED. Re-exec with PYTHONHASHSEED=0 (if unset) so outputs are reproducible.
 if os.environ.get("PYTHONHASHSEED") is None:
     os.environ["PYTHONHASHSEED"] = "0"
     os.execv(sys.executable, [sys.executable] + sys.argv)
@@ -109,7 +30,7 @@ import matplotlib
 matplotlib.use("Agg")  # headless
 import matplotlib.pyplot as plt
 
-# Local modules — re-use the already-validated aggregators.
+# Local scoring modules.
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
@@ -119,15 +40,10 @@ import score_niah  # noqa: E402
 import score_sig  # noqa: E402
 
 
-# --------------------------------------------------------------------------- #
-# Constants — kept in one place so policy/model name canonicalisation is
-# easy to audit.
-# --------------------------------------------------------------------------- #
+# Constants
 
-# On-disk model directory name -> short tag used by the chapter placeholders.
-# Wave-11 launcher writes the gguf-stem; the chapter uses the manifest's
-# `models:` field. The mapping is intentionally lenient: unknown on-disk names
-# fall through to `_canon_model` which lower-cases and strips punctuation.
+# On-disk model dir name (gguf stem) to the short tag used by chapter placeholders.
+# Unknown names fall back to a lower-cased, punctuation-stripped tag.
 MODEL_CANON = {
     "Phi-3-mini-128k": "phi3",
     "Phi-3-mini-128k-instruct": "phi3",
@@ -138,9 +54,7 @@ MODEL_CANON = {
     "gemma-2-2b-it": "gemma2b",
 }
 
-# Policy canonicalisation. v1_fa2_stack appears as "v1fa2" in the chapter
-# placeholders; the protocol document calls this out explicitly. The reverse
-# (chapter -> disk) is not needed because we only read disk names.
+# Policy canonicalisation. v1_fa2_stack appears as "v1fa2" in the chapter placeholders.
 POLICY_CANON = {
     "v1_fa2_stack": "v1fa2",
     "v1_fa2": "v1fa2",
@@ -152,10 +66,7 @@ POLICY_CANON = {
     "h2o": "h2o",
 }
 
-# Chapter-recognised policies (the canonical set the chapter table cells refer
-# to). v1 is reported in the report but NOT in the chapter placeholder TSV
-# because the chapter's primary tables compare {vanilla, streamingllm, h2o,
-# tova, v1fa2} — v1 is a sibling experiment.
+# Policies in the chapter tables. v1 appears in the report but not in the fills TSV.
 CHAPTER_POLICIES = ("vanilla", "streamingllm", "h2o", "tova", "v1fa2")
 
 # Pre-registered primary contrast for paired tests.
@@ -174,16 +85,14 @@ NEEDLE_KEY = score_niah.NEEDLE_KEY
 CTX_LENGTHS = score_niah.CTX_LENGTHS
 DEPTHS = score_niah.DEPTHS
 
-# Protocol thresholds — declared, not measured. See WAVE11_FILL_IN_PROTOCOL §2.5.
+# Protocol thresholds, declared not measured (WAVE11_FILL_IN_PROTOCOL §2.5).
 DEFAULT_EDITORIAL_TARGETS = {
     "v1fa2_ppl_gap_target": "0.10",   # nats
     "v1fa2_tps_gap_target": "0.50",   # tok/s
 }
 
 
-# --------------------------------------------------------------------------- #
 # Path resolution
-# --------------------------------------------------------------------------- #
 
 def default_workspace_root() -> Path:
     """Resolve workspace root assuming <ws>/EndurKV/eval_pipeline/<this>.py."""
@@ -195,8 +104,7 @@ def default_endurkv_root() -> Path:
 
 
 def latest_wave11_run(phone_logs_root: Path) -> Optional[Path]:
-    """Most-recent `wave11_eval_*` dir by mtime (consistent with the interim
-    plotter). Returns None when no such directory exists yet."""
+    """Most recent `wave11_eval_*` dir by mtime, or None."""
     cands = sorted(
         phone_logs_root.glob("wave11_eval_*"),
         key=lambda p: p.stat().st_mtime,
@@ -205,9 +113,7 @@ def latest_wave11_run(phone_logs_root: Path) -> Optional[Path]:
     return cands[0] if cands else None
 
 
-# --------------------------------------------------------------------------- #
 # Canonicalisation helpers
-# --------------------------------------------------------------------------- #
 
 def canon_model(name: str) -> str:
     if name in MODEL_CANON:
@@ -220,16 +126,14 @@ def canon_model(name: str) -> str:
         return "llama1b"
     if "gemma" in n and "2b" in n:
         return "gemma2b"
-    return n  # unknown — keep deterministic but unrecognised tag
+    return n  # unknown - keep deterministic but unrecognised tag
 
 
 def canon_policy(name: str) -> str:
     return POLICY_CANON.get(name, name)
 
 
-# --------------------------------------------------------------------------- #
 # Aux-metric extraction from meta.json + sensors/stress companions
-# --------------------------------------------------------------------------- #
 
 def _read_meta(meta_path: Path) -> Optional[dict]:
     return score_ppl._load_meta_tolerant(str(meta_path))
@@ -244,9 +148,7 @@ def _safe_float(x) -> Optional[float]:
 
 
 def _peak_ddr_from_sensors(sensors_csv: Path) -> Optional[float]:
-    """Return max(ddr_temp_mc)/1000 → °C across the sensors.csv. Missing /
-    empty / non-numeric DDR column → None. Tolerates the launcher's huge
-    column count by indexing the header dict."""
+    """Peak DDR temperature (°C) in sensors.csv, or None if the column is missing or empty."""
     if not sensors_csv.is_file():
         return None
     try:
@@ -267,10 +169,8 @@ def _peak_ddr_from_sensors(sensors_csv: Path) -> Optional[float]:
 
 
 def _decode_tps_from_stress(stress_csv: Path) -> Optional[float]:
-    """Mean of finite `decode_tps` rows in stress.csv. The launcher emits
-    bogus 1.99e9 values when decode_ms == 0 (see Wave-11 audit); we filter
-    those by requiring 0 < tps < 1e6 which is enough to clip the sentinel
-    without throwing away any real measurement."""
+    """Mean decode_tps in stress.csv. Keeps 0 < tps < 1e6 to drop the 1.99e9 value the
+    launcher writes when decode_ms == 0."""
     if not stress_csv.is_file():
         return None
     vals: List[float] = []
@@ -290,10 +190,8 @@ def _decode_tps_from_stress(stress_csv: Path) -> Optional[float]:
 
 
 def _throttle_count_from_sensors(sensors_csv: Path) -> int:
-    """Count of rows where any `cpu*_cool_state` column is non-zero (kernel-
-    forced thermal throttle event). Treats blank cells as 0. Returns 0 on a
-    missing file rather than NaN — the chapter table prefers integer counts.
-    """
+    """Rows where any cpu*_cool_state is non-zero (kernel thermal throttle).
+    Blank cells count as 0, and a missing file returns 0."""
     if not sensors_csv.is_file():
         return 0
     n = 0
@@ -320,8 +218,7 @@ def _throttle_count_from_sensors(sensors_csv: Path) -> int:
 
 
 def _evicted_tokens_from_meta(meta: dict) -> Optional[int]:
-    """Best-effort evicted-tokens count. Different launcher versions use
-    different field names; we try the most common ones."""
+    """Evicted-token count. Launcher versions use different field names, so try the common ones."""
     for k in ("evicted_total_decode", "evicted", "evicted_tokens",
               "n_evicted_tokens"):
         v = meta.get(k)
@@ -347,9 +244,8 @@ def _evicted_tokens_from_meta(meta: dict) -> Optional[int]:
 
 def aux_metrics_for_cell(run_dir: Path, model_disk: str, policy_disk: str
                          ) -> Dict[str, Optional[float]]:
-    """For a (model, policy) PPL cell, collect peak_DDR_c, mean decode_tps,
-    throttle count, and mean evicted tokens. Reads the cell-level sensors.csv
-    / stress.csv (which sit at .../ppl/) and the per-iter meta.json files."""
+    """Peak DDR, mean decode tps, throttle count and mean evicted tokens for one PPL cell,
+    from the cell's sensors.csv / stress.csv (under .../ppl/) and per-iter meta.json."""
     cell_dir = run_dir / model_disk / policy_disk / "ppl"
     peak_ddr = _peak_ddr_from_sensors(cell_dir / "sensors.csv")
     tps = _decode_tps_from_stress(cell_dir / "stress.csv")
@@ -374,15 +270,11 @@ def aux_metrics_for_cell(run_dir: Path, model_disk: str, policy_disk: str
     }
 
 
-# --------------------------------------------------------------------------- #
 # Pareto frontier (3-axis: PPL ↓, DDR ↓, TPS ↑)
-# --------------------------------------------------------------------------- #
 
 def pareto_flags(cells: Dict[Tuple[str, str], Dict]) -> Dict[Tuple[str, str], str]:
-    """Per model, mark each (model, policy) as "yes" if it lies on the 3-axis
-    Pareto frontier on (mean_ppl ↓, peak_ddr_c ↓, decode_tps ↑), "no"
-    otherwise, "N/A" if any axis is missing. Ties never dominate.
-    """
+    """Per model, "yes" if a policy is on the Pareto front of (mean_ppl ↓, peak_ddr_c ↓,
+    decode_tps ↑), else "no", or "N/A" if an axis is missing. Ties never dominate."""
     by_model: Dict[str, List[Tuple[str, Dict]]] = defaultdict(list)
     for (m, p), info in cells.items():
         by_model[m].append((p, info))
@@ -415,16 +307,11 @@ def pareto_flags(cells: Dict[Tuple[str, str], Dict]) -> Dict[Tuple[str, str], st
     return out
 
 
-# --------------------------------------------------------------------------- #
-# NIAH grid construction (4 ctx × 8 depth) — re-use score_niah's parsers but
-# remap launcher ordinals via the wave11_cells.json manifest when the on-disk
-# layout uses iter<NN>/ instead of niah_c<CTX>_d<DD>/.
-# --------------------------------------------------------------------------- #
+# NIAH grid (4 ctx × 8 depth). Launcher ordinals (iter<NN>/) are mapped back to
+# (ctx, depth) through the wave11_cells.json manifest.
 
 def _load_niah_ordinal_map(endurkv_root: Path) -> Dict[int, Tuple[int, int]]:
-    """Returns {ordinal -> (ctx, depth)} from wave11_cells.json's
-    `niah_stimuli_selected` block. Used to project launcher's iter<NN>
-    convention back onto the canonical (ctx, depth) grid."""
+    """{ordinal: (ctx, depth)} from the `niah_stimuli_selected` block of wave11_cells.json."""
     manifest_path = endurkv_root / "eval_pipeline" / "wave11_cells.json"
     out: Dict[int, Tuple[int, int]] = {}
     if not manifest_path.is_file():
@@ -450,12 +337,8 @@ def _load_niah_ordinal_map(endurkv_root: Path) -> Dict[int, Tuple[int, int]]:
 def collect_niah(phone_logs_root: Path, endurkv_root: Path
                  ) -> Tuple[Dict[Tuple[str, str], Dict[Tuple[int, int], bool]],
                             Dict[Tuple[str, str], Dict[str, int]]]:
-    """Return (grid, per_cell) where
-        grid[(model_canon, policy_canon)][(ctx, depth)] = bool
-        per_cell[(model_canon, policy_canon)] = {"correct": n, "total": n}
-    Uses score_niah's path parser plus the ordinal->grid map from the
-    manifest for the launcher's iter<NN> layout.
-    """
+    """Return (grid, per_cell): grid[(model, policy)][(ctx, depth)] = bool and
+    per_cell[(model, policy)] = {"correct": n, "total": n}."""
     ord_map = _load_niah_ordinal_map(endurkv_root)
     gen_files = score_niah.find_gen_files(phone_logs_root)
 
@@ -483,33 +366,22 @@ def collect_niah(phone_logs_root: Path, endurkv_root: Path
         if depth >= 0:
             grid[(m_can, p_can)][(ctx, depth)] = ok
         else:
-            # Launcher ordinal layout (iter<NN>); ctx slot encodes ordinal.
+            # Launcher ordinal layout (iter<NN>), the ctx slot holds the ordinal.
             cell = ord_map.get(int(ctx))
             if cell is not None:
                 grid[(m_can, p_can)][cell] = ok
     return grid, per_cell
 
 
-# --------------------------------------------------------------------------- #
 # Top-level aggregation
-# --------------------------------------------------------------------------- #
 
 def aggregate_all(phone_logs_root: Path,
                   endurkv_root: Path,
                   run_dir: Optional[Path],
                   n_bootstrap: int,
                   seed: int) -> Dict:
-    """Returns a single dict with:
-        cells[(model_canon, policy_canon)] = {
-            mean_ppl, ci_low, ci_high, std_dev, n_chunks, sum_tokens,
-            weighted_mean_nll,
-            peak_ddr_c, decode_tps, throttle_count, evicted_tokens,
-            model_disk, policy_disk
-        }
-        niah_grid, niah_per_cell  (per collect_niah)
-        sig_ppl, sig_niah  (paired tests from score_sig)
-        ppl_log_per_iter  (used both for sig and for diagnostics)
-    """
+    """One dict with cells[(model, policy)] (PPL stats plus aux metrics), niah_grid,
+    niah_per_cell, sig_ppl, sig_niah and ppl_log_per_iter."""
     # PPL aggregate via score_ppl (handles bench-aware + legacy layouts).
     ppl_stats_disk = score_ppl.aggregate(
         phone_logs_root=str(phone_logs_root),
@@ -517,9 +389,8 @@ def aggregate_all(phone_logs_root: Path,
         seed=seed,
     )
 
-    # Build the canonicalised cells dict and pull aux metrics from the
-    # *latest* run dir (so we don't accidentally read sensors.csv from an
-    # earlier run that overlapped on a single (model, policy)).
+    # Aux metrics come from the latest run dir only, so an older overlapping
+    # run's sensors.csv is never read.
     cells: Dict[Tuple[str, str], Dict] = {}
     for (model_disk, policy_disk), st in ppl_stats_disk.items():
         m_can = canon_model(model_disk)
@@ -538,7 +409,7 @@ def aggregate_all(phone_logs_root: Path,
     # NIAH grid.
     niah_grid, niah_per_cell = collect_niah(phone_logs_root, endurkv_root)
 
-    # Significance — re-use score_sig.aggregate_ppl/niah on the same root.
+    # Paired tests via score_sig on the same root.
     ppl_log = score_sig.aggregate_ppl(str(phone_logs_root))
     niah_bool = score_sig.aggregate_niah(str(phone_logs_root))
     sig_ppl = score_sig.paired_ppl_tests(ppl_log)
@@ -557,9 +428,7 @@ def aggregate_all(phone_logs_root: Path,
     }
 
 
-# --------------------------------------------------------------------------- #
 # Markdown report
-# --------------------------------------------------------------------------- #
 
 def _fmt(x, fmt: str = "{:.4f}", na: str = "N/A") -> str:
     if x is None:
@@ -586,7 +455,7 @@ def _fmt_g(x, sig: int = 4, na: str = "N/A") -> str:
 
 
 def _model_order(cells: Dict[Tuple[str, str], Dict]) -> List[str]:
-    """Stable display order: phi3 → llama1b → gemma2b → others sorted."""
+    """Stable display order: phi3, llama1b, gemma2b, then the rest sorted."""
     seen = sorted({m for (m, _p) in cells.keys()})
     pref = ["phi3", "llama1b", "gemma2b"]
     ordered = [m for m in pref if m in seen] + [m for m in seen if m not in pref]
@@ -636,7 +505,7 @@ def render_report_md(agg: Dict,
     lines.append(f"**Overall verdict:** {verdict}")
     lines.append("")
 
-    # -- Per-policy PPL table --------------------------------------------- #
+    # Per-policy PPL table
     lines.append("## 1. Per-(model, policy) PPL aggregate")
     lines.append("")
     lines.append("| Model | Policy | mean_PPL | CI_low | CI_high | log_std | n_chunks | peak_DDR_°C | decode_tps | throttle | evicted_tok | Pareto |")
@@ -670,7 +539,7 @@ def render_report_md(agg: Dict,
             )
     lines.append("")
 
-    # -- Paired tests (PPL) ----------------------------------------------- #
+    # Paired tests (PPL)
     lines.append("## 2. Paired significance tests on log(PPL)")
     lines.append("")
     if sig_ppl:
@@ -711,7 +580,7 @@ def render_report_md(agg: Dict,
                      "overlapping chunks for any model._")
     lines.append("")
 
-    # -- McNemar (NIAH) --------------------------------------------------- #
+    # McNemar (NIAH)
     lines.append("## 3. Paired McNemar exact tests on NIAH")
     lines.append("")
     if sig_niah:
@@ -745,7 +614,7 @@ def render_report_md(agg: Dict,
         lines.append("_No NIAH pair data._")
     lines.append("")
 
-    # -- Primary contrast quick-look -------------------------------------- #
+    # Primary contrast quick-look
     A, B = PRIMARY_CONTRAST
     lines.append(f"## 4. Pre-registered primary contrast: `{A}` vs `{B}`")
     lines.append("")
@@ -771,7 +640,7 @@ def render_report_md(agg: Dict,
                      "policies to have completed at least 2 paired chunks._")
     lines.append("")
 
-    # -- NIAH heatmap (text) ---------------------------------------------- #
+    # NIAH heatmap (text)
     lines.append("## 5. NIAH pass/fail heatmap (rows = ctx, cols = depth %)")
     lines.append("")
     lines.append("Legend: `O` = correct, `.` = wrong, `?` = missing.")
@@ -809,7 +678,7 @@ def render_report_md(agg: Dict,
         lines.append("_No NIAH generations on disk yet._")
         lines.append("")
 
-    # -- Health checks ---------------------------------------------------- #
+    # Health checks
     lines.append("## 6. Health invariants (per WAVE11_FILL_IN_PROTOCOL §5.3)")
     lines.append("")
     invariants: List[str] = []
@@ -850,7 +719,7 @@ def render_report_md(agg: Dict,
     lines.extend(invariants)
     lines.append("")
 
-    # -- Artefacts pointer block ------------------------------------------ #
+    # Artefacts pointer block
     lines.append("## 7. Artefacts written by this run")
     lines.append("")
     lines.append(f"- `{PATH_FINAL_REPORT_MD}` (this file)")
@@ -864,14 +733,11 @@ def render_report_md(agg: Dict,
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
 
-# --------------------------------------------------------------------------- #
 # Plots
-# --------------------------------------------------------------------------- #
 
 def _unlink_stale(out_path: Path, reason: str) -> None:
-    """Remove a stale output PNG so a partial run can't be mistaken for a
-    richer earlier run's output. Logged to stderr so reviewers can see when
-    a previously-written figure has been retracted by a re-run."""
+    """Delete a stale output PNG so a partial run is not mistaken for an earlier,
+    fuller one. Logged to stderr."""
     try:
         if out_path.is_file():
             out_path.unlink()
@@ -941,9 +807,8 @@ def render_ppl_bars(cells: Dict[Tuple[str, str], Dict], out_path: Path) -> None:
 def render_pareto_bubble(cells: Dict[Tuple[str, str], Dict],
                          pareto: Dict[Tuple[str, str], str],
                          out_path: Path) -> None:
-    """PPL × peak_DDR × decode_tps bubble plot. X = mean_PPL, Y = peak_DDR_c,
-    bubble size = decode_tps. One marker per (model, policy); Pareto-front
-    cells are outlined in black."""
+    """Bubble plot, x = mean PPL, y = peak DDR °C, size = decode tps.
+    Pareto-front cells are outlined in black."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     pts: List[Tuple[str, str, float, float, float]] = []
     for (m, p), info in cells.items():
@@ -993,7 +858,7 @@ def render_pareto_bubble(cells: Dict[Tuple[str, str], Dict],
     ax.set_title("Wave-11 FINAL Pareto: PPL × peak_DDR × tps\n"
                  "(bubble size ∝ decode tok/s; black outline = on Pareto front)")
     ax.grid(linestyle=":", alpha=0.5)
-    # De-dup legend by (m only) — too many entries otherwise.
+    # De-dup legend by (m only) - too many entries otherwise.
     handles = [
         plt.Line2D([0], [0], marker="o", linestyle="None",
                    color=marker_for_model[m], label=m, markersize=8)
@@ -1075,9 +940,7 @@ def render_niah_heatmap(grid: Dict[Tuple[str, str], Dict[Tuple[int, int], bool]]
     plt.close(fig)
 
 
-# --------------------------------------------------------------------------- #
 # wave11_fills.tsv emission
-# --------------------------------------------------------------------------- #
 
 def _round_4g(x) -> str:
     v = _safe_float(x)
@@ -1108,9 +971,8 @@ def _round_int(x) -> str:
 
 
 def emit_fills_tsv(agg: Dict, out_path: Path) -> None:
-    """Generate /tmp/wave11_fills.tsv with TAB-separated (tag, value) rows.
-    Schema follows WAVE11_FILL_IN_PROTOCOL §3 verbatim.
-    """
+    """Write /tmp/wave11_fills.tsv, tab-separated (tag, value) rows.
+    Schema: WAVE11_FILL_IN_PROTOCOL §3."""
     cells = agg["cells"]
     pareto = agg["pareto"]
     niah_grid = agg["niah_grid"]
@@ -1121,7 +983,7 @@ def emit_fills_tsv(agg: Dict, out_path: Path) -> None:
                 f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')}")
     rows.append("# schema: <tag>\\t<value> (TAB-separated, '#' lines = comments)")
 
-    # ------- PPL primary placeholders per (model, policy) -------------- #
+    # PPL primary placeholders per (model, policy)
     rows.append("# --- PPL primary placeholders ---")
     # Look up vanilla NLL per model for derived deltas.
     vanilla_nll: Dict[str, float] = {}
@@ -1140,9 +1002,7 @@ def emit_fills_tsv(agg: Dict, out_path: Path) -> None:
         for p in CHAPTER_POLICIES:
             info = cells.get((m, p))
             if info is None:
-                # Emit "N/A" rows for missing chapter-recognised cells so the
-                # fill-in pass produces a legible "N/A" instead of an
-                # unfilled tag (the chapter's CI gate will surface this).
+                # Missing cells get "N/A" so no chapter tag is left unfilled.
                 for suf, _ in [
                     ("ppl_mean", "N/A"), ("ppl_ci_low", "N/A"),
                     ("ppl_ci_high", "N/A"), ("ppl_logstd", "N/A"),
@@ -1162,7 +1022,7 @@ def emit_fills_tsv(agg: Dict, out_path: Path) -> None:
             rows.append(f"{m}_{p}_decode_tps\t{_round_2f(info.get('decode_tps'))}")
             rows.append(f"{m}_{p}_throttle_count\t{int(info.get('throttle_count', 0) or 0)}")
 
-    # ------- Derived placeholders -------------------------------------- #
+    # Derived placeholders
     rows.append("# --- PPL derived placeholders ---")
     for m in _model_order(cells):
         for p in ("streamingllm", "h2o", "tova", "v1fa2"):
@@ -1176,7 +1036,7 @@ def emit_fills_tsv(agg: Dict, out_path: Path) -> None:
                 continue
             d_nats = nll - vanilla_nll[m]
             rows.append(f"{m}_{p}_ppl_delta\t{d_nats:.3f}")
-    # Percent delta — currently only used by the chapter for phi3_v1fa2.
+    # Percent delta - currently only used by the chapter for phi3_v1fa2.
     for m in _model_order(cells):
         info = cells.get((m, "v1fa2"))
         if info is None or m not in vanilla_ppl:
@@ -1215,13 +1075,13 @@ def emit_fills_tsv(agg: Dict, out_path: Path) -> None:
         rows.append("h2o_v1fa2_gap_nats\tN/A")
         rows.append("h2o_v1fa2_tps_gap\tN/A")
 
-    # ------- Pareto flags ---------------------------------------------- #
+    # Pareto flags
     rows.append("# --- Pareto flags (phi3) ---")
     for p in CHAPTER_POLICIES:
         flag = pareto.get(("phi3", p), "N/A")
         rows.append(f"phi3_{p}_pareto\t{flag}")
 
-    # ------- NIAH primary placeholders --------------------------------- #
+    # NIAH primary placeholders
     rows.append("# --- NIAH primary placeholders ---")
     niah_depths_for_chapter = (0, 87)  # the two depths the chapter shows
     for m in _model_order(cells):
@@ -1233,7 +1093,7 @@ def emit_fills_tsv(agg: Dict, out_path: Path) -> None:
                         rows.append(f"niah_{m}_{p}_c{ctx}_d{d}\tN/A")
                     else:
                         rows.append(f"niah_{m}_{p}_c{ctx}_d{d}\t{int(bool(v))}")
-    # Derived row means (phi3 v1fa2 only — the chapter only shows that one).
+    # Derived row means (phi3 v1fa2 only - the chapter only shows that one).
     for ctx in CTX_LENGTHS:
         vals = []
         for d in niah_depths_for_chapter:
@@ -1255,17 +1115,17 @@ def emit_fills_tsv(agg: Dict, out_path: Path) -> None:
             rows.append(f"niah_phi3_{tag_policy}_overall\t"
                         f"{v['correct'] / v['total']:.2f}")
 
-    # ------- Editorial / target constants ------------------------------ #
+    # Editorial / target constants
     rows.append("# --- editorial targets (declared, not measured) ---")
     for k, v in DEFAULT_EDITORIAL_TARGETS.items():
         rows.append(f"{k}\t{v}")
 
-    # ------- K-sweep placeholders (read from any wave11_ksweep_* run) -- #
+    # K-sweep placeholders (read from any wave11_ksweep_* run)
     rows.append("# --- K-sweep (best-effort; left as N/A if no ksweep run) ---")
     for K in (256, 384, 512, 1024):
         rows.append(f"ksweep_K{K}_ppl_mean\tN/A")
 
-    # ------- Stray docs-only tag --------------------------------------- #
+    # Stray docs-only tag
     rows.append("# skip — documentation-only tag (kept literal in chapter)")
     rows.append("# name\t(intentionally left unfilled)")
 
@@ -1273,15 +1133,11 @@ def emit_fills_tsv(agg: Dict, out_path: Path) -> None:
     out_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
 
-# --------------------------------------------------------------------------- #
 # Overall verdict
-# --------------------------------------------------------------------------- #
 
 def overall_verdict(agg: Dict) -> str:
-    """One-line, conservative verdict string. Intentionally avoids
-    over-claiming: the chapter's actual stance is derived from the paired
-    tests + the Pareto frontier, not from this one line, so we stick to
-    factual statements about the current state of the data."""
+    """One-line summary of the current data. The chapter's conclusions come from the
+    paired tests and Pareto front, not from this line."""
     cells = agg["cells"]
     if not cells:
         return ("NO DATA — no Wave-11 PPL cells found under "
@@ -1293,8 +1149,7 @@ def overall_verdict(agg: Dict) -> str:
     n_models_present = len({m for (m, _p) in cells.keys()})
     n_policies_present = len({p for (_m, p) in cells.keys()})
 
-    # Did the primary contrast trigger? Only call this a "verdict" once we
-    # have at least one cell with the primary pair completed.
+    # Only report a verdict once at least one primary-pair cell is complete.
     A, B = PRIMARY_CONTRAST
     prim_hits = [r for r in agg["sig_ppl"]
                  if {r["a"], r["b"]} == {A, B}]
@@ -1317,9 +1172,7 @@ def overall_verdict(agg: Dict) -> str:
             f"{n_models_present} model(s), {n_policies_present} policy(ies)")
 
 
-# --------------------------------------------------------------------------- #
 # CLI
-# --------------------------------------------------------------------------- #
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,

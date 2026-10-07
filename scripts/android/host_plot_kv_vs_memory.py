@@ -1,33 +1,8 @@
 #!/usr/bin/env python3
-"""
-PLOT 12: KV cache growth vs DDR (memory) temperature.
-
-The DDR temperature sensor (ddr_temp_mc, millidegrees C) is the ONLY
-DRAM-side temperature in the sensor file, so it is the cleanest signal
-for "memory got hotter because the working set grew".
-
-Inputs (K-sweep / long-decode cells):
-  - Wave-4  : phone-logs/wave4_longdecode_1780750084/{vanilla, v1_K512, v1_fa_K512}
-  - Wave-9  : phone-logs/wave9_v1fa2_stack_1780796320/v1_fa2_stack
-  - Wave-10 : phone-logs/wave10_ksweep_1780815847/{K256, K384, K1024}
-
-Each cell provides:
-  - sensors.csv        : wall_clock_s / monotonic_s + ddr_temp_mc
-  - stress.csv         : per-iter t_elapsed_s (relative to that cell's sensor t0)
-  - iter*/steps.csv    : per-step wall_us (us since iter's prefill start) + n_kv_cells
-
+"""Plot 12: KV cache size vs DDR temperature (ddr_temp_mc, the only DRAM-side sensor).
+Top panel: cache size and DDR temp over time per cell. Bottom: scatter with linear fit.
+Inputs: Wave-4/9/10 cells under phone-logs/ (sensors.csv, stress.csv, iter*/steps.csv).
 Output: figures/relationship_plots/12_kv_cache_vs_memory_temp.png
-
-Two-panel figure:
-  Top    : time-series of cache size (left axis) + DDR temp (right axis),
-           one line-pair per policy. Horizontal dashed line at 65 C
-           marking the kernel DDR throttle trip.
-  Bottom : scatter of cache_size vs DDR_temp_C across ALL samples from
-           ALL cells, with linear regression, R^2 in the title, and a
-           "thermal danger zone" annotation for the DDR > 60 C cluster.
-
-stdlib + numpy + matplotlib only (consistent with the rest of the repo;
-the K-sweep version uses pandas, but we keep this script lean).
 """
 
 from __future__ import annotations
@@ -42,9 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-# ---------------------------------------------------------------------------
 # Config
-# ---------------------------------------------------------------------------
 
 WAVE4_DIR = Path(
     "/home/mislam22/EndurKV_workspace/phone-logs/wave4_longdecode_1780750084"
@@ -77,9 +50,7 @@ CELLS = [
 ]
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 def _to_float(x):
     try:
@@ -105,13 +76,8 @@ def load_sensors(cell_dir: Path):
 
 
 def load_cache_series(cell_dir: Path):
-    """Per-step (t_s, n_kv) concatenated across iters, in cell-wall time.
-
-    steps.csv wall_us is microseconds since that iter's prefill start;
-    stress.csv t_elapsed_s gives that iter's offset relative to the cell's
-    sensor t0 (the first sensors monotonic_s sample). So a step's absolute
-    cell-wall time is t_iter + wall_us/1e6.
-    """
+    """Per-step (t_s, n_kv) across iters in cell time: t = iter offset from stress.csv
+    plus steps.csv wall_us / 1e6."""
     iter_start = {}
     with open(cell_dir / "stress.csv", newline="") as fh:
         for row in csv.DictReader(fh):
@@ -152,10 +118,7 @@ def steady_state_mean(t, y, tail_frac=0.6):
 
 
 def join_cache_to_sensors(cache_t, cache_n, sens_t, sens_ddr):
-    """For each cache sample, look up the nearest-in-time DDR temp.
-
-    Returns matched arrays (n_kv, ddr_c) of equal length.
-    """
+    """Match each cache sample to the nearest-in-time DDR temp. Returns (n_kv, ddr_c)."""
     if cache_t.size == 0 or sens_t.size == 0:
         return np.array([]), np.array([])
     # sensors are uniformly sampled and sorted; cache samples are sorted.
@@ -172,9 +135,7 @@ def join_cache_to_sensors(cache_t, cache_n, sens_t, sens_ddr):
     return cache_n[mask], ddr_at_cache[mask]
 
 
-# ---------------------------------------------------------------------------
 # Main
-# ---------------------------------------------------------------------------
 
 def main() -> int:
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -210,10 +171,7 @@ def main() -> int:
         print("ERROR: no cell data loaded", file=sys.stderr)
         return 1
 
-    # Wave-4 swing used in the title: peak-DDR delta between the hottest
-    # Wave-4 cell and the coolest (= K=512 budgeted v1). On this device that
-    # peak-vs-peak gap is the headline 8.5 C number (62.9 C vanilla -
-    # 54.4 C v1_K512); steady-state means show a smaller ~5.6 C swing.
+    # Title swing: peak-DDR difference between the hottest and coolest Wave-4 cells.
     swing_c = float("nan")
     steady_swing_c = float("nan")
     by_label = {c["label"]: c for c in cells_data}
@@ -227,7 +185,7 @@ def main() -> int:
         if steady:
             steady_swing_c = max(steady) - min(steady)
 
-    # ----- Pool ALL matched samples for the global scatter / regression -----
+    # Pool ALL matched samples for the global scatter / regression
     all_kv  = np.concatenate([c["kv_matched"]  for c in cells_data]) \
         if any(c["kv_matched"].size for c in cells_data) else np.array([])
     all_ddr = np.concatenate([c["ddr_matched"] for c in cells_data]) \
@@ -242,9 +200,7 @@ def main() -> int:
         ss_tot = float(np.sum((all_ddr - np.mean(all_ddr)) ** 2))
         r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
 
-    # ---------------------------------------------------------------------
     # Figure: 2 stacked panels
-    # ---------------------------------------------------------------------
     fig = plt.figure(figsize=(12.0, 10.5))
     gs = fig.add_gridspec(2, 1, height_ratios=[1.1, 1.0], hspace=0.28)
     ax_top = fig.add_subplot(gs[0])
@@ -265,9 +221,7 @@ def main() -> int:
         title = "KV cache size is the binding lever for DRAM temperature"
     fig.suptitle(title, fontsize=14, fontweight="bold", y=0.995)
 
-    # -------------------------------------------------------------------
     # TOP PANEL: time-series, cache + DDR per cell
-    # -------------------------------------------------------------------
     ax_top.set_title(
         "Cache size and DDR temperature evolve together "
         "(solid = KV cache; dashed = DDR temp)",
@@ -308,9 +262,7 @@ def main() -> int:
         title="cache traces", title_fontsize=8,
     )
 
-    # -------------------------------------------------------------------
     # BOTTOM PANEL: scatter + regression
-    # -------------------------------------------------------------------
     ax_bot.set_title(
         "Scatter: every (n_kv_cells, DDR °C) sample across "
         "Wave-4 / Wave-9 / Wave-10 cells",
@@ -389,7 +341,7 @@ def main() -> int:
     fig.savefig(OUT_PATH, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
-    # ---------------- schema sidecar ----------------
+    # schema sidecar
     import json
     schema = {
         "kind": "ANALYSIS_SCHEMA",
@@ -429,7 +381,7 @@ def main() -> int:
     with open(SCHEMA_PATH, "w") as fh:
         json.dump(schema, fh, indent=2)
 
-    # --------------- console summary --------------
+    # console summary
     print(f"wrote {OUT_PATH} ({os.path.getsize(OUT_PATH)/1024:.1f} KB)")
     print(f"wrote {SCHEMA_PATH}")
     print(f"  global OLS: slope={slope:.4f} C/cell, "

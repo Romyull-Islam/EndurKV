@@ -1,43 +1,8 @@
 #!/usr/bin/env python3
-"""
-host_simulate_eviction_policies.py — offline simulation of KV-cache eviction
-policies on attention sidecars captured by attention_probe.
+"""Offline simulation of KV eviction policies on attention_probe sidecars.
 
-For each prompt we already have .attn.bin (per-step, per-layer, n_kv float32
-attention probabilities) and .entropy.csv (per-step H_nats). We use these to
-simulate, without re-running on phone, what would have happened at decode
-step t if we had been operating with a budget-K cache and a particular
-eviction rule.
-
-The metric is per-step, per-layer KL divergence between the full attention
-distribution and the renormalized "kept-only" distribution:
-
-    p_evicted_i = (p_full_i * mask_i) / sum_j (p_full_j * mask_j)
-    KL = sum_i p_full_i * log(p_full_i / p_evicted_i)
-
-Lower KL = closer to no-eviction-at-all = better preserved generation.
-
-Policies implemented:
-    full        — keep everything (reference, KL = 0)
-    local       — keep K most recent positions
-    h2o         — accumulated attention score; K/2 heavy hitters + K/2 recent
-    h2o_norec   — same scoring, K=15/16 heavy + 1/16 recent  (slide-24 finding)
-    endurkv     — h2o-style scoring, but at each step the prune-fraction is
-                  modulated by entropy:  evicted_now = base * (1 - H_tilde)
-                  We approximate this by giving uncertain steps more cache:
-                  K_t = K_base + (K_max - K_base) * H_tilde_t
-    streamingllm — first 4 (sink) + K-4 most recent
-    oracle      — Belady-style upper bound: keep the K positions whose
-                  removal would minimize KL at the NEXT step (cheats by
-                  looking ahead one step). Useful as a topline only.
-
-Output:
-    <log_dir>_eviction/policy_results.csv     — long-form (prompt, layer, step,
-                                                policy, budget, kl)
-    <log_dir>_eviction/per_policy_summary.csv — aggregated by policy
-    <log_dir>_eviction/per_task_summary.csv   — aggregated by (policy, task)
-    <log_dir>_eviction/01_kl_by_policy.png    — boxplot of step-mean KL
-    <log_dir>_eviction/02_kl_vs_budget.png    — KL as a function of budget K
+Replays .attn.bin and .entropy.csv and scores each policy by per-step, per-layer
+KL(full attention || renormalized kept attention). Writes CSVs and plots to <log_dir>_eviction/.
 """
 from __future__ import annotations
 
@@ -54,13 +19,9 @@ import pandas as pd
 WORKSPACE = Path(os.environ.get("WORKSPACE", r"D:/Research/EndurKV_workspace"))
 
 
-# ---------- attn.bin parser → padded 3D array ------------------------------
+# attn.bin parser
 def load_attn_full(path: Path):
-    """Return (attn[steps, layers, max_n_kv], n_kv_at_step[steps]).
-
-    Cells beyond per-step n_kv are filled with 0.0. n_kv_at_step[t] is the
-    actual length for step t.
-    """
+    """Return (attn[steps, layers, max_n_kv], n_kv_at_step[steps]), zero-padded past n_kv."""
     if not path.exists():
         return None, None
     with open(path, "rb") as f:
@@ -94,16 +55,9 @@ def load_attn_full(path: Path):
     return attn, np.array(n_kv_at, dtype=np.int32)
 
 
-# ---------- policies --------------------------------------------------------
-# All policies return a boolean mask of shape (n_kv,) where True = keep.
-# Inputs:
-#   step              — current decode step (0-indexed)
-#   n_kv              — current size of populated KV cache
-#   K                 — target budget (max positions to keep)
-#   accum_attn[layer] — per-layer accumulated attention score per source position
-#                       (shape (n_layers, max_kv) updated as we go)
-#   H_tilde_t         — current normalized entropy (for endurkv policy)
-#   layer_idx         — for layer-aware policies
+# Policies return a boolean keep-mask of shape (n_kv,). K is the budget,
+# accum_attn_l the layer's accumulated attention per position, and H_tilde_t
+# the normalized entropy at this step.
 
 def mask_full(step, n_kv, K, **kw):
     m = np.zeros(n_kv, dtype=bool)
@@ -125,7 +79,7 @@ def mask_h2o(step, n_kv, K, accum_attn_l, **kw):
         m = np.zeros(n_kv, dtype=bool); m[:n_kv] = True; return m
     K_hh = K // 2
     K_rec = K - K_hh
-    # heavy hitters: top K_hh by accumulated score, EXCLUDING recent window
+    # heavy hitters: top K_hh by accumulated score, outside the recent window
     rec_start = max(0, n_kv - K_rec)
     cand = accum_attn_l[:rec_start]
     if len(cand) <= K_hh:
@@ -139,7 +93,7 @@ def mask_h2o(step, n_kv, K, accum_attn_l, **kw):
 
 
 def mask_h2o_norec(step, n_kv, K, accum_attn_l, **kw):
-    """Same scoring as H2O but only 1/16 recent (paper slide 24 finding)."""
+    """Same scoring as H2O with only K/16 recent positions."""
     if n_kv <= K:
         m = np.zeros(n_kv, dtype=bool); m[:n_kv] = True; return m
     K_rec = max(1, K // 16)
@@ -169,14 +123,8 @@ def mask_streamingllm(step, n_kv, K, **kw):
 
 
 def mask_endurkv(step, n_kv, K, accum_attn_l, H_tilde_t=0.5, **kw):
-    """Entropy-gated H2O (UNCAPPED variant).
-
-    Idea: at uncertain steps (H_tilde -> 1) we prune LESS — i.e. budget grows.
-    At committed steps (H_tilde -> 0) we prune at full rate. Uses K_t =
-    K * (1 + H_tilde_t), capped at n_kv. AVERAGE cache used exceeds K
-    because the bonus is one-sided. Useful as an upper bound. The fair
-    head-to-head comparison is endurkv_matched below.
-    """
+    """Entropy-gated H2O with K_t = K * (1 + H_tilde_t), uncapped.
+    Mean cache exceeds K, so this is an upper bound. endurkv_matched is budget-matched."""
     K_t = int(min(n_kv, K * (1.0 + max(0.0, H_tilde_t))))
     return mask_h2o_norec(step, n_kv, K_t, accum_attn_l=accum_attn_l)
 
@@ -192,12 +140,8 @@ def _mask_endurkv_matched_factory(half_range):
 
 
 def mask_endurkv_attn_spread(step, n_kv, K, accum_attn_l, attn_full_layer=None, **kw):
-    """Budget-MATCHED policy modulated by attention spread instead of entropy.
-
-    Use the current layer's max attention probability as the concentration
-    signal. High max_attn (peaked) -> prune more. Low max_attn (diffuse) ->
-    prune less. Multiplier range [0.7, 1.3] keeps avg-K = K.
-    """
+    """Budget-matched variant driven by the layer's max attention probability.
+    Peaked attention prunes more, diffuse prunes less (mult in [0.7, 1.3])."""
     if attn_full_layer is None or len(attn_full_layer) == 0:
         return mask_h2o_norec(step, n_kv, K, accum_attn_l=accum_attn_l)
     max_a = float(attn_full_layer[:n_kv].max())
@@ -223,7 +167,7 @@ POLICIES = {
 }
 
 
-# ---------- KL helper -------------------------------------------------------
+# KL helper
 def kl_divergence(p_full, p_evicted, eps=1e-12):
     """KL(p_full || p_evicted) safely."""
     p_full = np.clip(p_full, eps, 1.0)
@@ -232,10 +176,8 @@ def kl_divergence(p_full, p_evicted, eps=1e-12):
 
 
 def simulate(attn, n_kv_at, policy_name, K, H_norm=None):
-    """Return per-(step, layer) KL array of shape (n_steps, n_layers).
-
-    H_norm: optional per-step normalized entropy (in [0,1]) for endurkv.
-    """
+    """Return per-(step, layer) KL, shape (n_steps, n_layers).
+    H_norm is the optional per-step normalized entropy used by endurkv."""
     n_steps, n_layers, max_kv = attn.shape
     accum = np.zeros((n_layers, max_kv), dtype=np.float64)  # per-layer
     out = np.zeros((n_steps, n_layers), dtype=np.float64)
@@ -244,8 +186,7 @@ def simulate(attn, n_kv_at, policy_name, K, H_norm=None):
         n_kv = int(n_kv_at[s])
         if n_kv == 0:
             continue
-        # update accumulated attention with the CURRENT step's attention
-        # (so the score at step s reflects steps 0..s, mimicking H2O paper)
+        # Accumulate attention through the current step, as in H2O.
         for l in range(n_layers):
             accum[l, :n_kv] += attn[s, l, :n_kv]
 
@@ -260,8 +201,7 @@ def simulate(attn, n_kv_at, policy_name, K, H_norm=None):
             kept = p_full * mask
             tot = kept.sum()
             if tot <= 0:
-                # everything evicted — KL is infinite; cap at 20 as
-                # a numerical proxy so the boxplot doesn't explode
+                # Everything evicted, KL is infinite. Cap at 20 for the plots.
                 out[s, l] = 20.0
                 continue
             p_evicted = kept / tot
@@ -269,11 +209,9 @@ def simulate(attn, n_kv_at, policy_name, K, H_norm=None):
     return out
 
 
-# ---------- entropy normalization (rolling) ---------------------------------
+# entropy normalization (rolling)
 def normalize_entropy(H_nats, n_vocab_log=None, window=64):
-    """Map raw H_nats to [0,1] via rolling-window min-max, matching the
-    proposal's H_tilde definition.
-    """
+    """Map raw H_nats to [0,1] with a rolling-window min-max (H_tilde)."""
     H = np.asarray(H_nats, dtype=np.float64)
     if len(H) == 0:
         return H
@@ -290,7 +228,7 @@ def normalize_entropy(H_nats, n_vocab_log=None, window=64):
     return out
 
 
-# ---------- main ------------------------------------------------------------
+# main
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--log-dir", required=True)
@@ -372,13 +310,13 @@ def main():
     ).reset_index()
     per_task.to_csv(out_dir / "per_task_summary.csv", index=False)
 
-    # ---------- plots ----------
+    # plots
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     plt.rcParams.update({"figure.dpi": 110, "savefig.dpi": 130, "font.size": 9})
 
-    # 01 — boxplot of mean_kl by policy at the median budget
+    # 01 - boxplot of mean_kl by policy at the median budget
     median_K = budgets[len(budgets)//2]
     sub = df[df.budget_K == median_K]
     polys = ["full", "local", "streamingllm", "h2o", "h2o_norec", "endurkv"]
@@ -395,7 +333,7 @@ def main():
     plt.close(fig)
     print("  wrote 01_kl_by_policy.png")
 
-    # 02 — KL as function of budget K
+    # 02 - KL as function of budget K
     fig, ax = plt.subplots(figsize=(10, 5.5))
     for p in polys:
         if p == "full":
@@ -416,7 +354,7 @@ def main():
     plt.close(fig)
     print("  wrote 02_kl_vs_budget.png")
 
-    # 03 — per-task per-policy heatmap-like bar chart at median budget
+    # 03 - per-task per-policy heatmap-like bar chart at median budget
     fig, ax = plt.subplots(figsize=(12, 6))
     tasks = sorted(sub.task.unique())
     width = 0.8 / len(polys)
@@ -439,7 +377,7 @@ def main():
     print("  wrote 03_per_task_kl.png")
 
     # summary print
-    print("\n=== per-policy mean KL at each budget ===")
+    print("per-policy mean KL at each budget")
     pivot = df.groupby(["policy", "budget_K"])["mean_kl"].mean().unstack()
     print(pivot.to_string(float_format=lambda x: f"{x:.4f}"))
 

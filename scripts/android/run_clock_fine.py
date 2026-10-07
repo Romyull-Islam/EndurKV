@@ -1,17 +1,7 @@
 #!/usr/bin/env python3
-"""A finer GPU clock ladder: 1050, 967 and 826 MHz beside the 1200 / 902 anchors. (2026-09-21)
-
-WHY. The scheduler and both bandits use three clocks (1200, 902, 726) of the Adreno 840's eighteen.
-The mid tier cannot take 1200 -> 902 (+27% time on a 1024-token request, over its 21% slack), so it
-settles for 1200 with a decode cap and saves about 6%. An earlier one-run sweep (clock_sweep, CPU at
-883 MHz, 4096 output tokens) put 1050 on the steep side of the knee and showed 826 as fast as 902 and
-no more costly than 726. If 1050 or 967 fits mid's slack, a finer ladder saves energy the coarse one
-cannot reach; if 826 dominates 726, the bottom rung should change.
-
-It reuses run_bandit_online.py's per-request runner unchanged (cool gate, CPU pinned at 1785.6 /
-1497.6 MHz, 2 Hz sampler, USB rail + battery pack, K = 1024, 9737-token prompt, 1024 output tokens),
-so the new points sit on the 24-request ladder's scale. 1200 and 902 are re-measured each round as
-anchors against drift. Three rounds, interleaved.
+"""Finer GPU clock ladder (1050, 967, 826 MHz) with 1200 and 902 re-measured each round as drift
+anchors, to see whether intermediate clocks fit a tier's time slack. Uses run_bandit_online.py's
+per-request runner (cool gate, pinned CPU, K=1024, 9737-token prompt, 1024 output tokens).
 Usage: ANDROID_SERIAL=... run_clock_fine.py [--rounds 3]
 """
 import argparse, json, os, statistics as st, sys

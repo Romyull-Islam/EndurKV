@@ -1,19 +1,7 @@
 #!/usr/bin/env python3
-"""Architectural diagram of the perhead_v1 (EndurKV-Evict) eviction algorithm.
-
-Pure architecture-only view — no baseline comparison. The companion script
-host_plot_architecture_vs_tova.py renders the side-by-side perhead_v1 vs TOVA
-comparison.
-
-Layout (top-to-bottom):
-  Row 1: Title (one line)
-  Row 2: 5 large numbered circles forming the pipeline ① → ⑤
-  Row 3: Stage ② — input per-head attention heatmap
-  Row 4: Stage ③ — spread gate curve with the FORMULA displayed
-         Stage ④ — per-head budget K_h bars
-  Row 5: Stage ① — KV cache BEFORE eviction
-         Stage ⑤ — KV cache AFTER perhead_v1 eviction
-  Row 6: Variable-definition box (K, K_h, mult_h, max_a_h, all formulas)
+"""Architecture diagram of the perhead_v1 (EndurKV-Evict) eviction algorithm: pipeline,
+attention heatmap, spread-gate curve, per-head budgets K_h, KV cache before and after
+eviction, and a variable box. host_plot_architecture_vs_tova.py draws the TOVA comparison.
 """
 import sys
 from pathlib import Path
@@ -91,14 +79,14 @@ def main() -> int:
         left=0.04, right=0.985, top=0.965, bottom=0.04,
     )
 
-    # ─────────────── Row 1: title ───────────────
+    # Row 1: title
     ax_title = fig.add_subplot(gs[0, :]); ax_title.axis("off")
     ax_title.text(0.5, 0.5,
                   "perhead_v1 (EndurKV-Evict) — eviction algorithm architecture",
                   ha="center", va="center", fontsize=18, weight="bold",
                   color="#0f2e57")
 
-    # ─────────────── Row 2: numbered pipeline ───────────────
+    # Row 2: numbered pipeline
     ax_pipe = fig.add_subplot(gs[1, :])
     ax_pipe.set_xlim(0, 1); ax_pipe.set_ylim(0, 1); ax_pipe.axis("off")
     stages = [
@@ -129,7 +117,7 @@ def main() -> int:
             )
             ax_pipe.add_patch(arr)
 
-    # ─────────────── Row 3: input attention heatmap ───────────────
+    # Row 3: input attention heatmap
     ax_attn = fig.add_subplot(gs[2, :])
     cmap_attn = LinearSegmentedColormap.from_list(
         "attn", ["#f7fbff", "#deebf7", "#9ecae1", "#3182bd", "#08306b"])
@@ -152,7 +140,7 @@ def main() -> int:
     cbar = fig.colorbar(im, ax=ax_attn, fraction=0.025, pad=0.10)
     cbar.set_label("attention weight a[h, k]", fontsize=9)
 
-    # ─────────────── Row 4 left: spread gate curve with formula ───────────────
+    # Row 4 left: spread gate curve with formula
     ax_gate = fig.add_subplot(gs[3, 0])
     max_grid = np.linspace(0.0, 1.0, 200)
     norm_grid = np.clip((max_grid - 0.4) / 0.4, 0, 1)
@@ -181,7 +169,7 @@ def main() -> int:
     ax_gate.set_xlim(-0.02, 1.02); ax_gate.set_ylim(0.55, 1.45)
     ax_gate.grid(alpha=0.25)
 
-    # ─────────────── Row 4 right: per-head budget K_h ───────────────
+    # Row 4 right: per-head budget K_h
     ax_kh = fig.add_subplot(gs[3, 2])
     xs = np.arange(N_HEAD)
     bar_colors = ["#a31616" if mult_h[h] < 0.95 else
@@ -207,7 +195,7 @@ def main() -> int:
     ax_kh.grid(alpha=0.25, axis="y")
     ax_kh.set_ylim(-2.5, max(K_h.max() + 4, K_NOMINAL + 4))
 
-    # ─────────────── Row 5: memory layouts BEFORE / AFTER ───────────────
+    # Row 5: memory layouts BEFORE / AFTER
     # BEFORE eviction
     ax_before = fig.add_subplot(gs[4, 0])
     for h in range(N_HEAD):

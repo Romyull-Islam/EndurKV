@@ -1,9 +1,7 @@
 #!/system/bin/sh
-# 2026-07-21: device half of the GPU prefill-parity protocol.
-# Measures the EndurKV binary with μKV disabled (`--policy vanilla`) versus
-# μKV-mass with one generated token. It is an internal regression control, not
-# an upstream, unmodified llama.cpp baseline. The clock keeper applies the same
-# 1200 MHz ceiling to both policies; this is not a watchdog test.
+# Device half of the GPU prefill-parity check: the EndurKV binary with --policy vanilla vs
+# μKV-mass, one generated token. An internal regression control, not an upstream llama.cpp
+# baseline. Both policies run under the same 1200 MHz clock ceiling.
 # Args: <output-dir> <vanilla|mukv>
 
 OUT=${1:?output directory required}

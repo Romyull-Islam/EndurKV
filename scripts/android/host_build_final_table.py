@@ -1,20 +1,8 @@
 #!/usr/bin/env python3
-"""Merge all three result CSVs into one comprehensive evaluation table.
+"""Merge the three per-cell result CSVs into one evaluation table.
 
-Inputs:
-  final_variant_per_cell.csv      — our v1..v7 + perhead_tova + kvzip_approx
-                                    (5 models × 2 K, 9 variants, 90 rows)
-  unified_baselines_per_cell.csv  — 14 published baselines + our v1, v6
-                                    (5 models × 2 K, 14 variants, 140 rows;
-                                     overlaps with above on v1, v6, tova,
-                                     kvzip_approx — these are duplicates and
-                                     get deduplicated using the unified run)
-  kv_aware_per_cell.csv           — RKV / KeyDiff / LaProx + v1, tova ref
-                                    (5 models × 2 K, 5 variants, 50 rows
-                                     when all captures done)
-
-Output:
-  EndurKV/figures/final_evaluation_tables.md
+Inputs (figures/): final_variant_per_cell.csv, unified_baselines_per_cell.csv and
+kv_aware_per_cell.csv. Output: figures/final_evaluation_tables.md.
 """
 import sys
 from pathlib import Path
@@ -85,8 +73,8 @@ def main():
                  "cache_ratio_vs_tova","kl_mean","kl_min","kl_max","kl_std",
                  "mass_pct","pct_vs_v1","pct_vs_tova"]]
         f3["source"] = "kv_aware_sim"
-        # Note: kv_aware uses host-captured prompt; may have different n_kv
-        # than phone-captured. Mark variants accordingly.
+        # kv_aware uses a host-captured prompt, so n_kv can differ from the
+        # phone captures.
         frames.append(f3)
     if not frames:
         print("No data found."); return 1
@@ -105,7 +93,7 @@ def main():
     # Drop unified rows for variants we already have in perhead_sim
     df = df[~((df.source=="unified_sim") & (df.variant.isin({"ours_v1","ours_v6","tova","kvzip_approx"})))]
 
-    # Standardise: rename "ours_v1" → "perhead_v1", "ours_v6" → "perhead_v6", "tova" → "perhead_tova"
+    # Rename ours_v1, ours_v6 and tova to their perhead_ names
     df["variant"] = df["variant"].replace({"ours_v1":"perhead_v1",
                                             "ours_v6":"perhead_v6",
                                             "tova":"perhead_tova"})
@@ -122,9 +110,7 @@ def main():
     df.to_csv(OUT / "comprehensive_all_systems.csv", index=False)
     print(f"Merged {len(df)} rows from {len(frames)} sources")
 
-    # =====================================================================
     # Build markdown table
-    # =====================================================================
 
     lines = []
     lines.append("# Comprehensive cross-system evaluation")
@@ -148,7 +134,7 @@ def main():
                  "it is comparable across sources. **Rank by `Δ TOVA`, not by absolute KL.**")
     lines.append("")
 
-    # --- TABLE 1: headline ---
+    # TABLE 1: headline
     lines.append("## 1. Headline ranking (lower Δ TOVA = better)")
     lines.append("")
     overall = (df.groupby(["variant","name","kind","mech"])
@@ -180,7 +166,7 @@ def main():
                  "*variable-cache adaptivity* at TOVA-grade quality, not strict-K improvement.")
     lines.append("")
 
-    # --- TABLE 2: per-K summary ---
+    # TABLE 2: per-K summary
     lines.append("## 2. Per-K summary across all models")
     lines.append("")
     for K in sorted(df.K_nominal.unique()):
@@ -200,7 +186,7 @@ def main():
                          f"{r['cr']:.2f} | {r['m']:.1f} | {r['tv']:+.1f}% | {r['v1']:+.1f}% |")
         lines.append("")
 
-    # --- TABLE 3: full per-cell breakdown ---
+    # TABLE 3: full per-cell breakdown
     lines.append("## 3. Full per-cell breakdown")
     lines.append("")
     lines.append("| Model (n_kv) | K | System | actual_K | cache× | mean KL | best | worst | std | mass% | Δ v1 | Δ TOVA |")
@@ -213,7 +199,7 @@ def main():
                      f"{r['kl_std']:.2f} | {r['mass_pct']:.1f} | "
                      f"{r['pct_vs_v1']:+.1f}% | {r['pct_vs_tova']:+.1f}% |")
 
-    # --- Caveats ---
+    # Caveats
     lines.append("")
     lines.append("## 4. Caveats baked into this table")
     lines.append("")
@@ -249,7 +235,7 @@ def main():
     out_path = OUT / "final_evaluation_tables.md"
     out_path.write_text("\n".join(lines))
     print(f"Wrote {out_path} ({len(lines)} lines)")
-    print("\n=== HEADLINE (top 6) ===")
+    print("HEADLINE (top 6)")
     print(overall.head(6)[['name','kind','mean_kl','cache','adj_vs_tova']].to_string(index=False))
     return 0
 

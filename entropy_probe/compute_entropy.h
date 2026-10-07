@@ -1,10 +1,7 @@
 #pragma once
 
-// Header-only computation of per-step entropy / top-k stats from raw logits.
-//
-// Numerical stability: log-sum-exp form with the maximum logit subtracted.
-// Memory: stack only — a single std::array<float, 5> for the top-5 tracking
-// and a few scalars. No heap allocations.
+// Header-only per-step entropy and top-k stats from raw logits.
+// Uses log-sum-exp with the max logit subtracted, and no heap allocations.
 
 #include <array>
 #include <cmath>
@@ -19,17 +16,9 @@ struct EntropyMetrics {
     float top5_cumprob;  // sum of top 5 softmax probabilities
 };
 
-// Compute entropy + top-k stats from a logits array of length n_vocab.
-//
-// Pass 1: scan for the max logit and the top-5 logits via insertion into a
-//         fixed std::array<float, 5> (descending order, no heap).
-// Pass 2: accumulate sum_exp = sum(exp(logits[i] - m)) and
-//         sum_qx   = sum(q_i * logits[i]). Float accumulators inside the
-//         hot loop so the compiler can vectorise expf via libmvec; promoted
-//         to double after the loop. Float relative error over 1e5 sums of
-//         O(1) values is ~1e-3, well below entropy precision needs.
-// Identity: H = log_Z - E[logits] where log_Z = m + log(sum_exp),
-//                                       E[logits] = sum_qx / sum_exp.
+// Entropy and top-k stats from n_vocab logits. Pass 1 finds the max and top-5 logits.
+// Pass 2 sums exp(l - m) and exp(l - m) * l in float so expf vectorises (libmvec).
+// H = log_Z - E[logits], with log_Z = m + log(sum_exp) and E[logits] = sum_qx / sum_exp.
 inline EntropyMetrics compute_entropy(const float * __restrict__ logits, int n_vocab) {
     constexpr float NEG_INF = -std::numeric_limits<float>::infinity();
 

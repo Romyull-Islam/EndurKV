@@ -1,17 +1,7 @@
 #!/bin/bash
-# ============================================================================
-# run_niah_sllm2004.sh -- StreamingLLM needle row at its PUBLISHED budget. (2026-09-20)
-#
-# The needle grid ran StreamingLLM at k_nominal=1024, not at its published budget
-# of 4 sinks + a 2000-token window. Every other table in the paper gives it 4+2000,
-# and running a published policy below its own budget is exactly the mistake we
-# correct elsewhere. At 1024 it retained ~860 cells instead of ~2004, so it was
-# handed half the window its authors specify, and then scored on retrieval.
-#
-# This re-runs its 56 needle cells at 4+2000 on the same stimuli, ctx, protocol,
-# gate and build (bin_cpu_v87, the build the other six rows used), under the tag
-# sllm2004 so the 1024 cells are kept for comparison rather than overwritten.
-# ============================================================================
+# run_niah_sllm2004.sh: StreamingLLM needle cells at its published budget, 4 sinks plus a
+# 2000-token window (K=2004). Same stimuli, ctx, protocol, cool gate and build (bin_cpu_v87)
+# as the other needle rows. Tagged sllm2004 so the earlier K=1024 cells are kept.
 set -u
 for _p in ${ADB_PORTS:-5152 5037 5151 5161}; do
   (exec 3<>/dev/tcp/127.0.0.1/$_p) 2>/dev/null || continue   # dead port + adb = squatting server that breaks ssh -R
@@ -48,7 +38,7 @@ cell(){ local MT=$1 STIM=$2; local id="${MT}__sllm2004__${STIM%.txt}"; local PD=
     *) echo "[SKIP-HOT] $id -- gate failed; cell not run"; return ;; esac
   # the gate restores charging on exit; every metered cell runs with it off
   adb_safe_shell "su -c 'echo 0 > /sys/class/oplus_chg/battery/mmi_charging_enable'" < /dev/null >/dev/null 2>&1
-  # no watchdog: it is muKV-only by design, exactly as for the other baselines
+  # no watchdog: it is muKV-only, as for the other baselines
   adb_safe_shell "su -c 'nohup sh /data/local/tmp/endurkv/scripts/sample_sensors.sh --out $PD/sensors.csv --hz 5 >/dev/null 2>&1 &'" < /dev/null
   adb_safe_shell "LD_LIBRARY_PATH=$CB timeout ${TMO:-3600} $CB/eviction_bench --prompt $OUT/$STIM --prompt-id $id \
     --eval-mode gen --max-tokens 64 --ignore-eos --ctx-size $CTX --model ${MODELS[$MT]} --seed 42 \
@@ -61,8 +51,7 @@ cell(){ local MT=$1 STIM=$2; local id="${MT}__sllm2004__${STIM%.txt}"; local PD=
   echo "  [$id] $h"
 }
 
-# llama1b first: it is the model the CPU table's KeyDiff cell reports, so if the
-# campaign is cut short the most useful block is already banked.
+# llama1b first, so its block is done if the campaign is cut short.
 for MT in llama1b phi3 gemma2b bonsai8b; do
   i=0
   for STIM in $STIMS; do

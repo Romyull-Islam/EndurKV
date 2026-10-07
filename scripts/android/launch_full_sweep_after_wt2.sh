@@ -22,7 +22,7 @@ adb pull /data/local/tmp/endurkv/logs/wt2_ppl/ \
 echo "[launch] WT2 PPL summary:" | tee -a "$LOG"
 grep -E "Final estimate|estimate.*PPL" /home/mislam22/EndurKV_workspace/phone-logs/wt2_ppl/ppl_output.txt 2>/dev/null | tee -a "$LOG"
 
-# 2. Kill the queue (PID 22691) — would otherwise start old K=2048 A/B
+# 2. Kill the queue (PID 22691) - would otherwise start old K=2048 A/B
 echo "[launch] killing old queue (PID 22691) ..." | tee -a "$LOG"
 kill 22691 2>/dev/null || echo "  queue already exited"
 sleep 2

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Host-side evaluator of the on-phone scheduler policy (scripts/android/ukv_sched.sh).
 
-Same table, same weights, same utility. No phone dynamics are simulated: this only shows
-which plan the scheduler picks for a given phone state and request shape, and what the
-measured cost table predicts for it. Use it to read the policy; use the phone to test it.
+Uses the same cost table, weights and utility but simulates no phone dynamics. It shows which
+plan the scheduler picks for a phone state and request shape, and the table's predicted cost.
 """
 import sys, os
 
@@ -49,9 +48,8 @@ def output_cap(tier, max_tokens=None, size=None, prompt_states_length=False, lev
     return params(L)["cap"], f"lever cap for L={L:.2f}"
 
 def choose(rows, n_prompt, n_out, w, lam, qf, hot=False, gpu_ok=True, tslack=0.03):
-    """1. backend by weighted utility; 2. ladder walk inside it: exchange rate (energy loop),
-    time budget (performance loop), quality floor. Split-clock plans (d<MHz> in the name) are
-    ordinary rows; a hot phone only excludes plans that prefill at 1200 without a decode cap."""
+    """Pick the backend by weighted utility, then walk its ladder under the exchange rate, time
+    budget and quality floor. When hot, drop GPU plans that prefill at 1200 MHz with no d<MHz> cap."""
     cands = [r for r in rows if (gpu_ok or r["backend"] != "gpu")
              and not (hot and r["backend"] == "gpu" and r["gpu_mhz"] >= 1200 and "d" not in r["plan"].split("_")[0][3:])]
     for r in cands:
@@ -65,8 +63,8 @@ def choose(rows, n_prompt, n_out, w, lam, qf, hot=False, gpu_ok=True, tslack=0.0
     ladder = sorted([r for r in cands if r["backend"] == bk], key=lambda r: (-r["q"], r["T"]))
     cur = ladder[0]; tbud = cur["T"] * (1 + tslack); walk = [f"start {cur['plan']}"]
     for k in ladder[1:]:
-        # skip plans that save nothing or trade poorly against the current one (a later, larger
-        # step may still pay); stop only on the monotone limits: time budget and quality floor
+        # Skip plans that save nothing or trade poorly (a later, larger step may still pay).
+        # Stop only at the monotone limits, time budget and quality floor.
         if k["q"] < qf:
             walk.append(f"{k['plan']}: stop (quality)"); break
         if k["T"] > tbud:

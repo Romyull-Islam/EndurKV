@@ -1,25 +1,8 @@
 #!/usr/bin/env python3
-"""
-score_ppl.py — Host-side perplexity aggregator for Wave-11 evals.
-
-Reads all phone-logs/wave11_*/{model}/{policy}/iter*/meta.json files,
-extracts the `perplexity` value from each, computes per-cell statistics
-(mean, bootstrap 95% CI, std dev, n_chunks) over the 8 chunks per
-(model, policy) cell, and emits:
-
-  1. A Markdown comparison table sorted by mean PPL within each model
-     -> figures/master_tables/TABLE_WAVE11_PPL.md
-  2. A bar chart with 95% CI error bars per (model, policy) cell
-     -> figures/eval_plots/ppl_per_policy.png
-
-stdlib only + matplotlib. No pandas, no numpy beyond what matplotlib pulls.
-
-Usage:
-  python eval_pipeline/score_ppl.py \
-      [--phone-logs-root /path/to/phone-logs] \
-      [--workspace-root /path/to/EndurKV_workspace] \
-      [--bootstrap-samples 1000] \
-      [--seed 0]
+"""Aggregate per-chunk PPL from phone-logs/wave11_*/<model>/<policy>/[ppl/]iter*/meta.json
+into figures/master_tables/TABLE_WAVE11_PPL.md and figures/eval_plots/ppl_per_policy.png.
+Usage: python eval_pipeline/score_ppl.py [--phone-logs-root DIR] [--workspace-root DIR]
+       [--bootstrap-samples 1000] [--seed 0]
 """
 
 from __future__ import annotations
@@ -40,15 +23,10 @@ matplotlib.use("Agg")  # headless
 import matplotlib.pyplot as plt
 
 
-# --------------------------------------------------------------------------- #
 # Path resolution
-# --------------------------------------------------------------------------- #
 
 def default_workspace_root() -> str:
-    """
-    Resolve workspace root assuming this file lives at
-    <workspace>/EndurKV/eval_pipeline/score_ppl.py.
-    """
+    """Workspace root, assuming this file is <workspace>/EndurKV/eval_pipeline/score_ppl.py."""
     here = os.path.abspath(__file__)
     eval_pipeline_dir = os.path.dirname(here)
     endurkv_dir = os.path.dirname(eval_pipeline_dir)
@@ -56,25 +34,11 @@ def default_workspace_root() -> str:
     return workspace_dir
 
 
-# --------------------------------------------------------------------------- #
 # Discovery & parsing
-# --------------------------------------------------------------------------- #
 
 def discover_meta_files(phone_logs_root: str) -> List[str]:
-    """
-    Find every meta.json under the Wave-11 PPL tree. Supports BOTH the new
-    bench-aware launcher layout (Wave-11 phone_wave11_eval.sh):
-
-        phone-logs/wave11_*/<model>/<policy>/ppl/iter*/meta.json
-
-    AND the legacy flat layout (older waves / smoke tests):
-
-        phone-logs/wave11_*/<model>/<policy>/iter*/meta.json
-
-    The new layout is preferred; if any new-layout hits exist for a given
-    (wave, model, policy) cell, the legacy hits for that cell are ignored
-    (avoids double-counting when both happen to coexist).
-    """
+    """Find meta.json files in the <policy>/ppl/iter* layout or the older <policy>/iter* one.
+    Legacy files are ignored for cells that also have new-layout files."""
     new_pat = os.path.join(
         phone_logs_root, "wave11_*", "*", "*", "ppl", "iter*", "meta.json"
     )
@@ -84,9 +48,7 @@ def discover_meta_files(phone_logs_root: str) -> List[str]:
     new_hits = sorted(glob.glob(new_pat))
     legacy_hits = sorted(glob.glob(legacy_pat))
 
-    # If a legacy hit's iter* dir is the 4th part (i.e. parts[3] == 'iterNNNN'),
-    # it's a true legacy entry. If parts[3] in {'ppl','niah'} it's actually a
-    # new-layout entry already captured above — exclude it from legacy_hits.
+    # A true legacy entry has iterNNNN as parts[3]. Otherwise it is a new-layout file.
     def _is_true_legacy(meta_path: str) -> bool:
         rel = os.path.relpath(meta_path, phone_logs_root)
         parts = rel.split(os.sep)
@@ -95,8 +57,7 @@ def discover_meta_files(phone_logs_root: str) -> List[str]:
 
     legacy_filtered = [m for m in legacy_hits if _is_true_legacy(m)]
 
-    # If a (wave, model, policy) cell has new-layout hits, drop its legacy hits
-    # to prevent counting the same chunk twice.
+    # Drop legacy hits of cells that have new-layout hits, to avoid double counting.
     new_cells = set()
     for m in new_hits:
         rel = os.path.relpath(m, phone_logs_root)
@@ -115,12 +76,7 @@ def discover_meta_files(phone_logs_root: str) -> List[str]:
 
 
 def parse_cell_from_path(meta_path: str, phone_logs_root: str) -> Tuple[str, str, str, str]:
-    """
-    Given a meta.json path under either layout:
-      new:    .../wave11_XYZ/<model>/<policy>/ppl/<iter>/meta.json   (6 parts)
-      legacy: .../wave11_XYZ/<model>/<policy>/<iter>/meta.json       (5 parts)
-    return (wave_dir, model, policy, iter_dir).
-    """
+    """Return (wave_dir, model, policy, iter_dir) for a meta.json path in either layout."""
     rel = os.path.relpath(meta_path, phone_logs_root)
     parts = rel.split(os.sep)
     if len(parts) >= 6 and parts[3] in ("ppl",):
@@ -131,30 +87,19 @@ def parse_cell_from_path(meta_path: str, phone_logs_root: str) -> Tuple[str, str
 
 
 def _load_meta_tolerant(meta_path: str) -> dict | None:
-    """
-    Read meta.json with one critical concession: eviction_bench currently
-    emits bareword `inf` / `nan` for non-finite numeric fields (e.g.
-    decode_tps when decode_ms == 0), which is NOT valid JSON per RFC 8259
-    and causes the stdlib parser to abort the whole file. We work around
-    this by substituting `inf`/`-inf`/`nan` with their JSON-permissive
-    equivalents (`Infinity`/`-Infinity`/`NaN`) which Python's json module
-    accepts when allow_nan=True (the default). The substitution is done on
-    a copy of the bytes so we never mutate the on-disk file.
-    """
+    """Read meta.json. eviction_bench can write bareword inf/nan, which is not valid JSON,
+    so those are mapped to Infinity/NaN in memory before parsing."""
     try:
         with open(meta_path, "r") as f:
             raw = f.read()
     except OSError as exc:
         print(f"[warn] could not open {meta_path}: {exc}", file=sys.stderr)
         return None
-    # First, try a strict parse — fast path for well-formed files.
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         pass
-    # Substitute bareword non-finite numerics with the json-permissive form.
-    # Use word-boundary regex so we don't clobber e.g. "infinitive" or
-    # quoted strings that legitimately contain "inf".
+    # Word-boundary match so words and quoted strings containing "inf" are left alone.
     import re as _re
     patched = _re.sub(
         r'(?<![A-Za-z0-9_."])(-?inf|nan)(?![A-Za-z0-9_])',
@@ -172,9 +117,7 @@ def _load_meta_tolerant(meta_path: str) -> dict | None:
 
 
 def load_perplexity(meta_path: str) -> float | None:
-    """
-    Read perplexity from meta.json. Returns None if missing / non-finite.
-    """
+    """Perplexity from meta.json, or None if missing or non-finite."""
     meta = _load_meta_tolerant(meta_path)
     if meta is None:
         return None
@@ -192,23 +135,15 @@ def load_perplexity(meta_path: str) -> float | None:
 
 
 def load_nll_and_tokens(meta_path: str) -> Tuple[float, int] | None:
-    """
-    Read (mean_nll, n_scored_tokens) from meta.json so aggregation can be done
-    in log-domain (token-weighted geometric mean of PPL == exp(sum_nll/sum_tok)).
-    Falls back to mean_nll = log(perplexity) and n_tokens = 1 when only the
-    scalar PPL is recorded.
-    """
+    """(mean_nll, n_scored_tokens) for token-weighted aggregation in the log domain.
+    Falls back to (log(perplexity), 1) when only the scalar PPL is recorded."""
     meta = _load_meta_tolerant(meta_path)
     if meta is None:
         return None
 
     nll = meta.get("mean_nll")
-    # Wave-11 eviction_bench meta.json stores the per-chunk avg NLL as
-    # `mean_nll` but does NOT (yet) emit an explicit `n_scored_tokens` field.
-    # For teacher-forced PPL the number of scored tokens equals the number of
-    # teacher-forced decode steps, so `n_decode_steps` is the correct weight.
-    # Older / alternative meta variants may emit n_scored_tokens / n_ref_tokens
-    # / n_tokens directly — honour those first.
+    # Explicit token counts win. For teacher-forced PPL the scored token count
+    # equals n_decode_steps.
     n_tok = (
         meta.get("n_scored_tokens")
         or meta.get("n_ref_tokens")
@@ -232,18 +167,14 @@ def load_nll_and_tokens(meta_path: str) -> Tuple[float, int] | None:
     return (math.log(ppl), 1)
 
 
-# --------------------------------------------------------------------------- #
 # Statistics (stdlib only)
-# --------------------------------------------------------------------------- #
 
 def mean(xs: List[float]) -> float:
     return sum(xs) / len(xs)
 
 
 def std_dev(xs: List[float]) -> float:
-    """
-    Sample standard deviation (ddof=1). Returns 0.0 if fewer than 2 samples.
-    """
+    """Sample standard deviation (ddof=1), 0.0 for fewer than 2 samples."""
     n = len(xs)
     if n < 2:
         return 0.0
@@ -258,12 +189,8 @@ def bootstrap_ci(
     rng: random.Random | None = None,
     weights: List[int] | None = None,
 ) -> Tuple[float, float]:
-    """
-    Percentile bootstrap CI for the (optionally weighted) mean. Returns
-    (lo, hi) at the (alpha/2, 1 - alpha/2) levels. If `weights` is provided,
-    the resampled mean is the token-weighted mean sum(w*x)/sum(w) — this is
-    used when xs holds per-chunk NLLs and weights are per-chunk token counts.
-    """
+    """Percentile bootstrap CI (lo, hi) for the mean, or for the weighted mean
+    sum(w*x)/sum(w) when weights are given."""
     if rng is None:
         rng = random.Random(0)
     n = len(xs)
@@ -289,8 +216,7 @@ def bootstrap_ci(
             means.append(sx / sw if sw > 0 else float("nan"))
     means.sort()
 
-    # Use round() so that for n=1000, alpha=0.05 we get the standard
-    # 2.5th/97.5th percentile indices instead of an off-by-one upper bound.
+    # round() gives the standard 2.5th/97.5th percentile indices for n=1000.
     lo_idx = int(round((alpha / 2.0) * n_samples))
     hi_idx = int(round((1.0 - alpha / 2.0) * n_samples)) - 1
     lo_idx = max(0, min(n_samples - 1, lo_idx))
@@ -298,33 +224,15 @@ def bootstrap_ci(
     return (means[lo_idx], means[hi_idx])
 
 
-# --------------------------------------------------------------------------- #
 # Aggregation
-# --------------------------------------------------------------------------- #
 
 def aggregate(
     phone_logs_root: str,
     n_bootstrap: int,
     seed: int,
 ) -> Dict[Tuple[str, str], Dict[str, float]]:
-    """
-    Returns {(model, policy): {mean_ppl, ci_low, ci_high, std_dev, n_chunks}}.
-
-    Aggregation method: TOKEN-WEIGHTED GEOMETRIC MEAN of per-chunk PPL, i.e.
-       mean_ppl = exp( sum_i n_tok_i * mean_nll_i / sum_i n_tok_i )
-    which is the conventional WikiText-2 PPL reporting used by H2O / KIVI /
-    StreamingLLM / TOVA. The previous arithmetic-mean-of-PPL aggregation
-    systematically over-weighted high-PPL outlier chunks and produced numbers
-    not comparable to any published baseline.
-
-    Bootstrap CI is computed in log domain on the per-chunk NLLs with token-count
-    weights (paired across chunks → preserved by uniform per-cell resampling),
-    then exponentiated for display. std_dev is also reported in log domain.
-
-    Per cell, the RNG is reseeded with a stable (seed XOR hash(model, policy))
-    so that the CI for a given cell is invariant to which other cells are
-    present in the same run.
-    """
+    """Per (model, policy) stats. PPL is exp(sum n_tok * mean_nll / sum n_tok), the usual
+    WikiText-2 convention. CI is a token-weighted bootstrap on per-chunk NLLs."""
     meta_files = discover_meta_files(phone_logs_root)
     if not meta_files:
         print(
@@ -333,9 +241,7 @@ def aggregate(
             file=sys.stderr,
         )
 
-    # Collect per cell across all wave11_* roots. If a (model,policy) cell
-    # appears in multiple wave11_* dirs, we union all iter* observations.
-    # Each entry: (mean_nll_i, n_scored_tokens_i).
+    # (mean_nll, n_tokens) per cell, pooled across all wave11_* dirs
     cells: Dict[Tuple[str, str], List[Tuple[float, int]]] = defaultdict(list)
     for meta_path in meta_files:
         try:
@@ -361,20 +267,18 @@ def aggregate(
             continue
         sum_tok = sum(toks) if sum(toks) > 0 else 1
         weighted_mean_nll = sum(n * t for n, t in zip(nlls, toks)) / sum_tok
-        # Per-cell deterministic RNG so CI for a cell does not depend on
-        # other cells in the run (previously the single rng was drained in
-        # filesystem-glob order).
+        # Per-cell seed, so a cell's CI does not depend on the other cells in the run.
         cell_seed = (seed ^ (hash(cell) & 0xFFFFFFFF)) & 0xFFFFFFFF
         rng = random.Random(cell_seed)
         lo_nll, hi_nll = bootstrap_ci(
             nlls, n_samples=n_bootstrap, rng=rng, weights=toks
         )
-        # Map log-domain stats back to PPL space (exp).
+        # Back to PPL space
         out[cell] = {
             "mean_ppl": math.exp(weighted_mean_nll),
             "ci_low": math.exp(lo_nll) if math.isfinite(lo_nll) else float("nan"),
             "ci_high": math.exp(hi_nll) if math.isfinite(hi_nll) else float("nan"),
-            "std_dev": std_dev(nlls),     # std of log(PPL) — note units
+            "std_dev": std_dev(nlls),     # std of log(PPL) - note units
             "n_chunks": len(nlls),
             "sum_tokens": sum_tok,
             "weighted_mean_nll": weighted_mean_nll,
@@ -382,18 +286,12 @@ def aggregate(
     return out
 
 
-# --------------------------------------------------------------------------- #
 # Rendering
-# --------------------------------------------------------------------------- #
 
 def render_markdown_table(
     stats: Dict[Tuple[str, str], Dict[str, float]],
 ) -> str:
-    """
-    Build a Markdown table sorted by mean PPL within each model.
-    Models appear in alphabetical order; within each model, policies are
-    sorted by ascending mean PPL (best first).
-    """
+    """Markdown table, models in alphabetical order, policies by ascending mean PPL."""
     lines: List[str] = []
     lines.append("# Wave-11 Perplexity Comparison")
     lines.append("")
@@ -447,16 +345,11 @@ def render_bar_plot(
     stats: Dict[Tuple[str, str], Dict[str, float]],
     out_path: str,
 ) -> None:
-    """
-    Grouped bar chart: one group per model, bars per policy, error bars
-    from the bootstrap CI.
-    """
+    """Grouped bar chart, one group per model, with bootstrap CI error bars."""
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     if not stats:
-        # Refuse to write a placeholder image — those have been mistaken for
-        # results in the past. Print a clear message and leave the figures/
-        # directory empty so reviewers see "no figure" rather than a fake one.
+        # No placeholder image, so an empty plot cannot be mistaken for a result.
         print(
             f"[skip] no PPL data available; not writing {out_path}",
             file=sys.stderr,
@@ -514,9 +407,7 @@ def render_bar_plot(
     plt.close(fig)
 
 
-# --------------------------------------------------------------------------- #
 # Entry point
-# --------------------------------------------------------------------------- #
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)

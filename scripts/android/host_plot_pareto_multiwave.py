@@ -1,39 +1,8 @@
 #!/usr/bin/env python3
-"""Multi-wave Pareto comparator.
+"""Multi-wave Pareto plots (07 DDR vs tps, 08 PPL vs DDR, 09 efficiency frontier).
 
-Combines per-cell results from waves 4, 9, 10, 11 (and gracefully handles
-absent / partial wave-11 data) and renders three relationship plots:
-
-  07_pareto_multiwave_thermal_throughput.png
-        x = peak DDR temperature (C)              [lower is better]
-        y = mean decode throughput (tok/s)        [higher is better]
-        Every cell from waves 4/9/10/11 is plotted and labelled.
-
-  08_pareto_multiwave_ppl_thermal.png
-        x = peak DDR temperature (C)              [lower is better]
-        y = perplexity                            [lower is better]
-        Wave-11 cells only (held-out PPL).  Wave-3..10 PPL values are
-        derived from the *generated* tokens (sampling-NLL on the
-        long-decode prompt) and are NOT comparable to held-out
-        wikitext PPL.  We deliberately do NOT mix the two metrics on
-        this figure; the wave-3..10 numbers are surfaced as a faded
-        "sampling-NLL" reference panel with a prominent annotation.
-        When wave-11 has zero cells, the figure is still produced with
-        only the reference panel + a 'wave-11 pending' watermark.
-
-  09_efficiency_frontier.png
-        2 side-by-side panels representing the (PPL, peak-DDR, mean-tps)
-        triple per cell.  Left panel: PCA projection of standardized
-        (ppl, ddr, tps_inv) onto its two leading components, with the
-        Pareto frontier drawn through the dominant cells.  Right panel:
-        the standardized triple plotted as DDR vs tps with marker
-        AREA encoding sampling-NLL (or held-out PPL when wave-11
-        cells are present) so the third dimension is preserved.
-
-Outputs (also printed to stdout in JSON as ART_SCHEMA):
-  * three PNGs under EndurKV/figures/relationship_plots/
-  * an `art_schema.json` next to the PNGs describing every artifact
-    and the per-cell input rows.
+Waves 4-10 PPL is sampling NLL on generated tokens and wave 11 is held-out PPL,
+so they stay on separate panels. Writes PNGs and art_schema.json to figures/relationship_plots/.
 """
 from __future__ import annotations
 
@@ -52,9 +21,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 
-# ---------------------------------------------------------------------------
 # Paths
-# ---------------------------------------------------------------------------
 WORKSPACE = Path("/home/mislam22/EndurKV_workspace")
 PHONE_LOGS = WORKSPACE / "phone-logs"
 FIG_DIR = WORKSPACE / "EndurKV" / "figures" / "relationship_plots"
@@ -63,8 +30,7 @@ WAVE4_DIR = PHONE_LOGS / "wave4_longdecode_1780750084"
 WAVE9_DIR = PHONE_LOGS / "wave9_v1fa2_stack_1780796320"
 WAVE10_DIR = PHONE_LOGS / "wave10_ksweep_1780815847"
 
-# Wave-11 dir is *globbed* because the run-id suffix is timestamp-driven and
-# may be created by a later eval.  We pick the most recent dir each call.
+# The wave-11 dir has a timestamp suffix, so the newest match is used.
 WAVE11_GLOB = "wave11_eval_*"
 
 OUT_07 = FIG_DIR / "07_pareto_multiwave_thermal_throughput.png"
@@ -73,9 +39,7 @@ OUT_09 = FIG_DIR / "09_efficiency_frontier.png"
 ART_SCHEMA_PATH = FIG_DIR / "art_schema.json"
 
 
-# ---------------------------------------------------------------------------
 # Per-cell record
-# ---------------------------------------------------------------------------
 @dataclass
 class Cell:
     wave: str                     # 'wave4' | 'wave9' | 'wave10' | 'wave11'
@@ -100,14 +64,9 @@ class Cell:
         return f"{self.wave}/{self.policy}{('/' + k) if k else ''}"
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 def read_sensors_ddr(sensors_csv: Path) -> tuple[float, float]:
-    """Return (peak_ddr_c, mean_ddr_c) from a sensors.csv.
-
-    Falls back to (NaN, NaN) if file is missing or malformed.
-    """
+    """Return (peak_ddr_c, mean_ddr_c) from sensors.csv, or NaNs if unreadable."""
     if not sensors_csv.is_file():
         return float("nan"), float("nan")
     try:
@@ -136,10 +95,8 @@ def load_meta(iter_dir: Path) -> Optional[dict]:
     if not mp.is_file():
         return None
     raw = mp.read_text()
-    # The on-device emitter occasionally writes bare `inf` / `nan` tokens
-    # (e.g. when decode_tps overflows on a zero-decode chunk).  Standard
-    # json.loads rejects those, so we quote them as "Infinity"/"NaN"
-    # before parsing and then coerce them back to floats.
+    # The device sometimes writes bare inf/nan, which json.loads rejects,
+    # so map them to Infinity/NaN before parsing.
     if _BARE_NONFINITE.search(raw):
         def _q(m):
             t = m.group(0)
@@ -162,15 +119,7 @@ def aggregate_cell(
     wave: str,
     model: str = "Phi-3-mini-128k",
 ) -> Optional[Cell]:
-    """Aggregate one policy / K cell into a Cell record.
-
-    Cell layout we accept:
-        cell_dir/
-            sensors.csv
-            stress.csv
-            iter*/meta.json
-        cell_dir/<bench>/   (wave-11 nests bench under the policy)
-    """
+    """Aggregate one cell dir (sensors.csv, stress.csv, iter*/meta.json) into a Cell."""
     sensors = cell_dir / "sensors.csv"
     stress = cell_dir / "stress.csv"
     if not stress.is_file():
@@ -180,10 +129,7 @@ def aggregate_cell(
     if sdf.empty:
         return None
 
-    # decode_tps is occasionally inf when the wave-11 PPL script set
-    # tps=0 on a chunk for which only prefill ran -- drop those for the
-    # mean.  Also drop the (rare) absurd 1.992e9 / 2.105e9 entries that
-    # came from a logger glitch on the device.
+    # Drop inf or zero tps (prefill-only chunks) and logger glitches above 1e3.
     tps = pd.to_numeric(sdf.get("decode_tps", pd.Series(dtype=float)),
                         errors="coerce")
     tps = tps.replace([np.inf, -np.inf], np.nan)
@@ -209,9 +155,8 @@ def aggregate_cell(
         mean_tps = float(tps.mean())
         std_tps = float(tps.std(ddof=0))
 
-    # Per-iter PPL: prefer meta.json (authoritative) and average across
-    # iterations.  Distinguish 'sampling NLL on generated tokens' (waves
-    # 4 / 9 / 10) from 'held-out PPL on wikitext-2 chunks' (wave 11).
+    # Mean PPL over iters from meta.json. Waves 4/9/10 report sampling NLL on
+    # generated tokens, wave 11 reports held-out wikitext-2 PPL.
     ppl_vals = []
     for sub in sorted(cell_dir.glob("iter*")):
         meta = load_meta(sub)
@@ -270,11 +215,9 @@ def aggregate_cell(
     )
 
 
-# ---------------------------------------------------------------------------
 # Wave collectors
-# ---------------------------------------------------------------------------
 def collect_wave4(d: Path) -> list[Cell]:
-    """Wave-4 long-decode smoking gun: vanilla, v1_K512, v1_fa_K512."""
+    """Wave-4 long-decode cells: vanilla, v1_K512, v1_fa_K512."""
     cells: list[Cell] = []
     if not d.is_dir():
         return cells
@@ -325,7 +268,7 @@ def find_wave11_dir() -> Optional[Path]:
     candidates = [c for c in candidates if c.is_dir()]
     if not candidates:
         return None
-    # Newest by name suffix (timestamp), then mtime.
+    # Newest by timestamp suffix.
     return candidates[-1]
 
 
@@ -356,9 +299,7 @@ def collect_wave11(d: Optional[Path]) -> list[Cell]:
     return cells
 
 
-# ---------------------------------------------------------------------------
 # Plot helpers
-# ---------------------------------------------------------------------------
 WAVE_STYLE = {
     "wave4":  {"color": "#7570b3", "marker": "o", "label": "Wave-4 (long-decode)"},
     "wave9":  {"color": "#d95f02", "marker": "s", "label": "Wave-9 (v1_fa2_stack)"},
@@ -405,9 +346,7 @@ def annotate_point(ax, x, y, text, *, color, dx=0.35, dy=0.05):
     )
 
 
-# ---------------------------------------------------------------------------
 # Figure 07: peak DDR vs mean tps
-# ---------------------------------------------------------------------------
 def fig_07(cells: list[Cell], out: Path) -> dict:
     fig, ax = plt.subplots(figsize=(11.5, 7.0), dpi=140)
 
@@ -469,10 +408,7 @@ def fig_07(cells: list[Cell], out: Path) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Figure 08: PPL vs peak DDR  (wave-11 only;
-#           wave-4..10 sampling-NLL shown as reference panel)
-# ---------------------------------------------------------------------------
+# Figure 08: PPL vs peak DDR (wave 11, waves 4-10 sampling NLL as reference)
 def fig_08(cells: list[Cell], out: Path) -> dict:
     wave11 = [c for c in cells if c.wave == "wave11" and
               c.heldout_ppl is not None and not np.isnan(c.peak_ddr_c)]
@@ -483,7 +419,7 @@ def fig_08(cells: list[Cell], out: Path) -> dict:
                              gridspec_kw={"width_ratios": [1.2, 1.0]})
     ax_main, ax_ref = axes
 
-    # ----- left: wave-11 held-out PPL (real metric) ------------------
+    # left: wave-11 held-out PPL (real metric)
     ax_main.set_xlabel("Peak DDR temperature  (degC, lower is better)")
     ax_main.set_ylabel("Held-out wikitext PPL  (lower is better)")
     ax_main.set_title("Wave-11: held-out PPL vs peak DDR")
@@ -520,7 +456,7 @@ def fig_08(cells: list[Cell], out: Path) -> dict:
                          label="Pareto frontier")
             ax_main.legend(loc="best", fontsize=9)
 
-    # ----- right: wave-4..10 sampling-NLL reference panel ------------
+    # right: wave-4..10 sampling-NLL reference panel
     ax_ref.set_xlabel("Peak DDR temperature  (degC)")
     ax_ref.set_ylabel("Sampling-NLL exp(NLL)  on generated tokens")
     ax_ref.set_title("Reference: Wave-4/9/10 generated-token NLL\n"
@@ -565,13 +501,10 @@ def fig_08(cells: list[Cell], out: Path) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
 # Figure 09: efficiency frontier (PPL x DDR x tps)
-# ---------------------------------------------------------------------------
 def fig_09(cells: list[Cell], out: Path) -> dict:
-    # Build the (ppl, ddr, tps) triple for every cell.  Use held-out PPL
-    # when present (wave 11); otherwise use sampling NLL (wave 4 / 9 / 10)
-    # but mark those points as 'reference' so the legend is honest.
+    # (ppl, ddr, tps) per cell. Held-out PPL when present, else sampling NLL,
+    # recorded in ppl_kind.
     rows = []
     for c in cells:
         ppl = c.heldout_ppl if c.heldout_ppl is not None else c.sampling_nll_ppl
@@ -605,13 +538,9 @@ def fig_09(cells: list[Cell], out: Path) -> dict:
         plt.close(fig)
         return {"path": str(out), "n_cells_drawn": 0}
 
-    # ---- PCA panel -----------------------------------------------------
-    # Direction-of-better: lower PPL, lower DDR, higher tps.  We invert
-    # tps so that 'lower = better' on all three axes; then standardize
-    # and PCA-project to 2 components.  The Pareto frontier in the
-    # *original* 3-space is overlaid as black-edged markers.
-    from sklearn.decomposition import PCA  # local import keeps the
-                                          # module callable from tests
+    # PCA panel: negate tps so lower is better on all three axes, standardize,
+    # project to 2 components. The 3-D Pareto set is outlined in black.
+    from sklearn.decomposition import PCA  # local import keeps the module importable from tests
 
     X = df[["ppl", "ddr", "tps"]].to_numpy(dtype=float).copy()
     X[:, 2] = -X[:, 2]  # invert tps so 'lower is better'
@@ -627,8 +556,7 @@ def fig_09(cells: list[Cell], out: Path) -> dict:
     else:
         Y = np.column_stack([Xs[:, 0], Xs[:, 1] if Xs.shape[1] > 1 else np.zeros(len(Xs))])
 
-    # 3-D Pareto frontier (over original objectives, lower-is-better
-    # on all three after the tps inversion).
+    # 3-D Pareto set, lower is better on all three after negating tps.
     pareto_mask = np.ones(len(X), dtype=bool)
     for i in range(len(X)):
         if not pareto_mask[i]:
@@ -665,9 +593,8 @@ def fig_09(cells: list[Cell], out: Path) -> dict:
     ax_pca.set_title("PCA(ppl, peak_ddr, -mean_tps)")
     ax_pca.legend(loc="best", fontsize=8)
 
-    # ---- Right panel: DDR vs tps with marker size = PPL ---------------
-    # Larger marker = worse PPL.  Heldout cells outlined in black, sampling
-    # cells outlined in grey to preserve metric provenance.
+    # Right panel: DDR vs tps, larger marker = worse PPL. Held-out cells have
+    # black edges, sampling-NLL cells grey.
     p_min, p_max = df["ppl"].min(), df["ppl"].max()
     rng = max(p_max - p_min, 1e-9)
     sizes = 60 + 360 * (df["ppl"] - p_min) / rng
@@ -723,9 +650,7 @@ def fig_09(cells: list[Cell], out: Path) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
 # Main
-# ---------------------------------------------------------------------------
 def main() -> int:
     cells: list[Cell] = []
     cells += collect_wave4(WAVE4_DIR)
@@ -735,7 +660,7 @@ def main() -> int:
     wave11_cells = collect_wave11(w11_dir)
     cells += wave11_cells
 
-    # ---- audit table -------------------------------------------------
+    # audit table
     pd.set_option("display.width", 200)
     pd.set_option("display.max_columns", None)
     audit = pd.DataFrame([asdict(c) for c in cells])
@@ -782,7 +707,7 @@ def main() -> int:
 
     ART_SCHEMA_PATH.write_text(json.dumps(art, indent=2, default=str))
 
-    # Print ART_SCHEMA to stdout (the contract demanded by the caller).
+    # Print ART_SCHEMA to stdout for the caller.
     print("ART_SCHEMA")
     print(json.dumps({k: v for k, v in art.items() if k != "cells"},
                      indent=2, default=str))

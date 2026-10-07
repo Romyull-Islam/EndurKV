@@ -1,17 +1,7 @@
 #!/system/bin/sh
-# phone_wave3_llamacpp_baseline.sh — stock-llama.cpp baseline cell for Wave-3.
-#
-# Runs `llama-completion` (the upstream llama.cpp interactive binary) in a loop
-# for 25 min, with identical prompt + settings to our eviction_bench cells.
-# Adds a true "pure llama.cpp" data point to the master comparison table
-# (separate from "vanilla via eviction_bench" which also uses the llama.cpp
-# decode path but goes through our binary).
-#
-# Same as the other cells:
-#  * Pin DVFS to 1.63 GHz (big cores) before starting
-#  * v4 sample_sensors at 5 Hz with USB rail capture
-#  * 25 min loop of {prefill narrativeqa_pub_001 + decode 256 tokens}
-#  * Sensor + per-iter timing captured
+# Stock llama.cpp baseline: runs upstream llama-completion in a loop for 25 min with
+# the same prompt and settings as the eviction_bench cells (DVFS pinned, sensors at
+# 5 Hz, narrativeqa_pub_001 prefill plus 256 decoded tokens per iteration).
 
 set -u
 
@@ -62,7 +52,7 @@ sh "$WORKDIR/scripts/sample_sensors.sh" --out "$CELL_DIR/sensors.csv" --hz $SAMP
 SAMPLER=$!
 sleep 1
 
-# Per-iter CSV — parse timings from llama-completion's stderr
+# Per-iter CSV - parse timings from llama-completion's stderr
 echo "iter,t_elapsed_s,exit,prefill_ms,decode_ms,decode_tps,prefill_tps,total_ms" > "$CELL_DIR/stress.csv"
 T_START=$(date +%s); ITER=0
 
@@ -73,8 +63,7 @@ while true; do
     IDIR=$CELL_DIR/iter$(printf %04d $ITER)
     mkdir -p "$IDIR"
 
-    # Pure llama-completion invocation. -fa 1 enables Flash Attention (the
-    # vanilla-with-FA path). -n 256 to match eviction_bench --max-tokens 256.
+    # -fa 1 enables flash attention, -n 256 matches eviction_bench --max-tokens 256.
     LD_LIBRARY_PATH=$WORKDIR/bin_cpu $WORKDIR/bin_cpu/llama-completion \
         -m "$MODEL" \
         -f "$PROMPT" \
@@ -92,11 +81,9 @@ while true; do
         > "$IDIR/gen.txt" 2> "$IDIR/stderr.log"
     EXIT=$?
 
-    # Parse llama_print_timings lines from stderr
-    # Format examples:
+    # Parse llama_print_timings lines in stderr, e.g.
     #   llama_print_timings: prompt eval time = N ms / M tokens ( X ms per token, Y tokens per second)
     #   llama_print_timings: eval time        = N ms / M runs   ( X ms per token, Y tokens per second)
-    #   llama_print_timings: total time       = N ms / M tokens
     PF=$(grep -E "prompt eval time" "$IDIR/stderr.log" | tail -1 | sed -E 's/.*= *([0-9.]+) *ms.*/\1/')
     DT=$(grep -E "eval time " "$IDIR/stderr.log" | grep -v "prompt eval" | tail -1 | sed -E 's/.*\( *([0-9.]+) *tokens per second\)/\1/')
     # eval time totals

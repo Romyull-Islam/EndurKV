@@ -1,28 +1,7 @@
 #!/usr/bin/env python3
-"""
-Llama-3.2-1B Wave-3 narrativeqa PPL/DDR/tps bar figure.
-
-Source: /home/mislam22/EndurKV_workspace/phone-logs/wave3_real_1780680903/
-Cells:  vanilla / v1_K512 / v1_K2048 / v1_fa_K512
-
-For each cell we read:
-  - <cell>/iter*/meta.json       -> per-iter PPL, decode_tps
-  - <cell>/iter*/steps.csv       -> per-step NLL (fallback error bar)
-  - <cell>/sensors.csv           -> ddr_temp_mc peak for the cell
-
-3-panel figure:
-  Top:    PPL bars per cell, error bar from per-iter PPL stdev
-          (if zero -> SEM of per-step NLL aggregated across iters)
-  Middle: peak DDR temperature per cell
-  Bottom: mean decode tok/s per cell (with stdev across iters)
-
-Pareto annotations are overlaid on each panel:
-  - v1 K=2048   wins PPL    (1.87)
-  - v1_FA K=512 wins tps    (7.77)
-  - v1 K=512    wins thermal (49.4 C)
-
-Output: /home/mislam22/EndurKV_workspace/EndurKV/figures/eval_plots/llama1b_ppl_bars.png
-"""
+"""Llama-3.2-1B narrativeqa bar figure (PPL, peak DDR temp, decode tok/s) for the cells
+vanilla, v1_K512, v1_K2048, v1_fa_K512 in phone-logs/wave3_real_1780680903.
+Writes figures/eval_plots/llama1b_ppl_bars.png."""
 from __future__ import annotations
 
 import json
@@ -81,8 +60,7 @@ def collect_cell(cell_dir: Path) -> dict:
 
     ppl_mean = float(np.mean(ppls)) if ppls else float("nan")
     ppl_std_iter = float(np.std(ppls, ddof=0)) if len(ppls) >= 2 else 0.0
-    # Fallback error bar: standard error of mean NLL across decode steps,
-    # propagated through PPL = exp(mean_nll). dPPL ~= PPL * SEM(nll)
+    # Fallback error bar: SEM of per-step NLL through PPL = exp(mean_nll), dPPL ~= PPL * SEM(nll)
     if nlls:
         nll_arr = np.array(nlls, dtype=float)
         sem_nll = float(nll_arr.std(ddof=1) / math.sqrt(len(nll_arr))) if len(nll_arr) > 1 else 0.0
@@ -134,7 +112,7 @@ def main() -> None:
         rows.append(agg)
     df = pd.DataFrame(rows).set_index("cell").loc[CELLS]
 
-    print("=== Wave-3 Llama-1B aggregate ===")
+    print("Wave-3 Llama-1B aggregate")
     print(df.to_string())
 
     x = np.arange(len(CELLS))
@@ -145,7 +123,7 @@ def main() -> None:
     fig, axes = plt.subplots(3, 1, figsize=(9.0, 10.5), sharex=True)
     ax_ppl, ax_ddr, ax_tps = axes
 
-    # ---------------- Top: PPL ----------------
+    # Top: PPL
     ppl_vals = df["ppl_mean"].values
     ppl_err = df["ppl_err"].values
     ax_ppl.bar(x, ppl_vals, width=bar_w, color=bar_colors, edgecolor="black", linewidth=0.7,
@@ -170,7 +148,7 @@ def main() -> None:
         ha="left", va="bottom",
     )
 
-    # ---------------- Middle: peak DDR ----------------
+    # Middle: peak DDR
     ddr_vals = df["peak_ddr_c"].values
     ax_ddr.bar(x, ddr_vals, width=bar_w, color=bar_colors, edgecolor="black", linewidth=0.7)
     for xi, v in zip(x, ddr_vals):
@@ -197,7 +175,7 @@ def main() -> None:
         ha="left", va="top",
     )
 
-    # ---------------- Bottom: mean decode tps ----------------
+    # Bottom: mean decode tps
     tps_vals = df["tps_mean"].values
     tps_err = df["tps_std"].values
     ax_tps.bar(x, tps_vals, width=bar_w, color=bar_colors, edgecolor="black", linewidth=0.7,

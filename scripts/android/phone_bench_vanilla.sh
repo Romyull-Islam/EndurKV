@@ -1,40 +1,16 @@
 #!/system/bin/sh
-# phone_bench_vanilla.sh — Vanilla llama.cpp baseline benchmark, on-phone.
+# phone_bench_vanilla.sh: vanilla llama.cpp baseline on the phone. Runs llama-completion on one
+# prompt while sampling RSS from /proc (5 Hz) and sensors via sample_sensors.sh (10 Hz).
 #
-# Captures all four metric streams per prompt:
-#   1. Latency: prefill/decode tokens/sec (from llama-completion timing output)
-#   2. Perplexity: per-chunk PPL via llama-perplexity (separate run on corpus)
-#   3. Memory: RSS peak via /proc/$PID/status sampled at 5 Hz
-#   4. Thermal/battery: existing sample_sensors.sh at 10 Hz
-#
-# Layout on phone (after adb push):
-#   /data/local/tmp/endurkv/
-#     bin/                  llama-completion, llama-perplexity, llama-bench, *.so
-#     models/               *.gguf
-#     prompts/              *.txt (each prompt as its own file)
-#     scripts/              this script + sample_sensors.sh
-#     logs/                 per-run output
-#
-# Usage on phone:
-#   cd /data/local/tmp/endurkv
-#   sh scripts/phone_bench_vanilla.sh \
-#       --model models/Llama-3.2-1B-Instruct-Q4_K_M.gguf \
-#       --prompt prompts/narrativeqa_lc_01.txt \
-#       --prompt-id narrativeqa_lc_01 \
-#       --ctx-size 4096 \
-#       --max-tokens 64 \
-#       --out-dir logs/run_$(date +%s)
-#
-# Output (in --out-dir):
-#   prompt_id.timing.txt    raw stderr from llama-completion
-#   prompt_id.gen.txt       generated text
-#   prompt_id.mem.csv       per-sample RSS (5 Hz) during the run
-#   prompt_id.sensors.csv   per-sample thermal+battery+UFS (10 Hz)
-#   prompt_id.meta.json     start/end wall clock, exit code, model+ctx params
+# Usage (from /data/local/tmp/endurkv):
+#   sh scripts/phone_bench_vanilla.sh --model models/Llama-3.2-1B-Instruct-Q4_K_M.gguf \
+#       --prompt prompts/narrativeqa_lc_01.txt --prompt-id narrativeqa_lc_01 \
+#       --ctx-size 4096 --max-tokens 64 --out-dir logs/run_$(date +%s)
+# Writes <prompt_id>.timing.txt, .gen.txt, .mem.csv, .sensors.csv and .meta.json to --out-dir.
 
 set -e
 
-# ------ defaults / args ------
+# defaults / args
 MODEL=""
 PROMPT=""
 PROMPT_ID=""
@@ -71,38 +47,29 @@ done
 
 mkdir -p "$OUT_DIR"
 
-# ------ paths ------
+# paths
 ROOT=/data/local/tmp/endurkv
 BIN="$ROOT/bin"
 LLAMA_BIN="$BIN/llama-completion"
 export LD_LIBRARY_PATH="$BIN"
 
-# ------ start sensor sampler (background) ------
+# start sensor sampler (background)
 SENSORS_CSV="$OUT_DIR/${PROMPT_ID}.sensors.csv"
 sh "$SAMPLER" --out "$SENSORS_CSV" --hz "$SENSORS_HZ" &
 SAMPLER_PID=$!
 
-# ------ record start ------
+# record start
 START_WALL=$(date +%s.%N)
 START_MONO=$(awk '{print $1}' /proc/uptime)
 
-# ------ launch llama-completion in background, then sample memory ------
+# launch llama-completion in background, then sample memory
 TIMING_TXT="$OUT_DIR/${PROMPT_ID}.timing.txt"
 GEN_TXT="$OUT_DIR/${PROMPT_ID}.gen.txt"
 MEM_CSV="$OUT_DIR/${PROMPT_ID}.mem.csv"
 
-# Read the prompt file (llama-completion needs prompt via stdin or -f)
 PROMPT_FILE="$PROMPT"
 
-# llama-completion CLI:
-#   -m model
-#   -f prompt-file  (prompt text from file)
-#   -c ctx-size
-#   -n n-predict (max new tokens)
-#   -s seed
-#   -t threads
-#   --no-warmup (skip warmup pass)
-#   --no-conversation (single-shot mode, not chat)
+# -n is the max new tokens. --no-conversation runs single-shot instead of chat.
 "$LLAMA_BIN" \
     -m "$MODEL" \
     -f "$PROMPT_FILE" \
@@ -132,15 +99,15 @@ done
 wait "$LLAMA_PID"
 EXIT_CODE=$?
 
-# ------ stop sensor sampler ------
+# stop sensor sampler
 kill "$SAMPLER_PID" 2>/dev/null || true
 wait "$SAMPLER_PID" 2>/dev/null || true
 
-# ------ record end ------
+# record end
 END_WALL=$(date +%s.%N)
 END_MONO=$(awk '{print $1}' /proc/uptime)
 
-# ------ write metadata ------
+# write metadata
 META_JSON="$OUT_DIR/${PROMPT_ID}.meta.json"
 cat > "$META_JSON" <<EOF
 {
@@ -160,17 +127,15 @@ cat > "$META_JSON" <<EOF
 }
 EOF
 
-# ------ extract timing summary ------
-# llama-completion writes timing summary to stderr (TIMING_TXT)
-# Lines like:  load time = X ms,  prefill = Y tokens, Z ms, etc.
+# Summary. llama-completion writes its timing lines to stderr (TIMING_TXT).
 echo "[bench_vanilla] DONE  $(date)  pid=$LLAMA_PID  exit=$EXIT_CODE"
 echo "                 out: $OUT_DIR/"
 echo "                 mem:    $MEM_CSV       ($(wc -l < $MEM_CSV) samples)"
 echo "                 sensors:$SENSORS_CSV  ($(wc -l < $SENSORS_CSV) samples)"
 echo "                 timing: $TIMING_TXT"
 echo ""
-echo "===== timing ====="
+echo "timing"
 grep -E "(llama_perf|eval time|prompt eval|n_prompt|n_predict|tokens per second|prefill|decode|throughput)" "$TIMING_TXT" || tail -20 "$TIMING_TXT"
-echo "===== final memory ====="
+echo "final memory"
 tail -3 "$MEM_CSV"
 exit $EXIT_CODE

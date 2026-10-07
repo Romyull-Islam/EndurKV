@@ -1,30 +1,9 @@
 #!/bin/bash
-# ============================================================================
-# run_phi3_inplace_clean.sh -- Phi-3 in-place + v5LOW, measured properly. (2026-08-10)
-#
-# WHY A RE-RUN. The first attempt produced a 134% spread between two repeats of the
-# IDENTICAL configuration: 13.43 tok/s then 5.75. Not noise -- thermal history. Cell 1
-# ran after a 4-SECOND cool gate (the phone happened to be cold already); cell 2 ran
-# after a 14-minute Phi-3 run with a 15-minute cool-down that was not enough. Phi-3 cells
-# are ~25 min of sustained GPU load, so they heat far more than the ~5 min Llama-1B cells
-# the standard gate was tuned against.
-#
-# THREE FIXES over the previous runner:
-#  1. GATE -> SETTLE -> RE-GATE. The project gate (DDR<=35 C, batt<=33 C) is necessary but
-#     not sufficient: crossing a threshold is not the same as being cooled, and a cell can
-#     legally start anywhere in the band. A previous settle-only version let DDR drift back
-#     UP to 36.3 C while waiting for stability, so the gate is now re-checked AFTER the
-#     settle. Start temperatures are logged, because "all arms passed the gate" was true of
-#     the pair that differed by 4.6 C and 36% in wall time.
-#  2. sample_sensors.sh runs, so the energy column exists. The previous runner captured the
-#     watchdog log but not the power trace, which is why mJ/token was blank.
-#  3. gen.txt is kept, so the ! -density corruption check can run. Without it the cell is
-#     unverifiable -- and on this backend five baselines turned out to be producing garbage.
-#
-# n=3. Two cells cannot distinguish an outlier from a trend, and with the median statistic
-# n=2 degenerates to the mean, which is what made the earlier row report a tok/s no run
-# achieved.
-# ============================================================================
+# Phi-3 muKV with in-place compaction and the v5LOW GPU watchdog on the phone GPU, n=3.
+# Phi-3 cells are ~25 min of sustained GPU load, so each cell waits for the cool gate
+# (DDR<=35 C, battery<=33 C), then for DDR to stop falling, then re-checks the gate, and logs
+# its start temperatures. Sensors are sampled for energy, and gen.txt is kept so the
+# '!'-density corruption check can run.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 BIN=/data/local/tmp/ukv

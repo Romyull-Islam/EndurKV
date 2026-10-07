@@ -1,15 +1,8 @@
 #!/usr/bin/env python3
-"""Comparison figures for the top KV cache management architectures, including
-recent mobile-inference methods.
+"""Comparison figure of KV cache management methods, including mobile-inference ones.
 
-Two panels:
-  Panel A — properties matrix (method × design dimension).
-  Panel B — measured critical-KV-footprint at F=95% mass retention on Llama-8B
-            smoke (only for methods we have implemented and run on the same data).
-
-Where a paper publishes numbers but we haven't yet measured the method, the
-properties matrix marks "paper-claim" so the reader sees the gap honestly.
-"""
+Panel A: properties matrix (method x design dimension). Panel B: measured critical KV
+footprint at 95% mass retention on the Llama-8B smoke prompt, for methods we implemented."""
 import sys
 from pathlib import Path
 
@@ -20,15 +13,10 @@ import numpy as np
 import pandas as pd
 
 
-# Curated list of the top KV-cache management methods, organized by category.
-# Field key for properties matrix:
-#   signal:        "attention" / "K-vector" / "attention+K" / "trained" / "system"
-#   mobile_focus:  bool — explicitly targets mobile/edge deployment
-#   our_impl:      bool — we have a working implementation in our simulator
-#   our_data:      bool — we have run it on our captures
-#   year, venue, paper_ref
+# KV-cache methods by category. signal is the eviction signal, mobile_focus means the paper
+# targets mobile or edge, our_impl/our_data mean implemented in our simulator and run on our captures.
 METHODS = [
-    # === Per-token KV eviction (direct comparison set) ===
+    # Per-token KV eviction (direct comparison set)
     {"name": "perhead_v1 (ours)", "category": "Per-token eviction",
      "signal": "attention+spread", "mobile_focus": True,
      "our_impl": True, "our_data": True,
@@ -69,7 +57,7 @@ METHODS = [
      "signal": "attention × ||W_o·V||", "mobile_focus": False,
      "our_impl": True, "our_data": True,
      "year": 2026, "venue": "arXiv", "paper_ref": "Mai+2026"},
-    # === Trained / structural eviction ===
+    # Trained / structural eviction
     {"name": "DuoAttention", "category": "Trained head classification",
      "signal": "trained (retrieval vs streaming heads)", "mobile_focus": False,
      "our_impl": True, "our_data": True,
@@ -78,7 +66,7 @@ METHODS = [
      "signal": "trained (end-to-end Bernoulli mask)", "mobile_focus": False,
      "our_impl": False, "our_data": False,
      "year": 2025, "venue": "arXiv", "paper_ref": "Bhaskar+2025"},
-    # === Mobile-system-level (not directly comparable; different problem class) ===
+    # Mobile system level, a different problem class, not directly comparable
     {"name": "KVSwap (disk offload)", "category": "Mobile system",
      "signal": "compressed K + disk reload", "mobile_focus": True,
      "our_impl": False, "our_data": False,
@@ -94,7 +82,7 @@ METHODS = [
 ]
 
 
-# Smoke-prompt Llama-8B critical KV footprint @ 95% mass retention (we have this).
+# Measured critical KV footprint at 95% mass retention, Llama-8B smoke prompt.
 MEASURED_CRITICAL_K = {
     "perhead_v1 (ours)": 61.5,
     "TOVA": 64.0,
@@ -106,13 +94,8 @@ MEASURED_CRITICAL_K = {
 
 
 def make_properties_matrix(out_path: Path):
-    """Panel A: properties grid — method × design dimension.
-
-    Adds a 'Comparable to ours?' column with explicit reasoning so the reader
-    sees WHY the bottom three methods are not simulated. They solve a different
-    problem (disk offload / LoRA delta / cross-query RAG cache), not per-token
-    eviction. Cells are color-coded by category and comparability.
-    """
+    """Panel A: properties grid, method x design dimension, with a column saying
+    why the non-eviction methods are not simulated."""
     fig, ax = plt.subplots(figsize=(15.5, len(METHODS) * 0.50 + 1.8), dpi=130)
 
     # Comparability reason per method (None = directly comparable)
@@ -164,11 +147,9 @@ def make_properties_matrix(out_path: Path):
         row_color.append("white")
         row_color.append("white")
         row_color.append("#d8f0d8" if m["mobile_focus"] else "white")
-        # Comparability column — pale green if yes, pale orange if no
+        # Comparability column: pale green if yes, pale orange if no
         row_color.append("#d8f0d8" if is_comparable else "#ffe5d2")
-        # Impl/Data — only apply red highlight if the method IS comparable but
-        # not implemented/measured. Skip the red flag for incomparable methods
-        # because not-implementing them is the right design choice.
+        # Impl/Data: red only for comparable methods we have not run, gray otherwise.
         if is_comparable:
             row_color.append("#d8f0d8" if m["our_impl"] else "#fcd8d8")
             row_color.append("#d8f0d8" if m["our_data"] else "#fcd8d8")

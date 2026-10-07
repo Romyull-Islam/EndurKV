@@ -1,37 +1,13 @@
 #!/bin/bash
-# ============================================================================
-# run_phone_gpu_complete.sh -- finish the phone GPU evidence table (2026-08-02)
-#
-# WHAT IS ALREADY DONE (run_phone_gpu_16k_wikitext.sh + _ksweep.sh):
-#   timed cells, Llama-1B and Phi-3 x {vanilla, muKV+compaction, muKV-compaction,
-#   SnapKV}, plus Phi-3 muKV at K=512/256. Those give prefill/decode/wall/tps/
-#   retained/energy. They do NOT give a quality number: they run --ignore-eos,
-#   which produces degenerate repetition, so their generated text is unscorable.
-#
-# WHAT THIS ADDS:
-#   PASS A -- PPL on every existing arm, both metrics the draft distinguishes:
-#     PPL_dis : teacher-forced on wiki_eval_disjoint.txt (verified to share no
-#               200-char window with the prompt) -> measures PREDICTION. This is
-#               the slice on which the draft claims every policy matches the full
-#               cache, and it is the honest quality column for the speedup table.
-#     PPL_rec : teacher-forced on wiki_eval_overlap.txt, a prefix of the prompt
-#               itself -> measures VERBATIM RECALL of retained text. Eviction is
-#               *supposed* to lose here; reporting only this would misrepresent
-#               eviction as a language-modelling regression.
-#     Both slices are checked into benchmarks/ppl/ with their offsets, because the
-#     previous disjoint slice lived in a scratchpad dir that no longer exists.
-#   PASS B -- the four policies missing from the GPU table (StreamingLLM, Ada-KV,
-#     H2O, TOVA), so the phone GPU carries the same policy set as the NIAH table.
-#
-# GATING. PASS A is quality-only: greedy + fixed seed + teacher forcing means the
-# scored logits do not depend on clock speed, so no cool gate (nothing timed is
-# reported from these cells). PASS B cells ARE timed and DO take the full gate
-# (DDR<=35C, batt<=33C, charging off). The watchdog stays muKV-only throughout.
-#
-# MODELS. Llama-1B and Phi-3 only: Gemma-2B and Bonsai-8B abort on this driver
-# under FA-on (vk::DeviceLostError) for vanilla and muKV alike. That is a driver
-# fault, not a policy limit, and all four run on the phone CPU.
-# ============================================================================
+# run_phone_gpu_complete.sh: quality numbers and the missing policies for the phone GPU table.
+#   PASS A: teacher-forced PPL per arm on two slices (both in benchmarks/ppl/).
+#     dis = wiki_eval_disjoint.txt, shares no text with the prompt, measures prediction.
+#     rec = wiki_eval_overlap.txt, a prefix of the prompt, measures verbatim recall
+#     (eviction is expected to lose here).
+#   PASS B: timed cells for StreamingLLM, Ada-KV, H2O and TOVA, then their PPL.
+# PASS A has no cool gate since greedy teacher-forced logits do not depend on clock speed.
+# PASS B is timed and uses the full gate (DDR<=35C, batt<=33C, charging off).
+# Llama-1B and Phi-3 only: Gemma-2B and Bonsai-8B hit vk::DeviceLostError under FA-on here.
 set -u
 for _p in ${ADB_PORTS:-5152 5037 5151}; do
   (exec 3<>/dev/tcp/127.0.0.1/$_p) 2>/dev/null || continue
@@ -47,9 +23,7 @@ EV_DIS=/data/local/tmp/endurkv/corpora/wiki_eval_disjoint.txt
 EV_REC=/data/local/tmp/endurkv/corpora/wiki_eval_overlap.txt
 OUT_HOST=/tmp/phone_gpu_16k; mkdir -p "$OUT_HOST"
 OUT=/data/local/tmp/endurkv/logs/pgc_$(date +%Y%m%d_%H%M%S)
-# PASS=A (PPL only) | B (missing policies only) | all. Added 2026-08-02 so the
-# quality column and the error-bar repeats can be sequenced ahead of the long
-# FA-off policy cells, which cost ~6h and are completeness rather than defensibility.
+# PASS=A (PPL only) | B (missing policies only) | all. PASS B takes about 6 h.
 PASS=${PASS:-all}
 adb_safe_shell "mkdir -p $OUT" < /dev/null
 declare -A M=( [llama1b]=/data/local/tmp/endurkv/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
@@ -59,9 +33,8 @@ flags_for(){ case "$1" in
   vanilla)      echo "--policy vanilla" ;;
   mukv_dfg)     echo "$MU --force-defrag" ;;
   mukv_nodfg)   echo "$MU --no-defrag" ;;
-  # WikiText has no published SnapKV setting, so the baseline gets the shipped
-  # FasterDecoding default (window 64, avgpool-5). One SnapKV per table, always
-  # the most appropriate published configuration for that benchmark.
+  # WikiText has no published SnapKV setting, so use the FasterDecoding default
+  # (window 64, avgpool 5).
   snapkv)       echo "--policy snapkv --obs-window 64 --snapkv-kernel 5 --n-sink 0" ;;
   streamingllm) echo "--policy streamingllm --n-sink 4" ;;
   adakv)        echo "--policy adakv --n-sink 0 --obs-window 32" ;;
@@ -70,7 +43,7 @@ flags_for(){ case "$1" in
 esac; }
 is_mukv(){ case "$1" in mukv_dfg|mukv_nodfg) return 0;; *) return 1;; esac; }
 
-# ---------- PASS A: PPL (no gate -- quality only, see header) ----------
+# PASS A: PPL (no cool gate, quality only)
 ppl_cell(){ local MT=$1 POL=$2 KIND=$3 EV=$4; local TAG="${MT}_${POL}_ppl_${KIND}"; local PD=$OUT/$TAG
   [ -f "$OUT_HOST/$TAG/meta.json" ] && { echo "  [$TAG] cached"; return; }
   adb_safe_shell "mkdir -p $PD" < /dev/null
@@ -102,7 +75,7 @@ for MT in llama1b phi3; do
 done
 
 fi
-# ---------- PASS B: timed cells for the missing policies (FULL cool gate) ----------
+# PASS B: timed cells for the missing policies (full cool gate)
 timed_cell(){ local MT=$1 POL=$2; local TAG="${MT}_${POL}"; local PD=$OUT/$TAG
   [ -f "$OUT_HOST/$TAG/meta.json" ] && { echo "  [$TAG] cached"; return; }
   adb_safe_shell "mkdir -p $PD" < /dev/null
@@ -133,8 +106,8 @@ print("  [%-22s] prefill=%7.1fs decode=%7.1fs wall=%7.1fs tps=%6.2f ret=%8.1fMiB
     j.get('decode_tps') or 0,(j.get('retained_kv_bytes') or 0)/1048576,j.get('compaction_applied')))
 PY
 }
-# llama1b first: same policy set, ~4x cheaper per cell, so the table becomes
-# complete for one model before the expensive Phi-3 FA-off cells start.
+# llama1b first. It is about 4x cheaper per cell, so one model finishes before
+# the slow Phi-3 FA-off cells.
 if [ "$PASS" = B ] || [ "$PASS" = all ]; then
 echo "[$(date +%H:%M:%S)] ===== PASS B: missing policies, timed (cool gate on every cell) ====="
 for MT in llama1b phi3; do

@@ -1,25 +1,8 @@
 #!/usr/bin/env python3
-"""
-host_wave3_combined_table.py — build the FINAL comparison table from all
-matched-DVFS Wave-3 cells.
-
-Sources combined:
-  REAL:     wave3_real_1780680903/          (v1_K2048, v1_K512, v1_fa_K512 — battery; vanilla=DROP, was on AC)
-  OTHERS:   wave3_real_others_<ts>/         (tova_K512, h2o_K512, pyramid_K512 — battery)
-  VANILLA:  wave3_vanilla_battery_<ts>/     (vanilla — battery, the corrective rerun)
-
-For each policy, extracts and reports:
-  - Power state (must be 'battery' for inclusion)
-  - Peak CPU clock (DVFS cap)
-  - Iterations, mean decode tok/s, throughput decay
-  - Peak/mean DDR temp, peak/mean CPU big-cluster temp
-  - Mean battery current (sanity check on power state)
-
-Outputs:
-  TABLE_WAVE3_MATCHED.md
-  wave3_matched_thermal.png
-  wave3_matched_throughput.png
-"""
+"""Combined table of the matched-DVFS wave3 cells (wave3_real_*, wave3_real_others_*,
+wave3_vanilla_battery_*). Only battery-powered cells count, the AC vanilla cell is dropped.
+Reports clock cap, decode tok/s and decay, DDR and CPU temperatures and battery current.
+Writes TABLE_WAVE3_MATCHED.md, wave3_matched_thermal.png and wave3_matched_throughput.png."""
 import sys, csv, json, glob
 from pathlib import Path
 import matplotlib

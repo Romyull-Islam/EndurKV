@@ -1,32 +1,10 @@
 #!/bin/bash
-# ============================================================================
-# run_phone_gpu_repeats.sh -- error bars for the headline phone GPU cells
-#                             (2026-08-02)
-#
-# WHY THIS IS NOT OPTIONAL.
-# Every phone GPU cell so far is n=1, and we have a direct measurement of how
-# noisy that is: llama1b_mukv_dfg and llama1b_mukv_nodfg differ ONLY in whether
-# compaction runs, which happens strictly AFTER prefill -- so their prefill times
-# must be identical. They came out 119.1s vs 130.9s, a 9.9% spread. That is the
-# run-to-run variance of this device, and it is the same size as the Llama-1B
-# decode speedup we would otherwise report (1.10x). A headline that inverts when
-# a reviewer re-runs one cell is the most damaging thing we can ship, and we
-# already had one claim ("eviction without compaction is slower than vanilla")
-# that rested entirely on a single such cell and did not survive scrutiny.
-#
-# WHAT IT REPEATS. Three runs of each arm that carries a headline number:
-#   Llama-1B {vanilla, muKV+compaction, muKV-compaction}  -- the marginal case
-#   Phi-3    {vanilla, muKV+compaction, muKV-compaction}  -- the 2.39x claim
-# SnapKV is excluded: at 1090s (llama1b) and 5468s (phi3) per run, three repeats
-# would cost ~5.5h to tighten a number (0.14x-0.16x) whose sign is not in doubt.
-# The K-sweep points are likewise single-run; they are a trend, not a headline.
-#
-# PROTOCOL IS IDENTICAL to run_phone_gpu_16k_wikitext.sh -- same prompt, ctx,
-# generation length, q8_0 KV, cool gate before EVERY run (DDR<=35C, batt<=33C,
-# charging off), watchdog muKV-only. Anything else and the repeats would not be
-# repeats. Run index is appended to the tag so nothing overwrites run 1's cells,
-# which are reused as the first sample.
-# ============================================================================
+# run_phone_gpu_repeats.sh: n=3 repeats of vanilla, muKV with compaction and muKV
+# without compaction on Llama-1B and Phi-3 (phone GPU), since n=1 run-to-run spread
+# on this device is about 10%. SnapKV is not repeated (over an hour per run).
+# Same protocol as run_phone_gpu_16k_wikitext.sh: cool gate before every run
+# (DDR<=35C, batt<=33C, charging off), watchdog for muKV only. Runs 2..N get a
+# suffix, and run 1 reuses the original cell.
 set -u
 for _p in ${ADB_PORTS:-5152 5037 5151}; do
   (exec 3<>/dev/tcp/127.0.0.1/$_p) 2>/dev/null || continue

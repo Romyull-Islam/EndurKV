@@ -1,42 +1,17 @@
 #!/bin/bash
-# ============================================================================
-# run_night_chain_20260816.sh -- the overnight queue, in dependency order.
-#
-# WHY A CHAIN. Three campaigns want the phone tonight and they cannot overlap:
-#   1. the LongBench tier sweep (already running, /tmp/lb_tiers) uses bin_cpu_cur,
-#      so the NEW binaries (KeyDiff support) must not be pushed until it is done --
-#      swapping a binary under a running campaign changes the engine mid-table,
-#      the exact class of error this week kept finding in old data.
-#   2. KeyDiff phone campaign: the mobile-positioned eviction baseline, implemented
-#      and CUDA-verified 2026-08-16 (PPL 14.136 vs vanilla 14.361). Needs the new
-#      builds on-device.
-#   3. controller-v2 validation: re-validate the 902 MHz decode plateau PINNED at
-#      n=3 (it is currently n=1, measured before the 36% dispatch bimodality was
-#      understood), plus the composed low-battery package (cap 902 + k-pct 10).
-#      Caps are WHOLE-RUN here: the decode-only phase cap needs a binary feature
-#      (phase marker) that is deliberately not being added the same night the
-#      binary already changed for KeyDiff. One change per build.
-#
-# BUILD-PROVENANCE RULES (why the push targets are what they are):
-#   * bin_cpu_cur is UPDATED in place -- the CPU LongBench tables continue there,
-#     and the added code paths (keydiff policy, keydiff_scores API, FA-off
-#     kq_evict emission) are all dormant unless their flags are passed, so
-#     existing-policy cells stay comparable. Verified: kq_evict on FA-off emits
-#     only when g_endurkv_evict_obs_window > 0, which only --fa-on-evict sets.
-#   * Vulkan goes to a NEW dir bin_vk_kd. /data/local/tmp/ukv_n3 is the provenance
-#     of every pinned GPU number in the paper and stays byte-identical.
-#
-# CELL REUSE. KeyDiff is compared against cells that ALREADY exist on matching
-# protocols (NIAH: /tmp/niah_vs_sllm vanilla/mukv/sfown; LongBench: /tmp/lb_native;
-# pinned speed: /tmp/sllm_faithful). Only the keydiff arms run, plus the
-# controller-v2 arms. Nothing valid is re-measured.
-# ============================================================================
+# Overnight queue in dependency order, so campaigns never share the phone:
+#   1. wait for the LongBench tier sweep (it uses bin_cpu_cur, so new builds wait)
+#   2. KeyDiff campaign: NIAH (GPU), LongBench (CPU), pinned GPU speed n=3
+#   3. controller-v2 validation: k-pct x GPU clock cap, pinned, cooled, n=3
+# bin_cpu_cur is updated in place since the new code paths are dormant without their
+# flags. The Vulkan build goes to a new dir and /data/local/tmp/ukv_n3 is left as is.
+# Only the new arms run. They join existing cells in /tmp/niah_vs_sllm and /tmp/lb_native.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 WS=/home/mislam22/EndurKV_workspace
 LOG(){ echo "[$(date +%H:%M:%S)] $*"; }
 
-# ── 0. wait for the tier sweep ────────────────────────────────────────────────
+# 0. Wait for the tier sweep.
 LOG "waiting for LB_TIERS_DONE"
 for i in $(seq 1 600); do
   grep -q "LB_TIERS_DONE" /tmp/lb_tiers.log 2>/dev/null && break
@@ -45,7 +20,7 @@ done
 grep -q "LB_TIERS_DONE" /tmp/lb_tiers.log || { LOG "tier sweep never finished; aborting chain"; exit 1; }
 LOG "tier sweep done ($(ls /tmp/lb_tiers/*/gen.txt 2>/dev/null | wc -l) cells)"
 
-# ── 1. push new builds ────────────────────────────────────────────────────────
+# 1. Push new builds.
 LOG "pushing KeyDiff builds"
 for so in $WS/EndurKV/llama.cpp/build-android/bin/lib*.so; do
   adb push "$so" /data/local/tmp/endurkv/bin_cpu_cur/ < /dev/null >/dev/null 2>&1
@@ -60,8 +35,7 @@ adb push $WS/EndurKV/entropy_probe/build-android-vulkan/eviction_bench \
     /data/local/tmp/ukv_kd/eviction_bench < /dev/null >/dev/null 2>&1
 adb_safe_shell "chmod 755 /data/local/tmp/endurkv/bin_cpu_cur/eviction_bench /data/local/tmp/ukv_kd/eviction_bench" < /dev/null
 
-# on-device smoke: KeyDiff must score (not decline) on BOTH backends before the
-# night is spent on it.
+# On-device smoke: KeyDiff must score (not decline) on both backends before the long runs.
 M=/data/local/tmp/endurkv/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 P=/data/local/tmp/endurkv/corpora/prompt_12k.txt
 KD="--policy keydiff --n-sink 0 --k-nominal 2048 --compact-inplace"
@@ -78,9 +52,9 @@ for spec in "cpu:/data/local/tmp/endurkv/bin_cpu_cur:0" "gpu:/data/local/tmp/ukv
   [ "${OK:-0}" -ge 1 ] || { LOG "keydiff smoke FAILED on $name -- aborting chain"; exit 1; }
 done
 
-# ── 2. KeyDiff campaign ──────────────────────────────────────────────────────
-# 2a. NIAH, phone GPU, same 14 stimuli as /tmp/niah_vs_sllm (no gate: retrieval
-#     is thermally invariant; timing from these cells is never quoted).
+# 2. KeyDiff campaign.
+# 2a. NIAH, phone GPU, same 14 stimuli as /tmp/niah_vs_sllm. No cool gate, since
+#     timing from these cells is not used.
 SRC=$WS/EndurKV/benchmarks/niah
 DEV=/data/local/tmp/endurkv/logs/kd_$(date +%Y%m%d_%H%M%S)
 adb_safe_shell "mkdir -p $DEV" < /dev/null
@@ -102,7 +76,7 @@ for STIM in $(cd $SRC && ls niah_L*_n0.txt); do
   adb_safe_pull "$DEV/$id.gen"  "$D/gen.txt"   >/dev/null 2>&1
 done
 
-# 2b. LongBench, phone CPU, keydiff arm only (joins /tmp/lb_native; no --ignore-eos).
+# 2b. LongBench, phone CPU, keydiff arm only (joins /tmp/lb_native, no --ignore-eos).
 for task in qasper hotpotqa; do
   case $task in qasper) MG=128;; hotpotqa) MG=32;; esac
   for i in $(seq 0 14); do
@@ -126,7 +100,7 @@ for task in qasper hotpotqa; do
   done
 done
 
-# ── shared cool-gate for the timed cells below ───────────────────────────────
+# Shared cool gate for the timed cells below.
 settle(){
   for a in 1 2 3; do
     adb_safe_shell "su -c '. /data/local/tmp/endurkv/scripts/cool_gate.sh; cool_ddr36'" < /dev/null | tail -1
@@ -164,18 +138,16 @@ timed_cell(){ # dir tag clk_cap flags...
   LOG "$TAG tok/s=$T"
 }
 
-# 2c. KeyDiff pinned GPU speed, n=3 (joins /tmp/sllm_faithful's protocol; new dir
-#     because the BINARY differs -- comparable, but the provenance split is explicit).
+# 2c. KeyDiff pinned GPU speed, n=3, same protocol as /tmp/sllm_faithful. Separate
+#     dir because the binary differs.
 mkdir -p /tmp/kd_speed
 for r in 1 2 3; do
   timed_cell /tmp/kd_speed kd_r$r 0 $KD
 done
 
-# ── 3. controller-v2 validation: cache x clock, pinned, cooled, n=3 ──────────
-# arm A: healthy      -- k-pct 20, uncapped
-# arm B: clock-only   -- k-pct 20, cap 902 MHz  (re-validates the plateau, pinned)
-# arm C: composed low -- k-pct 10, cap 902 MHz  (the proposed low-battery package)
-# Interleaved A,B,C x3 so drift is shared. Whole-run caps (see header).
+# 3. controller-v2 validation: cache x clock, pinned, cooled, n=3.
+# A: k-pct 20, uncapped. B: k-pct 20, cap 902 MHz. C: k-pct 10, cap 902 MHz (low battery).
+# Interleaved A,B,C x3 so drift is shared. Caps apply to the whole run.
 MU="--policy v1_fa2 --fa-on-evict --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70 --compact-inplace"
 mkdir -p /tmp/ctrl_v2
 for r in 1 2 3; do

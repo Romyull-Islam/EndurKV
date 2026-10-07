@@ -1,22 +1,8 @@
 #!/usr/bin/env python3
-"""
-Phase E.2 — analyze prune_probe output.
+"""Analyze prune_probe output: Spearman correlation of entropy H_nats with KL after pruning,
+per K, per task and overall. Writes figures/prune_0{1,2,3}_* and prune_summary.json.
 
-Reads logs/prune_full.csv (or LOG_SUBDIR override).
-
-Computes the headline test of the safety-gate hypothesis:
-    Spearman(H_nats,  KL_after_prune)   per K value, per task, and overall.
-    Hypothesis confirmed if H_t  positively correlates with KL_t.
-
-Produces:
-    figures/prune_01_h_vs_kl_scatter.{pdf,png}    main scatter (with binned mean)
-    figures/prune_02_kl_distribution_by_K.{pdf,png}   violin of KL by K
-    figures/prune_03_per_task_correlation.{pdf,png}   bar chart, per-task ρ at each K
-    figures/prune_summary.json                       all numerical results
-
-Usage:
-    LOG_SUBDIR=prune       python3 scripts/15_analyze_prune.py
-    LOG_SUBDIR=prune_8b    python3 scripts/15_analyze_prune.py
+Usage: LOG_SUBDIR=prune python3 scripts/15_analyze_prune.py
 """
 from __future__ import annotations
 
@@ -76,7 +62,7 @@ def main() -> int:
         "by_K_and_task": {},
     }
 
-    # === 01 — H vs KL scatter, one panel per K, with binned mean overlay ===
+    # 01 - H vs KL scatter, one panel per K, with binned mean overlay
     n_K = len(Ks)
     fig, axes = plt.subplots(1, n_K, figsize=(5 * n_K, 4.4), sharey=True)
     if n_K == 1: axes = [axes]
@@ -126,7 +112,7 @@ def main() -> int:
     fig.savefig(FIG_DIR / f"prune_01_h_vs_kl_scatter{SUFFIX}.png", dpi=200)
     plt.close(fig)
 
-    # === 02 — KL distribution by K (violin) ===
+    # 02 - KL distribution by K (violin)
     fig, ax = plt.subplots(figsize=(7, 4))
     data = [df.loc[df["K"] == K, "kl_nats"].values for K in Ks]
     parts = ax.violinplot(data, positions=range(len(Ks)), showmedians=True, widths=0.8)
@@ -141,7 +127,7 @@ def main() -> int:
     fig.savefig(FIG_DIR / f"prune_02_kl_distribution_by_K{SUFFIX}.png", dpi=200)
     plt.close(fig)
 
-    # === 03 — per-task per-K correlation ===
+    # 03 - per-task per-K correlation
     tasks = sorted(df["task"].unique())
     fig, ax = plt.subplots(figsize=(max(8, 0.8 * len(tasks) + 2), 4.5))
     width = 0.8 / max(1, len(Ks))
@@ -177,17 +163,14 @@ def main() -> int:
     with open(SUMMARY, "w") as f:
         json.dump(summary, f, indent=2)
 
-    # === Headline print ===
+    # Headline print
     print()
-    print("=" * 72)
     print("HEADLINE — direct safety-gate test:  H_nats  vs  KL_nats (after prune)")
-    print("=" * 72)
     for K in Ks:
         s = summary["by_K"][str(K)]
         sig = "***" if s["spearman_p"] < 1e-3 else ("**" if s["spearman_p"] < 0.01 else ("*" if s["spearman_p"] < 0.05 else "n.s."))
         print(f"  K={K:<4}  ρ={s['spearman_rho']:+.3f}  p={s['spearman_p']:.2e}  n={s['n']}  "
               f"KL_mean={s['kl_mean']:.4f}  KL_median={s['kl_median']:.4f}  KL_p95={s['kl_p95']:.4f}  {sig}")
-    print("=" * 72)
     print(f"figures: {FIG_DIR}/prune_*{SUFFIX}.{{pdf,png}}")
     print(f"summary: {SUMMARY}")
     return 0

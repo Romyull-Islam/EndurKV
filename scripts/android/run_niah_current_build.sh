@@ -1,36 +1,11 @@
 #!/bin/bash
-# ============================================================================
-# run_niah_current_build.sh -- rebuild the NIAH grid on ONE build. (2026-08-22)
-#
-# WHY. The 7-policy NIAH grid (June, /tmp/phone_niah_full) and the 4-policy grid
-# (August, /tmp/niah_vs_sllm) DISAGREE ON VANILLA: 13/14 vs 14/14, same stimuli,
-# same scorer, differing only at L8K@17%. So they cannot be merged, and the
-# "*vanilla misses it too" annotation -- which was the basis for calling that
-# depth a model limit and for saying muKV-mass exceeds the ceiling -- does not
-# hold in the newer build. The June grid also records peak_kv_cells rather than
-# retained_kv_bytes, so it cannot carry retention at all.
-#
-# This run puts the missing policies into the CURRENT build so one table is one
-# build, with live-cell retention on every row.
-#
-# CONFIGURATIONS. Each baseline as its own paper describes, per KeyDiff App. A.1:
-#   SnapKV / Ada-KV  score ONCE at end of prefill from a windowed side matmul,
-#                    so they run FA-ON via the side node with their own windows.
-#   TOVA / H2O       score at EVERY decode step, which the side node cannot serve
-#                    (it fires only when q->ne[1] > 1), so they stay FA-off. That
-#                    is a property of their designs, not a handicap we impose.
-# Budget K=1024 for these four -- their papers specify no NIAH budget, and matching
-# muKV's nominal budget makes any retention difference attributable to
-# realizability, which is the effect under test.
-#
-# KeyDiff additionally runs at 6144, its OWN published NIAH setting (their Fig. 6
-# uses a 6K budget with B=128). On these stimuli (3122 / 6099 tokens) 6144 never
-# evicts, so that row is expected to equal vanilla -- it is included precisely to
-# show that their published NIAH configuration does not compress at these lengths.
-#
-# No cool gate: NIAH is a retrieval measurement and no timing or energy from these
-# cells is ever quoted. Timed cells always cool-gate; these do not need to.
-# ============================================================================
+# NIAH runs for SnapKV, Ada-KV, TOVA, H2O and KeyDiff on the current build, so the
+# table comes from one build with live-cell retention on every row.
+# SnapKV and Ada-KV score once at the end of prefill and run FA-on through the side
+# node. TOVA and H2O score every decode step, which the side node cannot serve, so
+# they run FA-off. These four use K=1024, the muKV budget. KeyDiff uses 6144, its
+# published NIAH setting, which never evicts at these prompt lengths.
+# No cool gate, since no timing or energy is reported from these cells.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 WS=/home/mislam22/EndurKV_workspace

@@ -1,25 +1,8 @@
 #!/bin/bash
-# phone_full_sweep_3policy.sh — Full sweep for our 3 priority policies.
-#
-# Configuration (publication-grade):
-#   - 3 policies: v1 (ours) → vanilla → tova    (user-specified order)
-#   - 5 prompts (1 per LongBench task)
-#   - 2 K budgets: 1024 (current "stress") and 2048 (published-standard 25% retention)
-#   - 3 replicates per cell — for mean ± std
-#   - Standard sampling protocol (top-p 0.95, T=0.8, top-k 40, rep-penalty 1.1)
-#     applied IDENTICALLY to all 3 policies (vanilla, v1, tova)
-#   - Sink-token protection (n_sink=4) for v1 and tova
-#   - Vanilla gets FA-on (production-realistic latency)
-#   - Cool-down between runs (skin ≤ 38°C, max 5 min wait)
-#
-# Total: 3 × 5 × 2 × 3 = 90 runs
-# Estimated wall time on Snapdragon 8 Elite Gen 5 (FA-off for eviction policies):
-#   per run: ~35 min Llama-8B FA-off,  ~10 min vanilla FA-on
-#   total:   ~30-40 hours
-#
-# Output dir: /data/local/tmp/endurkv/logs/sweep3_<timestamp>/
-#   <policy>/K<K>/<prompt_id>/rep<N>/
-#     meta.json, steps.csv, gen.txt, sensors.csv, cooldown.json, stderr.log
+# Phone sweep: policies v1, vanilla, tova x 5 LongBench prompts x K 1024/2048 x 3 reps (90 runs).
+# Same sampling for all policies (top-p 0.95, T 0.8, top-k 40, repeat penalty 1.1), n_sink 4,
+# cool-down to 38 C (max 5 min) before each run. Takes about 30-40 h with Llama-8B.
+# Output: /data/local/tmp/endurkv/logs/sweep3_<ts>/<policy>/K<K>/<prompt_id>/rep<N>/
 
 set -e
 export PATH=/home/mislam22/tools/platform-tools:$PATH
@@ -88,7 +71,7 @@ sh scripts/phone_cool_then_run.sh --out-dir $RUN_DIR_PHONE --thresh-c $COOL_THRE
 sh scripts/sample_sensors.sh --out $RUN_DIR_PHONE/sensors.csv --hz 10 &
 SAMPLER=\$!
 
-# Run eviction_bench with STANDARD sampling protocol (top-p applies to ALL policies)
+# same sampling settings for every policy
 LD_LIBRARY_PATH=bin bin/eviction_bench \
   --model $MODEL \
   --prompt $PROMPT_DIR/${PROMPT_ID}.txt \
@@ -115,7 +98,7 @@ wait \$SAMPLER 2>/dev/null
 echo \"  exit=\$EXIT\"
 " 2>&1 | tee -a "$PROG_LOG"
 
-                # Pull immediately for live aggregation
+                # pull now so results can be aggregated while the sweep runs
                 LOCAL_DIR="$OUT_BASE_HOST/$POLICY/K${K}/$PROMPT_ID/rep${REP}"
                 mkdir -p "$LOCAL_DIR"
                 adb pull -p "$RUN_DIR_PHONE/" "$LOCAL_DIR/" 2>&1 | tail -1 | tee -a "$PROG_LOG"

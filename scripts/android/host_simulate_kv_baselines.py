@@ -1,28 +1,7 @@
-"""Direct K-vector + K+V baseline reimplementations for our bench.
-
-Adds faithful reimplementations of:
-  * KeyDiff   (Park et al. arXiv:2504.15364, Apr 2025) — K-vector cosine similarity
-  * LaProx    (Mai & Kim arXiv:2605.07234, May 2026) — attention × W_o × V global ranks
-
-Both consume the .kv.bin sidecar produced by the patched attention_probe
-(magic "KVCP", written when ATTNPROBE_CAPTURE_KV=1) alongside the existing
-ATNH .attn.bin per-step attention.
-
-For the simulator: at decode step s with n_kv_at_step positions, we treat
-K[:, :, :n_kv_at_step] and V[:, :, :n_kv_at_step] as the per-step cache state.
-This is valid because K and V for already-cached positions don't change as
-new tokens are appended.
-
-Output is the same `pareto_summary.csv` format as host_simulate_eviction_perhead.py
-so the global ranker picks it up without modification.
-
-Usage:
-    python host_simulate_kv_baselines.py \
-        --log-dir   logs/study_phone_mistral_longbench   (contains .attn.bin AND .kv.bin)
-        --out-dir   logs/eval_mistral_longbench_kv
-        --w-o-dir   models_extra/Mistral-7B-W_o          (only needed for LaProx)
-        --budgets   64,128,256
-        --policies  perhead_v1,perhead_tova,keydiff,laprox
+"""Simulate K/V-based eviction baselines (KeyDiff, LaProx, R-KV, KVzip approx) from
+.attn.bin (ATNH) + .kv.bin (KVCP, ATTNPROBE_CAPTURE_KV=1) sidecars. Writes pareto_summary.csv.
+Usage: python host_simulate_kv_baselines.py --log-dir DIR --out-dir DIR [--w-o-dir DIR]
+       [--budgets 64,128,256] [--policies perhead_v1,perhead_tova,keydiff,laprox]
 """
 from __future__ import annotations
 import argparse
@@ -35,9 +14,7 @@ import numpy as np
 import pandas as pd
 
 
-# ---------------------------------------------------------------------------
 # Loaders
-# ---------------------------------------------------------------------------
 
 def load_attn_perhead(path: Path):
     """Returns (attn_ph[steps, layers, heads, max_kv] fp16, n_kv_at[steps] int32)
@@ -77,22 +54,12 @@ def load_attn_perhead(path: Path):
     return attn_ph, np.array(n_kv_at, dtype=np.int32)
 
 
+# KVCP format: magic(4) n_layers(u32), then per layer has_K(u32) [K_ne 4*u32,
+# count u32, count*f32], has_V(u32) [same for V]. Non-contiguous tensors dump the
+# whole buffer, so count can exceed prod(ne). Those arrays stay 1D.
 def load_kv_sidecar(path: Path):
-    """Returns dict {layer_idx: {"K": np.array, "V": np.array, "K_ne": tuple, "V_ne": tuple}}
-    or None if file missing / malformed.
-
-    Format ("KVCP" v2, 2026-05-24):
-      magic(4) + n_layers(u32)
-      per-layer:
-        has_K(u32)
-        if has_K: K_ne[0..3](4*u32), data_count(u32), data_count*float32
-        has_V(u32)
-        if has_V: V_ne[0..3](4*u32), data_count(u32), data_count*float32
-
-    For non-contiguous tensors, data_count may be larger than prod(ne) since the
-    full underlying buffer was dumped. K and V arrays returned are 1D; reshape
-    in the simulator using the appropriate ne+stride logic if needed.
-    """
+    """Return {layer: {"K", "V", "K_ne", "V_ne"}} from a KVCP sidecar, or None if
+    the file is missing or malformed."""
     if not path.exists():
         return None
     with open(path, "rb") as f:
@@ -107,12 +74,10 @@ def load_kv_sidecar(path: Path):
                 K_ne = struct.unpack("<IIII", f.read(16))
                 (data_count,) = struct.unpack("<I", f.read(4))
                 K = np.frombuffer(f.read(4 * data_count), dtype=np.float32).copy()
-                # Try logical reshape if data fits; otherwise leave as 1D.
+                # contiguous: reshape to [ne3, ne2, ne1, ne0], else leave 1D
                 prod_ne = int(np.prod(K_ne))
                 if prod_ne > 0 and prod_ne == data_count:
-                    # Contiguous case — reshape to logical [ne3, ne2, ne1, ne0]
                     K = K.reshape(K_ne[::-1])
-                # else: keep K as 1D; caller decides how to slice
             (has_V,) = struct.unpack("<I", f.read(4))
             V = V_ne = None
             if has_V:
@@ -126,9 +91,7 @@ def load_kv_sidecar(path: Path):
         return result
 
 
-# ---------------------------------------------------------------------------
-# KL divergence helper (fp16-safe; matches host_simulate_eviction_perhead.py)
-# ---------------------------------------------------------------------------
+# KL divergence, fp16-safe, same as host_simulate_eviction_perhead.py
 
 def kl(p_full: np.ndarray, p_evicted: np.ndarray, eps: float = 1e-12) -> float:
     pf = np.clip(p_full.astype(np.float32, copy=False), eps, 1.0)
@@ -136,12 +99,10 @@ def kl(p_full: np.ndarray, p_evicted: np.ndarray, eps: float = 1e-12) -> float:
     return float(np.sum(pf * (np.log(pf) - np.log(pe))))
 
 
-# ---------------------------------------------------------------------------
-# Baselines we reimplement
-# ---------------------------------------------------------------------------
+# Policies
 
 def policy_perhead_v1(attn_ph_layer_step, K, **kw):
-    """EndurKV-Evict per-head form, for direct comparison (uses attention only)."""
+    """EndurKV-Evict per-head form (attention only)."""
     nh, nk = attn_ph_layer_step.shape
     if nk <= K:
         return np.ones((nh, nk), dtype=bool)
@@ -170,39 +131,25 @@ def policy_perhead_tova(attn_ph_layer_step, K, **kw):
 
 
 def policy_keydiff(attn_ph_layer_step, K, K_cache=None, **kw):
-    """KeyDiff (Park et al., arXiv:2504.15364, Apr 2025) reimplementation.
-
-    Mechanism: rank positions by *uniqueness* of their K vector — positions whose
-    K vector is most redundant with other Ks are evicted first. Per-head: each
-    head's K subspace is treated independently.
-
-    Faithful interpretation: for each (layer, head), compute pairwise cosine
-    similarity matrix S of K vectors at this layer & head. Position importance =
-    1 / (1 + mean of off-diagonal similarities). Keep top-K by importance.
-
-    K_cache shape (passed in): [n_kv, n_head_kv, head_dim] (we slice it for this layer).
-    For GQA models the per-head K is shared across grouped query heads; we replicate
-    so each query head sees the same K subspace (which matches the paper's intent).
-    """
+    """KeyDiff (Park et al., arXiv:2504.15364). Per head, keep top-K by
+    1 / (1 + mean cosine similarity of the key to other keys). K_cache is [n_kv, n_head_kv, dim]."""
     nh, nk = attn_ph_layer_step.shape
     if nk <= K or K_cache is None:
-        # Fallback to TOVA if no K available
+        # fall back to TOVA if no K available
         return policy_perhead_tova(attn_ph_layer_step, K)
-    # K_cache here is sliced to current n_kv: shape [n_kv, n_head_kv, dim]
     if K_cache.shape[0] < nk:
         return policy_perhead_tova(attn_ph_layer_step, K)
     K_now = K_cache[:nk]                       # [nk, n_head_kv, dim]
     n_head_kv = K_now.shape[1]
-    # GQA-aware: map query-head h to kv-head h % n_head_kv
+    # GQA: query head h uses kv head h % n_head_kv
     m = np.zeros((nh, nk), dtype=bool)
     for h in range(nh):
         kh = h % n_head_kv
         K_h = K_now[:, kh, :]                  # [nk, dim]
         norms = np.linalg.norm(K_h, axis=1, keepdims=True) + 1e-9
         K_n = K_h / norms                      # unit-norm
-        # Cosine sim: [nk, nk]. For large nk this is heavy — cap to fast path.
+        # above 4096 positions, compare against 1024 sampled keys to bound cost
         if nk > 4096:
-            # Approximation: sample 1024 random rows for similarity comparison
             rng = np.random.default_rng(42)
             idx = rng.choice(nk, 1024, replace=False)
             sims = K_n @ K_n[idx].T            # [nk, 1024]
@@ -218,20 +165,8 @@ def policy_keydiff(attn_ph_layer_step, K, K_cache=None, **kw):
 
 
 def policy_laprox(attn_ph_layer_step, K, V_cache=None, W_o=None, **kw):
-    """LaProx (Mai & Kim, arXiv:2605.07234, May 2026) reimplementation.
-
-    Mechanism: rank positions by their contribution to the output projection.
-    Per-position importance ≈ attention_h[i] · ||W_o^{(h)} · V_h[i]||_2
-    averaged or summed across heads (paper says "globally comparable importance
-    scores enabling model-wide token selection").
-
-    Faithful approximation: importance[i] = Σ_h attention[h,i] · ||V_h[i]||_2
-    if W_o is not provided. If W_o is provided, importance[i] = Σ_h attention[h,i] ·
-    ||W_o^{(h)} · V_h[i]||_2 (head-wise output projection).
-
-    Then keep top-K globally — i.e. each head uses the same set S = top-K of
-    importance, matching the paper's "global token selection" design.
-    """
+    """LaProx (Mai & Kim, arXiv:2605.07234). importance[i] = sum_h a[h,i] * ||W_o_h V_h[i]||
+    (||V_h[i]|| without W_o). All heads keep the same global top-K."""
     nh, nk = attn_ph_layer_step.shape
     if nk <= K or V_cache is None:
         return policy_perhead_tova(attn_ph_layer_step, K)
@@ -242,12 +177,8 @@ def policy_laprox(attn_ph_layer_step, K, V_cache=None, W_o=None, **kw):
     head_dim = V_now.shape[2]
 
     if W_o is not None:
-        # W_o shape: [hidden_size, hidden_size] or [n_head * head_dim, hidden_size]
-        # Per-head slice: W_o_h = W_o[h*head_dim:(h+1)*head_dim, :]
-        # Output contribution magnitude per (h, i):
-        #   contrib_norm[h, i] = ||W_o_h @ V_now[i, h, :]||_2
-        # = ||V_now[i, h, :] @ W_o_h||_2     (if W_o is hidden×hidden)
-        # We avoid materializing full output and just use per-head V norm projected.
+        # per-head slice W_o_h = W_o[h*head_dim:(h+1)*head_dim, :],
+        # contrib[h, i] = ||V_h[i] @ W_o_h||_2
         contrib = np.zeros((nh, nk), dtype=np.float32)
         for h in range(nh):
             kh = h % n_head_kv
@@ -257,36 +188,26 @@ def policy_laprox(attn_ph_layer_step, K, V_cache=None, W_o=None, **kw):
                 proj = V_h @ W_o_h             # [nk, hidden]
                 contrib[h] = np.linalg.norm(proj, axis=1)
             except Exception:
-                # Fall back to V norm if W_o slicing fails
+                # fall back to the V norm if W_o slicing fails
                 contrib[h] = np.linalg.norm(V_h, axis=1)
     else:
-        # No W_o available — use ||V_h||_2 as a proxy for output contribution.
+        # no W_o, use ||V_h||_2 as the contribution proxy
         contrib = np.zeros((nh, nk), dtype=np.float32)
         for h in range(nh):
             kh = h % n_head_kv
             contrib[h] = np.linalg.norm(V_now[:, kh, :], axis=1)
 
-    # Per-position global importance = sum over heads of (attention × contribution)
     importance = (attn_ph_layer_step.astype(np.float32) * contrib).sum(axis=0)  # [nk]
     idx_top = np.argpartition(-importance, K)[:K]
-    # ALL heads keep the same top-K (matches LaProx "global" framing)
+    # global selection, same top-K for every head
     m = np.zeros((nh, nk), dtype=bool)
     m[:, idx_top] = True
     return m
 
 
 def policy_rkv(attn_ph_layer_step, K, K_cache=None, lambda_rkv=0.1, **kw):
-    """R-KV (Cai et al., NeurIPS 2025) reimplementation.
-
-    Score per (head, position) = λ · Â − (1 − λ) · R̂, where:
-      Â = current-step attention received by this position (L1-normalized over positions),
-      R̂ = softmax of mean cosine similarity to other K vectors at this layer & head.
-    Paper default λ = 0.1 (heavy redundancy weighting). Per-head ranking — each query
-    head keeps its own top-K under the joint score.
-
-    Comparison point: faithful published baseline for reasoning-model decoding-time
-    eviction. Combines KeyDiff-style K-redundancy with TOVA-style current attention.
-    """
+    """R-KV (Cai et al., NeurIPS 2025). Per head, score = lambda * A - (1 - lambda) * R,
+    A = L1-normalized attention, R = softmax of mean key cosine similarity, lambda = 0.1."""
     nh, nk = attn_ph_layer_step.shape
     if nk <= K or K_cache is None:
         return policy_perhead_tova(attn_ph_layer_step, K)
@@ -321,20 +242,8 @@ def policy_rkv(attn_ph_layer_step, K, K_cache=None, lambda_rkv=0.1, **kw):
 
 
 def policy_kvzip_approx(attn_ph_layer_step, K, attn_cum_max=None, **kw):
-    """KVzip (Kim et al., NeurIPS 2025) decoding-time approximation.
-
-    The published KVzip computes importance via attention received during a
-    *reconstruction* prefill (forward pass with prompt "Repeat the previous context:"
-    + the context itself). Our probe does not run that extra pass.
-
-    Closest no-prefill approximation: importance per (head, position) =
-        max over all decoding steps so far of attention this position received.
-    This captures the "any query that ever cared about this position" intuition,
-    parallel to KVzip's cross-attention max. Strictly weaker than full KVzip — flagged
-    in the comparison table as "KVzip-decode-approx" not "KVzip".
-
-    `attn_cum_max` shape: [n_head, n_kv], updated in the simulator each step.
-    """
+    """KVzip (Kim et al., NeurIPS 2025) decode-only approximation: score is the max attention
+    each position has received so far (attn_cum_max [n_head, n_kv]), no reconstruction pass."""
     nh, nk = attn_ph_layer_step.shape
     if nk <= K:
         return np.ones((nh, nk), dtype=bool)
@@ -351,18 +260,8 @@ def policy_kvzip_approx(attn_ph_layer_step, K, attn_cum_max=None, **kw):
 def policy_perhead_v2(attn_ph_layer_step, K,
                       alpha_low=0.7, alpha_high=1.3,
                       gamma=8.0, c0=0.30, lam=0.5, **kw):
-    """EndurKV-Evict v2 — Participation Resonance Gate + edge-aware ranking.
-
-    Two principled ideas:
-      (a) Pythagoras / Boltzmann: use the participation ratio PR_h = 1/Σa[h,k]²
-          (effective number of attended positions, quantum-mechanics analog)
-          as the sharpness signal — strictly more informative than max_a.
-      (b) Surface tension: weight each position by its discrete Laplacian
-          |a[k+1] − 2a[k] + a[k−1]|, so positions at attention edges (where the
-          attention pattern changes rapidly) are prioritized within a head.
-
-    The gate is a logistic sigmoid (smooth) instead of a clipped linear.
-    """
+    """EndurKV-Evict v2: logistic gate on participation-ratio sharpness (PR = 1/sum a^2),
+    ranking a[k] * (1 + lam * |discrete Laplacian| / mean) to favor attention edges."""
     nh, nk = attn_ph_layer_step.shape
     if nk <= K:
         return np.ones((nh, nk), dtype=bool)
@@ -375,17 +274,17 @@ def policy_perhead_v2(attn_ph_layer_step, K,
             m[h, :K] = True
             continue
         a_norm = a / s
-        # (a) Participation ratio → sharpness score in [0, 1]
+        # (a) participation ratio to sharpness in [0, 1]
         sum_sq = float((a_norm * a_norm).sum()) + eps
         pr = 1.0 / sum_sq
         pr_norm = (pr - 1.0) / max(nk - 1.0, 1.0)         # ∈ [0, 1]
         sharpness = 1.0 - pr_norm                          # 0=diffuse, 1=sharp
-        # (b) Smooth logistic gate
+        # (b) logistic gate
         x = gamma * (sharpness - c0)
         sig = 1.0 / (1.0 + np.exp(-x))
         mult = alpha_high - (alpha_high - alpha_low) * sig
         K_t = max(1, min(nk, int(round(K * mult))))
-        # (c) Edge-aware importance: a[k] · (1 + λ · |Laplacian| / mean)
+        # (c) edge-aware importance a[k] * (1 + lam * |Laplacian| / mean)
         if lam > 0 and nk >= 3:
             lap = np.zeros(nk, dtype=np.float32)
             lap[1:-1] = np.abs(a_norm[2:] - 2.0 * a_norm[1:-1] + a_norm[:-2])
@@ -403,18 +302,8 @@ def policy_perhead_v2(attn_ph_layer_step, K,
 def policy_perhead_v3(attn_ph_layer_step, K,
                       alpha_low=0.75, alpha_high=1.25,
                       low_freq_fraction=0.125, **kw):
-    """EndurKV-Evict v3 — Spectral Resonance Gate (Tesla / Fourier).
-
-    A smooth attention pattern (diffuse head) has most of its energy
-    concentrated in the LOW-frequency band of its DFT — like the spectrum
-    of a low-pass filter. A sharp single-spike attention (delta) has flat
-    DFT magnitude across all frequencies. So:
-        diffuse  →  high low-frequency energy fraction  →  give MORE cache
-        sharp    →  flat spectrum, low low-freq fraction →  give LESS cache
-
-    This is the spectral analogue of participation ratio — captures the
-    full distribution shape via its Fourier signature, not just the peak.
-    """
+    """EndurKV-Evict v3: spectral gate. Diffuse heads have a high low-frequency DFT energy
+    fraction and get more cache, sharp heads (flat spectrum) get less."""
     nh, nk = attn_ph_layer_step.shape
     if nk <= K:
         return np.ones((nh, nk), dtype=bool)
@@ -427,13 +316,12 @@ def policy_perhead_v3(attn_ph_layer_step, K,
             m[h, :K] = True
             continue
         a_norm = a / s
-        # Real-to-real DFT (rfft) of attention sequence
         spec = np.abs(np.fft.rfft(a_norm))
         spec_sq = spec * spec
         total_energy = float(spec_sq.sum()) + 1e-12
         low_energy = float(spec_sq[:n_low].sum())
         low_frac = low_energy / total_energy            # ∈ [0, 1]
-        # Linear gate: diffuse (high low_frac) gets alpha_high
+        # linear gate, diffuse (high low_frac) gets alpha_high
         mult = alpha_low + (alpha_high - alpha_low) * low_frac
         K_t = max(1, min(nk, int(round(K * mult))))
         idx = np.argpartition(-a_norm, K_t - 1)[:K_t]
@@ -442,36 +330,26 @@ def policy_perhead_v3(attn_ph_layer_step, K,
 
 
 def policy_perhead_v4(attn_ph_layer_step, K, iters=3, **kw):
-    """EndurKV-Evict v4 — Newton-Raphson budget redistribution.
-
-    Iteratively allocate the total budget K·n_heads across heads in proportion
-    to the *marginal attention value* of the next position each head would
-    keep. Heads where the K-th-best position carries a lot of attention "want"
-    more cache; heads where it's near zero need less. Total budget stays
-    constant (it's pure redistribution, like a water-level adjustment).
-    """
+    """EndurKV-Evict v4: redistribute the total K * n_heads across heads in proportion
+    to each head's marginal attention at its current K_h. Total stays constant."""
     nh, nk = attn_ph_layer_step.shape
     if nk <= K:
         return np.ones((nh, nk), dtype=bool)
     m = np.zeros((nh, nk), dtype=bool)
     total = int(K) * nh
-    # Sort attention per head descending (so position K_h is the marginal one)
+    # per-head attention sorted descending, so index K_h-1 is the marginal one
     sorted_idx = np.argsort(-attn_ph_layer_step, axis=1)
     sorted_a = np.take_along_axis(attn_ph_layer_step, sorted_idx, axis=1)
-    # Initial budget = uniform K per head
     K_h = np.full(nh, K, dtype=np.int64)
     for _ in range(iters):
-        # Marginal value of next position each head would keep
         ks = np.clip(K_h, 1, nk) - 1
         marg = sorted_a[np.arange(nh), ks].astype(np.float64) + 1e-12
-        # New K_h proportional to marginal (water-filling allocation)
         share = marg / marg.sum()
         K_h = (share * total).round().astype(np.int64)
         K_h = np.clip(K_h, 1, nk)
-        # Re-balance to keep total constant
+        # fix rounding so the total stays constant
         diff = total - int(K_h.sum())
         if diff != 0:
-            # Adjust the heads with the largest fractional rounding error
             order = np.argsort(-marg if diff > 0 else marg)
             for i in range(abs(diff)):
                 K_h[order[i % nh]] += 1 if diff > 0 else -1
@@ -483,15 +361,8 @@ def policy_perhead_v4(attn_ph_layer_step, K, iters=3, **kw):
 
 def policy_perhead_v5(attn_ph_layer_step, K,
                       alpha_low=0.75, alpha_high=1.25, **kw):
-    """EndurKV-Evict v5 — Multi-scale Rényi concentration (L4/L2 ratio).
-
-    The ratio  ||a||_4 / ||a||_2  is a higher-order concentration measure:
-      uniform a (all 1/n_kv):  L4/L2 = n_kv^(-1/4)         (small)
-      single-spike a:          L4/L2 = 1                    (max)
-    It captures distribution *shape* beyond what max_a or PR alone see —
-    distinguishes "one giant peak + tail" from "two medium peaks + tail",
-    which the participation ratio collapses.
-    """
+    """EndurKV-Evict v5: gate on the concentration ratio ||a||_4 / ||a||_2, which runs from
+    n_kv^(-1/4) for uniform attention to 1 for a single spike."""
     nh, nk = attn_ph_layer_step.shape
     if nk <= K:
         return np.ones((nh, nk), dtype=bool)
@@ -519,12 +390,8 @@ def policy_perhead_v5(attn_ph_layer_step, K,
 def policy_perhead_v6(attn_ph_layer_step, K,
                       alpha_low=0.7, alpha_high=1.3,
                       gamma=10.0, c0=0.6, **kw):
-    """EndurKV-Evict v6 — Logistic gate on max_a (smooth ablation of v1).
-
-    Same SIGNAL as v1 (max_a), but a smooth logistic transition replaces
-    v1's clipped-linear gate. Tests whether the clipping was hurting or
-    helping. Pure ablation; identical-cost compute as v1.
-    """
+    """EndurKV-Evict v6: v1's max_a signal with a logistic gate in place of the
+    clipped-linear one (ablation of the clipping)."""
     nh, nk = attn_ph_layer_step.shape
     if nk <= K:
         return np.ones((nh, nk), dtype=bool)
@@ -544,24 +411,8 @@ def policy_perhead_v6(attn_ph_layer_step, K,
 def policy_perhead_v7(attn_ph_layer_step, K,
                       alpha_low=0.70, alpha_high=1.30,
                       mu=0.40, sigma=0.25, **kw):
-    """EndurKV-Evict v7 — Leidenfrost Gate (bell-curve allocation).
-
-    Physics analogy: like water on a frying pan, the "interaction rate"
-    between cache budget and attention information is NON-MONOTONIC in
-    head sharpness. Both extremes (very sharp / very diffuse) need LESS
-    cache:
-      * very sharp head (max_a ≈ 0.95) — one big spike captures it all,
-        tail is throw-away noise
-      * very diffuse head (max_a ≈ 0.05) — almost-uniform attention, likely
-        a "noise-floor" head doing background smoothing, evicting positions
-        barely changes its output
-      * medium head (max_a ≈ 0.3-0.5) — structured multi-peak attention
-        carrying real retrieval signal across several positions — these
-        need the most cache (the "Leidenfrost peak")
-
-    Multiplier: Gaussian bump centered at max_a = μ, falling toward α_low
-    at both extremes.
-    """
+    """EndurKV-Evict v7: Gaussian bump on max_a centered at mu, so medium-sharpness heads
+    get the most cache and very sharp or very diffuse heads fall toward alpha_low."""
     nh, nk = attn_ph_layer_step.shape
     if nk <= K:
         return np.ones((nh, nk), dtype=bool)
@@ -594,9 +445,7 @@ POLICIES = {
 }
 
 
-# ---------------------------------------------------------------------------
 # Simulator
-# ---------------------------------------------------------------------------
 
 def simulate(attn_ph, n_kv_at, kv_data, w_o_per_layer, policy_name, K_nominal,
              needle_positions=None):
@@ -604,17 +453,11 @@ def simulate(attn_ph, n_kv_at, kv_data, w_o_per_layer, policy_name, K_nominal,
     fn = POLICIES[policy_name]
     out_kl = np.zeros((n_steps, n_layers), dtype=np.float64)
     out_K = np.zeros((n_steps, n_layers), dtype=np.int32)
-    # Attention mass retained per (step, layer): Σ_kept attention / Σ_all attention,
-    # averaged across heads. 1.0 = lossless, 0.0 = all important mass evicted.
-    # Reader-friendlier than KL — "we retain 96% of attention mass at 25% cache".
+    # attention mass retained (kept / all), averaged over heads, 1.0 = lossless
     out_mass = np.zeros((n_steps, n_layers), dtype=np.float64)
-    # Per-(layer, head, step) needle retention for NIAH: did the policy keep the
-    # ground-truth answer position? Populated only if needle_positions is given
-    # via the simulate() caller. Stored as float (1.0 kept, 0.0 evicted) so
-    # averages give straight hit-rate. nan = no needle for this step.
+    # fraction of heads that kept the needle position, nan where no needle given
     out_needle_hit = np.full((n_steps, n_layers), np.nan, dtype=np.float64)
-    # Running max attention per (layer, head, position). Used by policies that
-    # need "max attention received across history" (KVzip-decode-approx).
+    # running max attention per (layer, head, position), for kvzip_approx
     attn_cum_max = np.zeros((n_layers, n_head, max_kv), dtype=np.float32)
     for s in range(n_steps):
         n_kv = int(n_kv_at[s])
@@ -624,23 +467,17 @@ def simulate(attn_ph, n_kv_at, kv_data, w_o_per_layer, policy_name, K_nominal,
             np.maximum(attn_cum_max[l, :, :n_kv], ph_slice,
                        out=attn_cum_max[l, :, :n_kv])
             kw = {"attn_cum_max": attn_cum_max[l, :, :n_kv]}
-            # Provide K/V if available for this layer
             if kv_data is not None and l in kv_data:
                 lc = kv_data[l]
                 K_ne = lc.get("K_ne"); V_ne = lc.get("V_ne")
-                # K_ne layout from ggml: (head_dim, n_kv, n_head_kv, 1). After
-                # reshape(ne[::-1]) the array is (1, n_head_kv, n_kv, head_dim).
-                # Drop batch and transpose to (n_kv, n_head_kv, head_dim).
+                # ggml K_ne = (head_dim, n_kv, n_head_kv, 1), loaded as
+                # (1, n_head_kv, n_kv, head_dim). Convert to (n_kv, n_head_kv, head_dim).
                 if lc.get("K") is not None and lc["K"].ndim == 4:
                     kw["K_cache"] = lc["K"][0].transpose(1, 0, 2)
-                # V is captured in the v_trans layout used by the FA-off path:
-                # V_ne = (n_kv, head_dim, n_head_kv, 1). After reshape(ne[::-1])
-                # the array is (1, n_head_kv, head_dim, n_kv). Transpose to
-                # (n_kv, n_head_kv, head_dim) to match K's axis order.
+                # The FA-off path stores V transposed, V_ne = (n_kv, head_dim, n_head_kv, 1).
+                # Detected by V_ne[0] != K_ne[0], converted to K's axis order.
                 if lc.get("V") is not None and lc["V"].ndim == 4:
                     V4 = lc["V"][0]  # (n_head_kv, head_dim, n_kv)
-                    # Detect v_trans by comparing V_ne[0] vs K_ne[0]: if they
-                    # disagree, V is transposed.
                     if K_ne is not None and V_ne is not None and V_ne[0] != K_ne[0]:
                         kw["V_cache"] = V4.transpose(2, 0, 1)  # (n_kv, n_head_kv, head_dim)
                     else:
@@ -659,7 +496,7 @@ def simulate(attn_ph, n_kv_at, kv_data, w_o_per_layer, policy_name, K_nominal,
                 if tot_full > 0:
                     masses.append(float(tot_kept / tot_full))
                 else:
-                    masses.append(1.0)  # nothing to retain, vacuously perfect
+                    masses.append(1.0)  # nothing to retain
                 if tot_kept <= 0:
                     kls.append(20.0)
                 else:
@@ -668,8 +505,7 @@ def simulate(attn_ph, n_kv_at, kv_data, w_o_per_layer, policy_name, K_nominal,
             out_kl[s, l] = float(np.mean(kls))
             out_mass[s, l] = float(np.mean(masses))
             out_K[s, l]  = kept_sum / n_head
-            # Needle retention: did the policy keep the ground-truth answer
-            # position for this prompt? mask[h, p*] across all heads.
+            # needle retention: share of heads that kept position p*
             if needle_positions is not None and s < len(needle_positions):
                 p_star = needle_positions[s]
                 if p_star is not None and 0 <= p_star < n_kv:
@@ -703,7 +539,7 @@ def main() -> int:
     budgets  = [int(b) for b in args.budgets.split(",")]
     policies = [p.strip() for p in args.policies.split(",")]
 
-    # Model-arch lookup for memory column.
+    # model architecture, for the KV memory column
     try:
         from model_arch_specs import MODEL_SPECS, kv_memory_per_head_mb, infer_model_from_dir
         model_key = args.model.strip() or infer_model_from_dir(log_dir.name)
@@ -729,11 +565,8 @@ def main() -> int:
                 w_o_per_layer[idx] = np.load(f)
             print(f"[sim-kv] loaded W_o for {len(w_o_per_layer)} layers from {w_o_dir}")
 
-    # Optional needle metadata for NIAH/RULER answer-hit-rate. Accepts either
-    #   {"prompt_id":..., "needle_position": int}  (absolute KV index — exact)
-    # or
-    #   {"prompt_id":..., "needle_fraction": float in [0,1]}  (char-position based;
-    #     converted to absolute index at run time using per-capture n_kv)
+    # Optional needle JSONL for NIAH/RULER hit rate. Each record has either
+    # "needle_position" (absolute KV index) or "needle_fraction" (0..1 of the prompt).
     needle_by_pid = {}     # absolute position
     fraction_by_pid = {}   # fractional position
     if args.needles:
@@ -776,16 +609,13 @@ def main() -> int:
         if task.endswith("_lc") or task.endswith("_pub"):
             task = task.rsplit("_", 1)[0]
         print(f"  {pid:<32} steps={n_steps} layers={n_layers} heads={n_head} max_kv={max_kv}")
-        # Build per-step needle position vector for this prompt, if known.
-        # Needle is in the prompt (fixed position in the prefix), so the same
-        # absolute index is valid for every decode step.
+        # The needle sits in the prompt, so one index holds for every decode step.
         needle_pos_per_step = None
         if pid in needle_by_pid:
             needle_pos_per_step = [needle_by_pid[pid]] * n_steps
         elif pid in fraction_by_pid:
-            # Convert char-fraction to absolute KV index using n_kv at the
-            # final step (= prompt_len). Approximation accurate to ~1-2% of
-            # prompt length, fine for eviction-granularity hit rate.
+            # fraction times n_kv at the last step (about the prompt length),
+            # approximate but fine at eviction granularity
             n_kv_prompt = int(n_kv_at[-1]) if len(n_kv_at) else max_kv
             pos = int(round(fraction_by_pid[pid] * n_kv_prompt))
             pos = max(0, min(n_kv_prompt - 1, pos))
@@ -796,15 +626,12 @@ def main() -> int:
                     attn_ph, n_kv_at, kv_data, w_o_per_layer, pname, K,
                     needle_positions=needle_pos_per_step,
                 )
-                # needle_hit is nan where no needle was provided.
                 hit_vals = needle_hit[~np.isnan(needle_hit)]
                 needle_hit_rate = float(hit_vals.mean()) if hit_vals.size else float("nan")
                 avg_actual_K = float(np.mean(Ks))
-                # Memory occupancy after eviction: per-head kept positions ×
-                # bytes-per-token-per-head-per-layer × n_layers. Uses fp16.
+                # fp16 KV memory after eviction and for the full cache
                 if spec is not None:
                     kv_memory_mb = kv_memory_per_head_mb(model_key, avg_actual_K)
-                    # Full-cache memory at this n_kv (no eviction) for ratio reporting
                     full_kv_mb = kv_memory_per_head_mb(
                         model_key, float(np.mean(n_kv_at)))
                 else:
@@ -828,8 +655,7 @@ def main() -> int:
     df = pd.DataFrame(rows)
     if df.empty:
         print("[sim-kv] no rows produced"); return 1
-    # Aggregate to pareto_summary.csv. Add attn_mass_retained (headline-friendly)
-    # and needle_hit_rate (NIAH-style, NaN-aware mean).
+    # per (policy, K) summary, needle_hit_rate uses a NaN-aware mean
     def _nanmean(s):
         return float(np.nanmean(s.values)) if s.notna().any() else float("nan")
     agg = (df.groupby(["policy", "K_nominal"])

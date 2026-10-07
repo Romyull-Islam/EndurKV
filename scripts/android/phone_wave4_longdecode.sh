@@ -1,16 +1,8 @@
 #!/system/bin/sh
-# phone_wave4_longdecode.sh — long-decode-dominated workload to test whether
-# KV cache SIZE actually drives temperature (Wave-3 showed FA mode dominated).
-#
-# Protocol:
-#   Short prompt (~500 tokens) + max 2048 decode + --ignore-eos.
-#   For vanilla: KV grows 500 → 2548 cells (5× growth during decode).
-#   For v1 K=512: KV capped at ~512 cells throughout decode.
-#   If cache size matters, vanilla's thermal trajectory should climb
-#   continuously while v1's plateaus.
-#
-# 3 cells: vanilla, v1 K=512, v1_FA K=512. Same model (Phi-3),
-# same DVFS pin, same cooldown.
+# phone_wave4_longdecode.sh: decode-dominated workload to test whether KV cache size
+# drives temperature. Short prompt (~500 tokens) plus 2048 decode with --ignore-eos, so
+# vanilla's cache grows from ~500 to ~2548 cells while v1 stays near K=512.
+# Cells: vanilla, v1 K=512, v1_FA K=512 on Phi-3, same DVFS pin and cool-down.
 
 set -u
 

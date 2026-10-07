@@ -1,15 +1,8 @@
 #!/usr/bin/env python3
-"""Aggregate per-run outputs (meta.json + steps.csv + sensors.csv) into a single
-row per (model, policy, K, prompt). Derives:
-  - energy_mj  ≈ integral of (V × I) over decode wall time, in mJ
-  - mwh_per_1k_tokens = energy_mj / 3600 × 1000 / n_decode_steps
-  - mean / peak junction temperature (max over all *_temp_mc columns)
-  - mean / max throttle level (max over cpu*_cool_state)
-  - prefill PSI / RSS / mem averages
+"""One row per run dir (meta.json, steps.csv, sensors.csv): battery energy, mWh per 1K
+tokens, temperatures, throttle state, GPU busy, memory and per-step stats.
 
-Usage:
-    host_aggregate_full.py --in-dir <pulled-logs-dir> --out-csv full_results.csv
-"""
+Usage: host_aggregate_full.py --in-dir <pulled-logs-dir> --out-csv full_results.csv"""
 import argparse, json
 from pathlib import Path
 import pandas as pd
@@ -36,7 +29,7 @@ def aggregate_one(run_dir: Path):
                 # Pick out thermal cols
                 temp_cols = [c for c in sens.columns if c.endswith("_temp_mc")]
                 if temp_cols:
-                    # Filter sensor-rest values (-273000 = unset, 0 = bcl/trip not active)
+                    # Drop placeholder values (-273000 unset, 0 trip not active)
                     valid = sens[temp_cols].mask(sens[temp_cols] <= 0)
                     row["mean_junction_temp_c"] = float(valid.mean().max()) / 1000.0
                     row["peak_junction_temp_c"] = float(valid.max().max()) / 1000.0
@@ -56,8 +49,7 @@ def aggregate_one(run_dir: Path):
                     row["avg_power_mw"] = avg_mw
                     row["energy_mj"] = energy_mj
                     if meta.get("n_decode_steps", 0) > 0:
-                        # mWh per 1K tokens: energy_mWh / n_tokens × 1000
-                        energy_mwh = energy_mj / 3600.0 / 1000.0  # mJ → mWh
+                        energy_mwh = energy_mj / 3600.0 / 1000.0  # mJ to mWh
                         row["mwh_per_1k_tokens"] = energy_mwh / meta["n_decode_steps"] * 1000.0
                     row["bat_voltage_mean_v"] = float(v.mean()) / 1000.0
                     row["bat_current_mean_ma"] = float(i.mean())
@@ -113,7 +105,7 @@ def main():
     print(f"wrote {args.out_csv} ({len(df)} rows)")
 
     # Cross-policy summary
-    print("\n=== Cross-policy headline (mean across prompts/K within each policy) ===")
+    print("Cross-policy headline (mean across prompts/K within each policy)")
     agg = df.groupby("policy").agg(
         n=("prompt_id","count"),
         prefill_ms=("prefill_ms","mean"),
@@ -132,7 +124,7 @@ def main():
     print(agg.to_string(index=False))
 
     # Per-cell side-by-side
-    print("\n=== Per-cell side-by-side ===")
+    print("Per-cell side-by-side")
     for key, grp in df.groupby(["prompt_id","k_nominal"]):
         pid, k = key
         print(f"\n  {pid} K={k}:")

@@ -1,38 +1,9 @@
 #!/usr/bin/env python3
-# ============================================================================
-# make_64k_baselines_table.py -- 64K muKV-vs-baselines, every column. (2026-08-13)
-#
-# WHY A SECOND TABLE SCRIPT. make_64k_table.py covers the muKV compaction matrix, where
-# every arm is muKV and the question is "which compaction mode". This one covers the two
-# BASELINE campaigns, where the arms are different policies and two different questions
-# are being asked:
-#   nolimit : every policy gets K = n_ctx. Whatever it still drops is its OWN intrinsic
-#             compression; everything else was the budget doing the work.
-#   native  : every policy gets ITS OWN PAPER'S budget (SnapKV/Ada-KV/TOVA/StreamingLLM
-#             2048, H2O 20% of N, muKV 1024). This is the fair comparison -- forcing our
-#             K onto a baseline deletes the policy being compared.
-#
-# TWO COLUMNS CARRY THE REALIZABILITY ARGUMENT and must not be dropped from the output:
-#   retain_ratio      -- mean over selectors of (cells kept / cells the policy asked to
-#                        keep). 1.0 means the policy freed NOTHING despite its budget.
-#   compacted         -- whether the engine actually made survivors contiguous. A policy
-#                        with a small nominal budget and compacted=False is paying the
-#                        eviction cost and collecting none of the benefit.
-#
-# PPL COMES ONLY FROM ppl_* CELLS. The gen_* meta.json also carries a "perplexity" field,
-# but that is the perplexity of the model's OWN generated tokens, not of the held-out eval
-# text -- vanilla's gen cell reads 1.52, which is not a quality number and would be
-# nonsense in this table. Reading it by accident is an easy and invisible mistake.
-#
-# NO ENERGY COLUMN. These are desktop CUDA runs; there is no rail to integrate. Energy is
-# reported only for phone cells (see phone_cell_report.py). On this box nvidia-smi is
-# additionally broken (kernel module 580.159.03 vs libcuda 580.173.02), so even GPU power
-# telemetry is unavailable until it reboots -- CUDA compute itself is unaffected.
-#
-# ALL PPL HERE IS THE 2026-08-13 CLEAN-SLICE RE-RUN against wiki_eval_disjoint_64k.txt.
-# Everything measured before that date used a slice that overlaps this prompt 70/119 and
-# is void; see rerun_64k_ppl_clean.sh.
-# ============================================================================
+# Table for the 64K baseline campaigns (desktop CUDA, so no energy column):
+#   nolimit: every policy gets K = n_ctx, native: each policy at its own published budget.
+# retain and cmpct show whether a policy actually freed and compacted cache.
+# PPL is read only from ppl_* cells. gen_* meta.json also has "perplexity", but that is
+# the model's perplexity on its own generated tokens, not on the held-out text.
 import json, os, re, sys, math
 
 # Llama-3.2-1B: 16 layers x 8 KV heads x 64 dim, K and V.
@@ -67,7 +38,7 @@ def load(p):
 
 
 def ppl_of(base, tag):
-    """Held-out perplexity, from the ppl_ cell ONLY -- never from gen_'s self-perplexity."""
+    """Held-out perplexity from the ppl_ cell, not gen_'s self-perplexity."""
     j = load(os.path.join(base, "ppl_" + tag, "meta.json"))
     if not j:
         return None
@@ -87,13 +58,13 @@ HDR = ("%-24s %8s %8s %8s %8s %8s %7s %8s %7s %8s %7s %6s %8s" %
 for base, title, arms in CAMPAIGNS:
     if not os.path.isdir(base):
         continue
-    print("\n=== %s ===" % title)
+    print("%s" % title)
     print("    %s   (Llama-3.2-1B Q4_K_M, ctx 65536, 57118-token prompt)" % os.path.basename(base))
     print(HDR)
     print("-" * len(HDR))
     v = load(os.path.join(base, "gen_vanilla", "meta.json"))
     vdec = v["decode_ms"] if v else None
-    # cell size differs per campaign (f16 vs q8_0); infer from vanilla rather than assume.
+    # cell size differs per campaign (f16 vs q8_0), infer it from vanilla
     cell = CELL_F16
     if v and v.get("retained_kv_bytes"):
         est = v["retained_kv_bytes"] / max(v.get("n_prompt_tokens") or 1, 1)

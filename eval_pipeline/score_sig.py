@@ -1,35 +1,8 @@
 #!/usr/bin/env python3
-"""
-score_sig.py — Paired significance tests + effect sizes for Wave-11 evals.
-
-Consumes the same iter*/meta.json + gen.txt tree as score_ppl.py / score_niah.py
-and emits:
-
-  1. Per-policy-pair tests for PPL deltas on log domain (paired Wilcoxon
-     signed-rank + paired t-test on log(PPL)) — paired across chunks within
-     a (model, policy_a, policy_b) family. Effect size: Cohen's d_z on
-     log(PPL) deltas.
-
-  2. McNemar exact test on NIAH per-stimulus correctness contingency tables
-     (between every pair of policies within a model). Effect size: McNemar
-     odds ratio with mid-p CI.
-
-  3. Holm–Bonferroni family-wise correction across (model × policy-pair)
-     within each benchmark. A pre-registered PRIMARY contrast (default:
-     v1_fa2_stack vs tova) is reported uncorrected as well.
-
-Outputs a Markdown report:
-    figures/master_tables/TABLE_WAVE11_SIGNIFICANCE.md
-
-stdlib + matplotlib only. SciPy is preferred for accurate p-values; if
-SciPy is missing, a stdlib normal-approximation fallback is used and a
-warning is printed.
-
-Usage:
-    python eval_pipeline/score_sig.py \
-        [--phone-logs-root /path/to/phone-logs] \
-        [--workspace-root /path/to/EndurKV_workspace] \
-        [--primary-contrast v1_fa2_stack:tova]
+"""Paired significance tests for policy pairs: Wilcoxon + paired t on log PPL per chunk (Cohen's d_z),
+McNemar mid-p on NIAH correctness, Holm-Bonferroni per benchmark. Uses SciPy if present, else stdlib
+approximations. Writes figures/master_tables/TABLE_WAVE11_SIGNIFICANCE.md.
+Usage: python eval_pipeline/score_sig.py [--phone-logs-root DIR] [--workspace-root DIR] [--primary-contrast A:B]
 """
 from __future__ import annotations
 
@@ -49,9 +22,7 @@ except ImportError:
     HAS_SCIPY = False
 
 
-# --------------------------------------------------------------------------- #
 # Discovery
-# --------------------------------------------------------------------------- #
 
 def discover_ppl_metas(phone_logs_root: str) -> List[str]:
     pat = os.path.join(phone_logs_root, "wave11_*", "*", "*", "ppl", "iter*", "meta.json")
@@ -68,9 +39,7 @@ def discover_niah_gens(phone_logs_root: str) -> List[str]:
     return sorted(glob.glob(pat))
 
 
-# --------------------------------------------------------------------------- #
 # Parsing
-# --------------------------------------------------------------------------- #
 
 def parse_ppl_path(meta_path: str, root: str
                    ) -> Optional[Tuple[str, str, str, str]]:
@@ -96,9 +65,8 @@ def parse_niah_path(gen_path: str, root: str
 
 
 def _load_meta_tolerant(meta_path: str) -> Optional[dict]:
-    """eviction_bench emits bareword `inf`/`nan` which is not valid RFC-8259
-    JSON; substitute with the json-permissive Infinity/NaN tokens before
-    parsing. See score_ppl._load_meta_tolerant for the canonical version."""
+    """Load meta.json, mapping eviction_bench's bare inf/nan to Infinity/NaN first.
+    Same as score_ppl._load_meta_tolerant."""
     try:
         with open(meta_path, "r") as f:
             raw = f.read()
@@ -151,9 +119,7 @@ def needle_in(text: str) -> bool:
     return "sandwich at dolores park" in text.lower()
 
 
-# --------------------------------------------------------------------------- #
-# Stats — paired tests + effect sizes
-# --------------------------------------------------------------------------- #
+# Stats - paired tests + effect sizes
 
 def paired_t_test(deltas: List[float]) -> Tuple[float, float]:
     """Return (t_stat, two-sided p) for paired-t on deltas vs 0."""
@@ -169,7 +135,7 @@ def paired_t_test(deltas: List[float]) -> Tuple[float, float]:
     if HAS_SCIPY:
         p = float(_scipy_stats.t.sf(abs(t), n - 1) * 2.0)
     else:
-        # Normal approximation; underestimates p at small n. Print warning.
+        # normal approximation, underestimates p at small n
         p = math.erfc(abs(t) / math.sqrt(2.0))
     return (t, p)
 
@@ -222,12 +188,8 @@ def cohens_d_z(deltas: List[float]) -> float:
 
 
 def mcnemar_exact(b: int, c: int) -> float:
-    """McNemar's exact (mid-p) test on a 2x2 paired contingency table.
-
-    b = # stimuli where A correct, B incorrect
-    c = # stimuli where A incorrect, B correct
-    Returns two-sided p-value.
-    """
+    """Two-sided McNemar exact (mid-p) p-value. b = stimuli where only A is correct,
+    c = stimuli where only B is correct."""
     n = b + c
     if n == 0:
         return 1.0
@@ -250,7 +212,7 @@ def mcnemar_odds_ratio(b: int, c: int) -> float:
 
 
 def holm_bonferroni(pvals: List[float]) -> List[float]:
-    """Holm–Bonferroni adjusted p-values, monotonic, capped at 1.0."""
+    """Holm-Bonferroni adjusted p-values, monotonic, capped at 1.0."""
     n = len(pvals)
     if n == 0:
         return []
@@ -264,9 +226,7 @@ def holm_bonferroni(pvals: List[float]) -> List[float]:
     return adj
 
 
-# --------------------------------------------------------------------------- #
 # Pipeline
-# --------------------------------------------------------------------------- #
 
 def aggregate_ppl(root: str) -> Dict[Tuple[str, str], Dict[str, float]]:
     """Return {(model, policy): {iter_id -> log_ppl}}."""
@@ -363,9 +323,7 @@ def paired_niah_tests(niah: Dict[Tuple[str, str], Dict[str, bool]]
     return out
 
 
-# --------------------------------------------------------------------------- #
 # Rendering
-# --------------------------------------------------------------------------- #
 
 def render_markdown(ppl_tests: List[Dict], niah_tests: List[Dict],
                     primary: Optional[Tuple[str, str]],
@@ -386,7 +344,7 @@ def render_markdown(ppl_tests: List[Dict], niah_tests: List[Dict],
     lines.append("## PPL (log-domain paired tests)")
     lines.append("")
     if ppl_tests:
-        # Apply Holm–Bonferroni per model, using Wilcoxon p (non-parametric primary).
+        # Apply Holm-Bonferroni per model, using Wilcoxon p (non-parametric primary).
         by_model: Dict[str, List[Dict]] = defaultdict(list)
         for r in ppl_tests:
             by_model[r["model"]].append(r)
@@ -483,9 +441,7 @@ def render_markdown(ppl_tests: List[Dict], niah_tests: List[Dict],
         f.write("\n".join(lines))
 
 
-# --------------------------------------------------------------------------- #
 # Entry point
-# --------------------------------------------------------------------------- #
 
 def default_workspace() -> str:
     here = os.path.abspath(__file__)

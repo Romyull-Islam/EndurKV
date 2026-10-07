@@ -1,10 +1,7 @@
 #!/bin/bash
-# Phone-GPU compaction A/B (2026-08-01).
-# On CUDA (RTX 4500) compaction took muKV from 1.03x to 2.42x vs vanilla. The Adreno
-# path has compaction OFF because an early state-swap measurement called the round-trip
-# "prohibitive" -- the SAME generalisation that silently cost us the 2.42x on CUDA.
-# This measures it on Adreno instead of trusting it. Phi-3-mini is the fat-KV model
-# (no GQA, 32 layers), so it is where a bandwidth win can show.
+# Phone GPU compaction A/B. The Adreno path ran with compaction off based on an
+# early state-swap measurement, so this measures it directly. Phi-3-mini has the
+# largest KV (no GQA, 32 layers), where a bandwidth gain would show most.
 set -u
 for _p in ${ADB_PORTS:-5152 5037 5151}; do
   (exec 3<>/dev/tcp/127.0.0.1/$_p) 2>/dev/null || continue

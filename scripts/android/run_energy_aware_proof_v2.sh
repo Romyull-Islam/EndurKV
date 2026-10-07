@@ -1,50 +1,18 @@
 #!/bin/bash
-# ============================================================================
-# run_energy_aware_proof_v2.sh -- does the energy-aware controller save energy when
-# the battery is low, under a matched protocol? (2026-09-02)
-#
-# THE CONTROLLER UNDER TEST acts per backend, because the measurements say the
-# energy lever differs:
-#     GPU : cap the GPU clock (1200 / 902 / 726 MHz), HOLD K = 1024.
-#           The cache tier moved GPU energy per token <7% in three campaigns and
-#           costs 6.6 F1 on qasper; the clock cut 335->281 mJ/token at K=1024 with
-#           throughput unchanged (30.0 vs 30.3 tok/s).
-#     CPU : shrink the cache (K = 1024 / 512 / 256), leave the clock alone.
-#           Decode is attention-bound over live cells; the clock is not a lever there.
-# The controller writes the GPU clock itself (su) and restores it on exit. The
-# sampler records gpu_clk_hz every sample, so the action is visible in the data.
-#
-# SAME COMMAND LINE EVERY ARM. Only the battery state the controller sees differs.
-# The phone sits at 100% SoC, so a battery level is simulated by moving the
-# thresholds (the controller still reads the real battery every time):
-#     healthy : thresholds  50/20  -> 100 is above both       -> level 0
-#     mid     : thresholds 100/20  -> 100 is not above 100    -> level 1
-#     low     : thresholds 100/100 -> 100 is above neither    -> level 2
-# Charging is disabled by the cool gate, so the status is not "mains" and the
-# SoC path is exercised. Each cell asserts the level the controller picked and,
-# on GPU, that the clock write succeeded; otherwise the cell is discarded.
-#
-# MATCHED CONDITIONS:
-#   * CPU caps: identical for every cell (prime 1497.6 MHz, rest 1785.6 MHz,
-#     min = max), the watchdog's healthy rung, sustained without throttling in
-#     the CPU soak. Pre-run caps are saved and restored on exit.
-#   * GPU: the controller sets the clock; the script restores 1200 MHz and
-#     max_pwrlevel 0 on exit so nothing leaks into later campaigns.
-#   * Scheduler: `taskset f0 nice -n -20` (big cores, high priority) for the
-#     bench, which removed the 39% dispatch bimodality.
-#   * Temperature gate: cool_ddr36 plus a settle loop until DDR <= 35 C and
-#     battery <= 33 C before every cell; start temperatures and the caps in
-#     force are written to start_temps.txt in each cell.
-#   * Energy = USB rail integral + battery pack coulomb delta. Replicates are
-#     interleaved (r1 of every arm, then r2, then r3), n = 3 per arm, 18 cells.
-# ============================================================================
+# Energy-aware controller test, n = 3 per arm, replicates interleaved.
+# GPU arms: the controller caps the GPU clock (1200 / 902 / 726 MHz) at K = 1024.
+# CPU arms: it shrinks the cache (K = 1024 / 512 / 256) at fixed clocks.
+# The phone sits at 100% SoC, so battery levels are simulated with the thresholds
+# (50/20 gives level 0, 100/20 level 1, 100/100 level 2). A cell is discarded if the
+# controller picked another level or, on GPU, the clock write failed.
+# CPU caps are fixed (prime 1497.6 MHz, rest 1785.6 MHz) and restored on exit.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 BIN_GPU=/data/local/tmp/ukv                     # Vulkan build: GPU cells
 BIN_CPU=/data/local/tmp/endurkv/bin_cpu_ea      # CPU-only build: CPU cells. The Vulkan build with
                                                 # --n-gpu-layers 0 still opens the Adreno device,
                                                 # reserves a 253 MiB compute buffer on it and decodes
-                                                # at 6 tok/s instead of 23 (found 2026-09-03).
+                                                # at 6 tok/s instead of 23.
 M=/data/local/tmp/endurkv/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 P=/data/local/tmp/endurkv/corpora/prompt_12k.txt
 DEV=/data/local/tmp/endurkv/logs/eaproof2_$(date +%Y%m%d_%H%M%S)
@@ -97,9 +65,8 @@ cell(){ # tag  ngl  thresholds  maxtok  expected_level
   echo "$START_TEMPS $CAPS" > "$D/start_temps.txt"; echo "    start: $START_TEMPS $CAPS"
   adb_safe_shell "su -c 'rm -f /data/local/tmp/ukv_ea_level /data/local/tmp/ea_$TAG.csv; nohup sh /data/local/tmp/sample_sensors.sh --out /data/local/tmp/ea_$TAG.csv --hz 2 >/dev/null 2>&1 &'" < /dev/null
   echo "[$(date +%H:%M:%S)] running $TAG ..."
-  # taskset f0 + nice -20 fixes the GPU dispatch bimodality but cuts CPU decode from 26.7 to
-  # 6.2 tok/s and doubles CPU prefill time (measured 2026-09-03, same binary, same caps).
-  # So the pin applies to GPU cells only; CPU cells run unpinned like the soak did.
+  # Pin GPU cells only. The pin removes GPU dispatch bimodality, but on CPU it cuts
+  # decode from 26.7 to 6.2 tok/s and doubles prefill time.
   local BIN CELLPIN; if [ "$NGL" -gt 0 ]; then BIN=$BIN_GPU; CELLPIN=$PIN; else BIN=$BIN_CPU; CELLPIN=""; fi
   adb_safe_shell "cd $BIN && LD_LIBRARY_PATH=$BIN $CELLPIN ./eviction_bench --model $M --prompt $P \
     --prompt-id $TAG --eval-mode gen --max-tokens $TOK --ignore-eos --ctx-size 16384 \
@@ -126,11 +93,11 @@ cell(){ # tag  ngl  thresholds  maxtok  expected_level
 }
 
 for R in 1 2 3; do
-  echo "=== replicate $R: GPU, identical command line, only the battery state differs (controller caps the clock) ==="
+  echo "replicate $R: GPU, identical command line, only the battery state differs (controller caps the clock)"
   cell gpu_healthy_r$R 99 "--ea-soc-hi 50  --ea-soc-lo 20"  4096 0
   cell gpu_mid_r$R     99 "--ea-soc-hi 100 --ea-soc-lo 20"  4096 1
   cell gpu_low_r$R     99 "--ea-soc-hi 100 --ea-soc-lo 100" 4096 2
-  echo "=== replicate $R: CPU, same three battery states (controller shrinks the cache) ==="
+  echo "replicate $R: CPU, same three battery states (controller shrinks the cache)"
   cell cpu_healthy_r$R  0 "--ea-soc-hi 50  --ea-soc-lo 20"  1024 0
   cell cpu_mid_r$R      0 "--ea-soc-hi 100 --ea-soc-lo 20"  1024 1
   cell cpu_low_r$R      0 "--ea-soc-hi 100 --ea-soc-lo 100" 1024 2

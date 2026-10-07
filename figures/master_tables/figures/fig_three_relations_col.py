@@ -1,22 +1,7 @@
 #!/usr/bin/env python3
-"""The three relations in one column figure for the 6-page paper. (2026-09-24)
-
-Replaces the separate price figure (fig_energy_perf_col) and loops figure (fig_discharge_loops).
-Three rows, one per relation, two panels each (GPU clock on the left, cache budget on the right,
-then the two loop runs):
-  (a) energy -> performance: spend less energy and read what it costs. Clock: the five-rung fine
-      ladder (one session, n=3, the 4096-token request) as energy saved vs time added against
-      1200 MHz; ring on 967, where the mid tier's walk stops; 826 is dominated (no cheaper than 902,
-      slower). Cache: muKV at K=1024 vs its own full cache on four models, energy saved vs
-      LongBench accuracy lost (kept above 100% counts as nothing lost).
-  (b) performance -> energy: the same levers read upward from the cheap end. Clock: throughput
-      gained vs energy added against 902 MHz. Cache: accuracy bought back vs energy added when the
-      full cache replaces K=1024. The y scale is the point: 0 to 40% in (a), 0 to 200% in (b).
-  (c) the learner -> the two loops. Left: the lever through the real discharge, every loop action
-      marked (same panel as before). Right: the guarded bandit's 30 cooled requests on the cable,
-      |energy prediction error| per request from its own sched_log, coloured by the learner's mode,
-      marker where a loop fired (3 of 30, one per mode).
-Data: energy_perf_data.json (ladder_fine, accuracy, guarded_bandit), /tmp/discharge_final timeline,
+"""Column figure with three rows: (a) energy to performance and (b) performance to energy, each
+for the GPU clock ladder and the cache budget, and (c) the discharge lever trace and the guarded
+bandit's per-request energy prediction error. Data: energy_perf_data.json, /tmp/discharge3,
 campaigns/guarded_bandit_20260921/requests/*/sched_log.txt.
 """
 import csv
@@ -53,13 +38,13 @@ def style(ax):
     ax.tick_params(colors=MUTED, length=1.5, pad=1.5)
 
 
-# ---------------------------------------------------------------- data
+# data
 lad = sorted(D["ladder_fine"]["points"], key=lambda p: p["mhz"])
 top = next(p for p in lad if p["mhz"] == 1200); low = next(p for p in lad if p["mhz"] == 902)
 pm = D["accuracy"]["per_model"]
 NAME = {"Llama-3.2-1B": "Llama", "Phi-3-mini": "Phi-3", "gemma-2-2b": "gemma", "Bonsai-8B": "Bonsai"}
 
-# ---------------------------------------------------------------- (a) energy -> performance
+# (a) energy -> performance
 row_title(a1, "(a) energy → performance: spend less energy")
 xs = [100 * (1 - p["energy_J"] / top["energy_J"]) for p in lad]
 ys = [100 * (p["time_s"] / top["time_s"] - 1) for p in lad]
@@ -86,7 +71,7 @@ a2.set_xlim(30, 76); a2.set_ylim(-1.0, 9)
 a2.set_xlabel("energy saved (%)", labelpad=1); a2.set_ylabel("accuracy lost (%)", labelpad=1)
 a2.set_title("cache, full → $K$ = 1024", loc="left", fontsize=5.8, color=MUTED, pad=2)
 
-# ---------------------------------------------------------------- (b) performance -> energy
+# (b) performance -> energy
 row_title(b1, "(b) performance → energy: buy it back")
 xs = [100 * (low["time_s"] / p["time_s"] - 1) for p in lad]
 ys = [100 * (p["energy_J"] / low["energy_J"] - 1) for p in lad]
@@ -112,10 +97,10 @@ b2.set_xlim(-0.6, 9); b2.set_ylim(0, 225)
 b2.set_xlabel("accuracy bought back (%)", labelpad=1); b2.set_ylabel("energy added (%)", labelpad=1)
 b2.set_title("cache, $K$ = 1024 → full", loc="left", fontsize=5.8, color=MUTED, pad=2)
 
-# ---------------------------------------------------------------- (c) the learner -> the two loops
+# (c) the learner -> the two loops
 row_title(c1, "(c) the learner → the two loops")
-rows = [r for r in csv.DictReader(open("/tmp/discharge_final/discharge/timeline.csv")) if r["usb_powered"] == "false"]
-n = [int(r["n"]) for r in rows]; L = [float(r["lever"]) for r in rows]
+rows = [r for r in csv.DictReader(open("/tmp/discharge3/discharge3/timeline.csv")) if r["usb_powered"] == "false"]
+n = [int(r["n"]) for r in rows]; L = [float(r["lever"]) + float(r["bias_before"] or 0) for r in rows]
 soc = [int(r["soc"]) for r in rows]; tier = [r["tier"] for r in rows]
 BAND = {"healthy": "#eef3fb", "mid": "#fdf3e4", "low": "#fce9ea"}; DEF = {"healthy": 1.0, "mid": 0.5, "low": 0.0}
 i0 = 0
@@ -123,7 +108,8 @@ for i in range(1, len(rows) + 1):
     if i == len(rows) or tier[i] != tier[i0]:
         c1.axvspan(n[i0] - 0.5, n[i - 1] + 0.5, color=BAND[tier[i0]], zorder=0, lw=0)
         c1.plot([n[i0] - 0.5, n[i - 1] + 0.5], [DEF[tier[i0]]] * 2, color=MUTED, lw=0.7, ls=(0, (3, 2)), zorder=1)
-        c1.text((n[i0] + n[i - 1]) / 2, 1.74, f"{tier[i0]}\n{soc[i0]} to {soc[i - 1]}%", ha="center", va="top", fontsize=5.0, color=MUTED, linespacing=1.1)
+        xl = n[i - 1] + 0.3 if tier[i0] == "low" else n[i0] + 0.5
+        c1.text(xl, 2.36, f"{tier[i0]}\n{soc[i0]} to {soc[i - 1]}%", ha="right" if tier[i0] == "low" else "left", va="top", fontsize=4.6, color=MUTED, linespacing=1.1)
         i0 = i
 c1.step(n, L, where="mid", color=INK, lw=0.9, zorder=3)
 np_, ne_ = 0, 0
@@ -132,15 +118,15 @@ for r, x, y in zip(rows, n, L):
         np_ += 1; c1.scatter(x, y, marker="^", s=13, color=PERF, edgecolor="white", linewidth=0.4, zorder=5)
     elif r["loop"].startswith("energy"):
         ne_ += 1; c1.scatter(x, y, marker="v", s=13, color=ENER, edgecolor="white", linewidth=0.4, zorder=5)
-h = [plt.Line2D([], [], color=INK, lw=0.9, label="lever used"),
+h = [plt.Line2D([], [], color=INK, lw=0.9, label="lever + bias"),
      plt.Line2D([], [], marker="^", ls="", color=PERF, ms=3, label="time over +0.1"),
      plt.Line2D([], [], color=MUTED, lw=0.7, ls=(0, (3, 2)), label="tier default"),
      plt.Line2D([], [], marker="v", ls="", color=ENER, ms=3, label="energy over −0.1")]
 c1.legend(handles=h, loc="lower left", fontsize=4.6, frameon=False, ncol=2, handlelength=0.9, columnspacing=0.5,
           borderpad=0.1, labelspacing=0.15, handletextpad=0.3, bbox_to_anchor=(-0.04, -0.04))
-c1.set_ylim(-0.68, 1.76); c1.set_yticks([0, 0.5, 1.0]); c1.set_xlim(n[0] - 0.5, n[-1] + 0.5)
-c1.set_xlabel("request on battery", labelpad=1); c1.set_ylabel("lever $L$", labelpad=1)
-c1.set_title("real discharge, the loops alone", loc="left", fontsize=5.8, color=MUTED, pad=2)
+c1.set_ylim(-0.68, 2.40); c1.set_yticks([0, 0.5, 1.0]); c1.set_xlim(n[0] - 0.5, n[-1] + 0.5)
+c1.set_xlabel("request on battery", labelpad=1); c1.set_ylabel("lever $L$ + bias", labelpad=1)
+c1.set_title("discharge, cycle 3", loc="left", fontsize=5.8, color=MUTED, pad=2)
 
 G = D["guarded_bandit"]
 err = {}

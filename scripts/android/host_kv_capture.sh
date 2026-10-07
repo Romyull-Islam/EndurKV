@@ -1,12 +1,8 @@
 #!/bin/bash
-# Host-side K/V capture: runs attention_probe on x86_64 host with
-# ATTNPROBE_CAPTURE_KV=1 so each prompt yields BOTH .attn.bin and .kv.bin.
-#
-# Usage: host_kv_capture.sh <model_name> [<prompt_id>]
-#   model_name in {phi3, mistral, qwen2, gemma2, r1distill}
+# Host-side K/V capture: runs attention_probe on x86_64 with ATTNPROBE_CAPTURE_KV=1 so
+# each prompt yields both .attn.bin and .kv.bin, written to logs/host_kv_<model>/.
+# Usage: host_kv_capture.sh <phi3|mistral|qwen2|gemma2|r1distill> [prompt_id]
 #   prompt_id defaults to narrativeqa_pub_001
-#
-# Output goes to /home/mislam22/EndurKV_workspace/logs/host_kv_<model>/
 set -e
 
 MODEL="${1:?Usage: $0 <model_name> [<prompt_id>]}"

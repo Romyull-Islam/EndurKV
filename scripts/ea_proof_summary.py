@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
-"""Summarise an energy-aware proof campaign (run_energy_aware_proof_v2.sh).
-
-Energy method is the same as clock_cell_report.py: USB rail integral plus battery
-pack coulomb delta times mean pack voltage. Energy per token divides whole-run
-energy by decode steps. Arms are grouped across replicates (tag_rN) and reported
-as mean and standard deviation. Prints the healthy-to-low delta per backend,
-which is the claim the campaign exists to test.
-"""
+"""Summarise an energy-aware proof campaign (run_energy_aware_proof_v2.sh). Energy is the USB
+rail integral plus the pack coulomb delta times mean pack voltage, as in clock_cell_report.py.
+Arms are grouped across replicates (tag_rN) as mean and SD, and the healthy-to-low delta per
+backend is printed."""
 import csv, json, os, re, sys, glob, statistics as st
 
 
@@ -78,9 +74,8 @@ def dvfs(d):
 
 
 def phase_split(d, m):
-    """Energy of the prefill and decode phases (rail + pack). The run window is detected from
-    the rail power trace (first sustained rise above idle) and split at prefill_ms. Returns
-    (prefill_J, decode_J) or (nan, nan)."""
+    """(prefill_J, decode_J) from rail + pack energy, window ending at the last sample and
+    split at prefill_ms, or (nan, nan)."""
     f = os.path.join(d, "sensors.csv")
     nan = float("nan")
     if not os.path.exists(f):
@@ -97,9 +92,8 @@ def phase_split(d, m):
         vb = r.get("bat_voltage_now_uv", "").strip(); V.append(float(vb) / 1e6 if vb.isdigit() else None)
     if len(P) < 10:
         return nan, nan
-    # Anchor on the END of the trace: the campaign scripts kill the sampler the moment the
-    # bench returns, so the run ends within about a second of the last sample. Start
-    # detection from a power rise is unreliable when sampling begins after the run starts.
+    # Anchor on the end of the trace. The campaign scripts stop the sampler as soon as the
+    # bench returns, while a power-rise start is unreliable if sampling began late.
     tend = T[-1]; t0 = tend - m["total_ms"] / 1000; tpf = t0 + m["prefill_ms"] / 1000
     if t0 < T[0] - 5.0:      # the trace does not cover the run; do not guess
         return nan, nan

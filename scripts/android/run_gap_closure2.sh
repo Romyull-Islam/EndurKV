@@ -1,23 +1,10 @@
 #!/bin/bash
-# ============================================================================
-# run_gap_closure2.sh -- the table gaps the 2026-09-20 audit found. (2026-09-20)
-#
-#  A. gemma-2-2b on the Adreno. The GPU table covers Llama-1B and Phi-3 only.
-#     The paper currently says gemma is CPU-only because its context is 8192,
-#     but gemma has its OWN 6382-token prompt (prompt_7k.txt), so the real
-#     question is whether the Vulkan backend runs gemma-2 at all. Matched to
-#     the gemma CPU row: same prompt, same 2048 generated, same budgets.
-#     Every cell keeps its generation so the output can be checked for the
-#     Bonsai failure mode (full speed, garbage tokens).
-#  B. Bonsai-8B full cache on the KeyDiff build. gap_cpu_bonsai/keydiff2048
-#     has no same-campaign no-eviction reference, so that pair of CPU cells
-#     is currently blank.
-#  C. KeyDiff on the needle grid, all four models: see run_niah_keydiff.sh,
-#     which this script launches last.
-#
-# Charging is disabled by cool_gate.sh on every cell; the phone stays plugged in.
-# Resumable: a cell whose meta.json already exists is skipped.
-# ============================================================================
+# Fills missing table cells:
+#  A. gemma-2-2b on the Adreno GPU, matched to its CPU row (prompt_7k.txt, 2048 tokens, same budgets).
+#     Generations are kept to check for garbage output at full speed.
+#  B. Bonsai-8B full-cache reference on the KeyDiff CPU build, pairs with gap_cpu_bonsai/keydiff2048.
+#  C. KeyDiff on the needle grid (run_niah_keydiff.sh, launched last).
+# Charging is off for every cell with the phone plugged in. Cells with a meta.json are skipped.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 LOG(){ echo "[$(date +%F' '%H:%M:%S)] $*"; }
@@ -39,8 +26,7 @@ cell(){
   LOG "cooling for $TAG ..."
   CG=$(adb_safe_shell "su -c '. /data/local/tmp/endurkv/scripts/cool_gate.sh; cool_ddr36'" < /dev/null 2>/dev/null | tail -1)
   case "$CG" in *"cool ddr="*) LOG "  $CG";; *) LOG "  [SKIP-HOT] $TAG"; return;; esac
-  # cool_gate.sh's charging_restore() turns charging back on when it exits; the cell
-  # must be metered with it off (see phone-energy-cooling-gate).
+  # cool_gate.sh turns charging back on when it exits, energy must be metered with it off
   adb_safe_shell "su -c 'echo 0 > /sys/class/oplus_chg/battery/mmi_charging_enable'" < /dev/null >/dev/null 2>&1
   BV=$(adb_safe_shell "su -c 'cat /sys/class/power_supply/battery/voltage_now'" < /dev/null 2>/dev/null | tr -d ' \r')
   echo "batt_voltage_uv=$BV" > "$ROOT/$TAG/start_power.txt"
@@ -67,12 +53,11 @@ cell(){
   fi
 }
 
-# --- A. gemma-2-2b on the Adreno, matched to its CPU row -------------------
+# A. gemma-2-2b on the Adreno, matched to its CPU row
 # prompt_7k.txt is 6382 gemma tokens; H2O's 20% of N is 1276, as on the CPU.
 G=/tmp/gap_gpu_gemma; GM=$MOD/gemma-2-2b-it-Q4_K_M.gguf; GP=/data/local/tmp/endurkv/corpora/prompt_7k.txt
-# probe first: 64 tokens, ctx 16384. If the Vulkan backend cannot run gemma-2 at all,
-# this costs two minutes instead of an hour, and its gen.txt shows whether the
-# output is real text or the Bonsai non-finite-logit failure.
+# 64-token probe first, so a Vulkan failure on gemma-2 costs minutes, not an hour.
+# Its gen.txt shows whether the output is real text.
 cell $G probe_vanilla $VK $GM $GP 64 99 16384 --policy vanilla --k-nominal 1024
 if [ ! -s $G/probe_vanilla/gen.txt ]; then
   LOG "gemma GPU probe produced no output; skipping the gemma GPU block"
@@ -87,14 +72,14 @@ else
   cell $G keydiff2048  $VK $GM $GP 2048 99 16384 $KD
 fi
 
-# --- B. Bonsai-8B full cache on the KeyDiff build --------------------------
+# B. Bonsai-8B full cache on the KeyDiff build
 # Pairs with the existing /tmp/gap_cpu_bonsai/keydiff2048 (10074 prompt + 4096).
 cell /tmp/gap_cpu_bonsai vanilla $CB $MOD/Bonsai-8B-Q1_0.gguf \
      /data/local/tmp/endurkv/corpora/prompt_12k.txt 4096 0 16384 --policy vanilla --k-nominal 1024
 
 LOG "GAP_CLOSURE2_DONE"
 touch /tmp/gap_closure2_DONE
-# --- C. KeyDiff on the needle grid, all four models ------------------------
+# C. KeyDiff on the needle grid, all four models
 nohup bash /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/run_niah_keydiff.sh \
   > /tmp/niah_keydiff.log 2>&1 &
 LOG "needle KeyDiff campaign launched -> /tmp/niah_keydiff.log"

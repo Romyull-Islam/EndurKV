@@ -1,17 +1,6 @@
-"""Consolidated 'best policy across all sims' ranker.
-
-Reads every `pareto_summary.csv` we can find under logs/ (both layer-averaged
-sims and per-head sims) and produces a single headline table:
-
-    | rank | policy | sim_kind | dataset | n_prompts | KL@K=64 | KL@K=128 | KL@K=256 | margin vs TOVA |
-
-The point: one place to see which policy wins on which dataset, across the
-whole experimental record. Drives the final 'best policy' answer.
-
-Outputs to logs/_consolidated/:
-  - best_per_dataset.csv     (best policy per dataset/budget)
-  - global_ranking.csv       (across all sims)
-  - tova_margins.csv         (each policy's mean margin over TOVA)
+"""Rank policies across every pareto_summary.csv under logs/ (layer-averaged and per-head sims).
+Reports KL at K=64/128/256 and the margin over TOVA per policy and dataset.
+Writes best_per_dataset.csv, global_ranking.csv and tova_margins.csv to logs/_consolidated/.
 """
 from __future__ import annotations
 import os
@@ -65,7 +54,7 @@ def tag_dir(dirname: str) -> tuple[str, str, str]:
 
 
 def load_all() -> pd.DataFrame:
-    """Auto-discover EVERY pareto_summary.csv under logs/ (skip smoke + _consolidated/_xarch)."""
+    """Load every pareto_summary.csv under logs/, skipping smoke, _consolidated and _xarch."""
     parts = []
     for p in LOGS.rglob("pareto_summary.csv"):
         if "_consolidated" in p.parts or "_xarch" in p.parts:
@@ -78,7 +67,7 @@ def load_all() -> pd.DataFrame:
             df = pd.read_csv(p)
         except Exception as e:
             print(f"  [skip] {parent}: {e}"); continue
-        # Filter degenerate per-head sims where every row is NaN (pre-fix)
+        # Skip degenerate per-head sims where every row is NaN
         if "mean_kl" in df.columns and df["mean_kl"].isna().all():
             print(f"  [skip] {parent}: all-NaN (pre-fix sim)"); continue
         df["dataset"] = f"{model}-{ctx}"
@@ -127,7 +116,7 @@ def main() -> int:
         })
     best_per = pd.DataFrame(rows).sort_values(["dataset", "K_nominal"])
     best_per.to_csv(out_dir / "best_per_dataset.csv", index=False)
-    print(f"\n=== BEST POLICY per dataset x K ===")
+    print(f"BEST POLICY per dataset x K")
     if not best_per.empty:
         print(best_per.to_string(index=False))
 
@@ -159,7 +148,7 @@ def main() -> int:
         ["sim_kind", "mean_margin_vs_tova_pct"]
     )
     margins_df.to_csv(out_dir / "tova_margins.csv", index=False)
-    print(f"\n=== POLICY margin vs TOVA (negative = better) ===")
+    print(f"POLICY margin vs TOVA (negative = better)")
     if not margins_df.empty:
         print(margins_df.to_string(index=False))
 
@@ -177,7 +166,7 @@ def main() -> int:
         })
     glob = pd.DataFrame(glob_rows).sort_values("mean_kl_overall")
     glob.to_csv(out_dir / "global_ranking.csv", index=False)
-    print(f"\n=== GLOBAL ranking (mean KL across all sims) ===")
+    print(f"GLOBAL ranking (mean KL across all sims)")
     print(glob.to_string(index=False))
 
     print(f"\nAll outputs in {out_dir}")

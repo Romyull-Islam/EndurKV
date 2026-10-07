@@ -1,50 +1,11 @@
 #!/bin/bash
-# ============================================================================
-# run_gpu_dispatch_fix.sh -- diagnose AND attempt to fix the phone-GPU decode
-# bimodality. (2026-08-14)
-#
-# WHAT IS KNOWN. Eight identical cells (/tmp/gpu_bimod) spread 28.20-39.21 tok/s, 39%,
-# from an unchanged command line after an identical cool gate. The cause is NOT thermal
-# and NOT the clock:
-#     the fast cell ran at 976 MHz mean, LOWER than the slow cells' 996 MHz
-#     thermal_pwrlevel was pinned at 5 in all eight
-#     prefill was stable 129-136s; ALL variance was in decode (104-145s)
-#     GPU busy fraction is the only correlate: 88.8% fast vs 79-82% slow
-# At constant clock the GPU is simply idle more. Prefill is a few large kernels where
-# dispatch cost amortises; decode is thousands of tiny ones where CPU-side submission
-# latency dominates. So the submission thread is intermittently not keeping the GPU fed.
-#
-# THIS RUN TESTS THREE THINGS AT ONCE, which is why the arms are shaped as they are.
-#
-#   (1) WAS MY OWN INSTRUMENT THE CONFOUND? The bimodality campaign added a 2 Hz shell
-#       loop doing five cats per tick to sample gpuclk. If dispatch latency is the
-#       mechanism, that loop could have caused the starvation it was built to observe --
-#       and the rates are suspicious: 7/8 slow there versus 3/9 slow in the energy
-#       campaign, which had no such loop. NEITHER arm here runs it. sample_sensors.sh is
-#       kept because it was present in every previous campaign, so it is a constant
-#       rather than a variable.
-#
-#   (2) DOES CORE PLACEMENT EXPLAIN IT? The `pin` arm binds the process to the four
-#       highest-clocked cores (taskset f0 = cpu4-7; cpu7 is the 4.61 GHz prime, the others
-#       3.63 GHz) and raises priority (nice -20), so the submission thread cannot be
-#       parked on a little core or descheduled behind background work. If pinning
-#       collapses the spread, the mechanism is scheduling.
-#
-#   (3) IS IT A FIX? If `pin` is both faster AND tighter, it is not merely a diagnosis --
-#       it should become the standard way every phone-GPU cell is run, which would make
-#       muKV's speed numbers both larger and reproducible. That matters more than the
-#       diagnosis: at a 39% spread no ratio below 1.39x is claimable, which currently puts
-#       muKV's 1.23x on Llama-1B inside the noise (Phi-3's 2.81x survives).
-#
-# SCHED_FIFO was considered for the pin arm and rejected: a real-time process that spins
-# can make the phone unrecoverable over adb, and nice -20 + taskset tests the same
-# hypothesis without that risk.
-#
-# ARMS ALTERNATE base,pin,base,pin,... so any session drift is shared equally rather than
-# loading onto one arm -- the same reasoning as the rotation in run_energy_aware_n3.sh.
-# Config is the frozen muKV at k-pct 10, the operating point the tier sweep identified as
-# optimal on both energy and retrieval.
-# ============================================================================
+# run_gpu_dispatch_fix.sh: tests whether CPU core placement explains the spread in phone-GPU
+# decode speed. Decode is thousands of small kernels, so slow CPU-side submission can leave the
+# GPU idle at a fixed clock.
+# Arms alternate base and pin (taskset f0 = cpu4-7, nice -20) so session drift is shared.
+# No gpuclk polling loop runs here, since such a loop could itself cause the starvation.
+# SCHED_FIFO is avoided: a spinning real-time process can make the phone unreachable over adb.
+# Config: frozen muKV at k-pct 10.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 BIN=/data/local/tmp/ukv_n3

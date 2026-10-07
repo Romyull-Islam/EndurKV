@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# phone_wave3_other_policies.sh — Wave-3 REAL extended to TOVA, H2O, pyramid.
+# phone_wave3_other_policies.sh - Wave-3 REAL extended to TOVA, H2O, pyramid.
 # Same protocol as phone_wave3_real.sh, different policies. Output goes to
 # the same parent dir so analysis can combine all cells.
 set -u

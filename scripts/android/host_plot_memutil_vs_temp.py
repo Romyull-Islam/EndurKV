@@ -1,31 +1,8 @@
 #!/usr/bin/env python3
-"""PLOT 14: Memory utilization (RSS + swap) vs SoC + memory (DDR) temperature.
-
-For every cell directory under phone-logs/* that contains BOTH a stress.csv
-(per-iter probe summary) and a sensors.csv (high-frequency thermal trace),
-compute the per-cell aggregate:
-
-  - RSS_gb       := stress.csv['peak_rss_kb'].max() / (1024 * 1024)
-  - swap_MB      := (vmstat_pswpout.max() - vmstat_pswpout.min()) * 4 KB / 1024
-                    (vmstat_pswpout is a monotonic page-counter; one page = 4 KB)
-  - SoC_temp_C   := max over all CPU thermal zones (cpu*_temp_mc) / 1000
-                    (same definition used by host_master_table_4policy.py
-                    for the "CPU peak" column in the master tables)
-  - DDR_temp_C   := sensors.csv['ddr_temp_mc'].max() / 1000
-
-Renders a 2x2 panel figure:
-   (top-left)  RSS_gb  vs SoC_temp_C   -- colored by policy family
-   (top-right) RSS_gb  vs DDR_temp_C   -- colored by policy family
-   (bot-left)  swap_MB vs SoC_temp_C   -- colored by policy family
-   (bot-right) swap_MB vs DDR_temp_C   -- colored by policy family
-
-Each panel overlays a linear regression line and annotates the R^2.
-Cells with extreme swap (Wave-7's 1552 MB run, Wave-3's 515 MB run) are
-explicitly labelled as outliers in the swap panels.
-
-Output:
-   /home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/
-       14_memutil_vs_temp.png
+"""Plot 14: memory use (peak RSS, swap MB) against peak SoC and DDR temperature.
+Reads every phone-logs/* cell with both stress.csv and sensors.csv. 2x2 scatter panels
+coloured by policy family, each with a linear fit and R^2. Writes
+figures/relationship_plots/14_memutil_vs_temp.png plus a PLOT_SCHEMA sidecar.
 """
 from __future__ import annotations
 
@@ -49,7 +26,7 @@ OUT_SCHEMA = OUT_DIR / "14_memutil_vs_temp.schema.json"
 KB = 1024.0
 PAGE_KB = 4.0   # one VM page == 4 KB on the test device
 
-# Policy family -> color (kept in sync with host_plot_cache_temp_scatter.py)
+# Policy family colors, kept in sync with host_plot_cache_temp_scatter.py
 POLICY_COLOR = {
     "vanilla":          "#d62728",   # red
     "llamacpp_stock":   "#7f7f7f",   # grey
@@ -90,18 +67,15 @@ def policy_family(cell_name: str) -> str:
 
 
 def max_cpu_temp_c(sensors: pd.DataFrame) -> float:
-    """Peak SoC temperature in degrees C, computed as the maximum over all
-    CPU thermal zones present in the sensors dataframe.
-
-    Excludes hardware-trip pseudo-zones (cpu-hw-trip-*) per
-    host_master_table_4policy.py."""
+    """Peak SoC temperature (C): max over CPU thermal zones, excluding cpu-hw-trip-*
+    as in host_master_table_4policy.py."""
     cpu_cols = [c for c in sensors.columns
                 if c.startswith("cpu") and c.endswith("_temp_mc")
                 and "hw-trip" not in c]
     if not cpu_cols:
         return float("nan")
     block = sensors[cpu_cols].apply(pd.to_numeric, errors="coerce")
-    # Per-row max -> overall max. Ignore zero/None readings.
+    # Per-row max, then overall max. Zero/None readings are ignored.
     block = block.where(block > 0)
     if block.dropna(how="all").empty:
         return float("nan")
@@ -109,8 +83,7 @@ def max_cpu_temp_c(sensors: pd.DataFrame) -> float:
 
 
 def collect_cells() -> pd.DataFrame:
-    """Walk phone-logs/* and return one row per cell with the four metrics
-    needed by the plot."""
+    """Walk phone-logs/* and return one row per cell with the plotted metrics."""
     rows: list[dict] = []
     for stress_csv in PHONE_LOGS.rglob("stress.csv"):
         cell_dir = stress_csv.parent
@@ -126,7 +99,7 @@ def collect_cells() -> pd.DataFrame:
         if stress.empty or sensors.empty:
             continue
 
-        # peak RSS in GB --------------------------------------------------
+        # peak RSS in GB
         if "peak_rss_kb" not in stress.columns:
             continue
         peak_rss_kb = float(np.nan_to_num(stress["peak_rss_kb"].max(),
@@ -135,7 +108,7 @@ def collect_cells() -> pd.DataFrame:
             continue
         rss_gb = peak_rss_kb / KB / KB
 
-        # swap_MB ---------------------------------------------------------
+        # swap_MB
         swap_mb = 0.0
         if "vmstat_pswpout" in sensors.columns:
             ps = pd.to_numeric(sensors["vmstat_pswpout"],
@@ -143,10 +116,10 @@ def collect_cells() -> pd.DataFrame:
             if len(ps) >= 2:
                 swap_mb = max(0.0, float(ps.max() - ps.min())) * PAGE_KB / KB
 
-        # SoC temperature (peak across CPU thermal zones) ----------------
+        # SoC temperature (peak across CPU thermal zones)
         soc_c = max_cpu_temp_c(sensors)
 
-        # DDR temperature -------------------------------------------------
+        # DDR temperature
         ddr_c = float("nan")
         if "ddr_temp_mc" in sensors.columns:
             d = pd.to_numeric(sensors["ddr_temp_mc"],
@@ -173,8 +146,7 @@ def collect_cells() -> pd.DataFrame:
 
 
 def dedupe(df: pd.DataFrame) -> pd.DataFrame:
-    """One row per (wave, cell) -- when the same exact directory shows up
-    twice (rare nested copies), keep the heavier run."""
+    """One row per (wave, cell). For nested duplicate copies, keep the heavier run."""
     if df.empty:
         return df
     df = df.sort_values("rss_gb", ascending=False).drop_duplicates(
@@ -183,10 +155,8 @@ def dedupe(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def fit_line(x: np.ndarray, y: np.ndarray):
-    """Return (slope, intercept, r2) for y ~ slope*x + intercept.
-
-    r2 is the squared Pearson correlation. NaN if fewer than 2 points or
-    if x has no variance."""
+    """Return (slope, intercept, r2) for y ~ slope*x + intercept, r2 = Pearson r^2.
+    NaN if fewer than 2 points or x has no variance."""
     if len(x) < 2 or np.ptp(x) <= 0:
         return float("nan"), float("nan"), float("nan")
     slope, intercept = np.polyfit(x, y, 1)
@@ -222,13 +192,10 @@ def draw_panel(ax, df: pd.DataFrame, x_col: str, y_col: str,
         ax.plot(xfit, yfit, color="black", lw=1.6, ls="--",
                 label=f"fit: y={intercept:.2f}+{slope:.3f}x  R^2={r2:.3f}")
 
-    # Outlier annotations -- the two extreme-swap cells called out by the
-    # caller (Wave-7's 1552 MB run and Wave-3's 515 MB run). Annotated on
-    # the swap panels only.
+    # Label the two extreme-swap cells (swap panels only).
     annotated: list[dict] = []
     if annotate_outliers:
-        # Match by wave-prefix AND a target swap_mb (with a 50-MB tolerance
-        # so re-runs of the same cell are still picked up correctly).
+        # Match by wave prefix and target swap_mb within 50 MB.
         targets = [
             ("wave7", 1552.0, "Wave-7  v1_fa2  (1552 MB swap)"),
             ("wave3", 515.0,  "Wave-3  v1_fa_K512  (515 MB swap)"),
@@ -323,8 +290,7 @@ def main() -> int:
         # drop the per-panel fit lines from the global legend
         if l.startswith("fit:"):
             continue
-        # collapse the "(n=...)" trailing counts so the global legend isn't
-        # tied to one panel's counts (they're identical anyway after dedup).
+        # strip the "(n=...)" counts from the shared legend
         base = l.split(" (n=")[0]
         if base in seen_labels:
             continue
@@ -370,7 +336,7 @@ def main() -> int:
     OUT_SCHEMA.write_text(json.dumps(schema, indent=2))
     print(f"[plot] wrote {OUT_SCHEMA}", file=sys.stderr)
 
-    # Print PLOT_SCHEMA to stdout (per task instruction)
+    # Print PLOT_SCHEMA to stdout
     print("PLOT_SCHEMA")
     print(json.dumps(schema, indent=2))
     return 0

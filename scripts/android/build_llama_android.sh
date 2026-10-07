@@ -1,13 +1,7 @@
 #!/usr/bin/env bash
-# build_llama_android.sh — cross-compile llama.cpp tools for aarch64 Android.
-#
-# Produces in $LLAMA_BUILD/bin/:
-#   llama-cli        — generation + interactive
-#   llama-perplexity — perplexity over a corpus (WikiText etc.)
-#   llama-bench      — pure latency benchmark
-#   libllama.so + libggml*.so
-#
-# Used by the phone deployment for VANILLA llama.cpp baseline measurements.
+# Cross-compile llama-cli, llama-perplexity and llama-bench (plus libllama and
+# libggml) for aarch64 Android into $LLAMA_BUILD/bin/. Used for the vanilla
+# llama.cpp baseline on the phone.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,7 +20,7 @@ echo "[build] NDK:       $ANDROID_NDK"
 echo "[build] target:    $LLAMA_BUILD"
 echo "[build] (clean reconfigure to fix stale Windows cache)"
 
-# Nuke stale Windows-pathed cache
+# Remove a stale CMake cache with Windows paths
 rm -rf "$LLAMA_BUILD/CMakeCache.txt" "$LLAMA_BUILD/CMakeFiles"
 
 mkdir -p "$LLAMA_BUILD"

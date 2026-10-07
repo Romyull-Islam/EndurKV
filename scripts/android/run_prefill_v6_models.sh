@@ -1,31 +1,17 @@
 #!/bin/bash
-# ============================================================================
-# run_prefill_v6_models.sh -- close the prefill-vs-vanilla gap for the two models
-# that have no pair at all: Bonsai-8B and gemma-2. (2026-08-29)
-#
-# Llama-3.2-1B and Phi-3-mini-128k already have 35 archival pairs (medians +1.9%
-# to +2.7%) plus v5's pinned-clock +0.7%. Bonsai-8B and gemma-2 have none, so the
-# per-model prefill claim cannot currently be made for them.
-#
-# Method is v5's, which is the only one that worked: pin the CPU clock with
-# pin_dvfs.sh (performance governor at a fixed scaling_max_freq) instead of trying
-# to control temperature. v1-v4 all chased temperature and failed, because the CPU
-# sheds shallow heat within ~1 s of load stopping; temperature was only ever a
-# proxy for the clock. At a pinned clock v5 got vanilla 227.0 / muKV 228.5 /
-# sllm 227.4 s with SD 1-3 s.
-#
-# IMPORTANT -- gemma-2's trained window is 8192 tokens (gemma2.context_length),
-# so it gets a truncated ~5.8K prompt. The 9737-token WikiText prompt used
-# everywhere else is 1.2x outside that window; running it there is what made all
-# five gemma cells of the compaction campaign unusable.
-# ============================================================================
+# Prefill time, muKV vs vanilla, for Bonsai-8B and gemma-2 on the phone CPU,
+# 3 alternating repeats. The CPU clock is pinned with pin_dvfs.sh rather than
+# controlling temperature, since the CPU sheds shallow heat within about 1 s and
+# temperature is only a proxy for the clock.
+# gemma-2's trained window is 8192 tokens, so it gets a truncated ~5.8K prompt
+# instead of the 9737-token prompt used elsewhere.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 LOG(){ echo "[$(date +%H:%M:%S)] $*"; }
 
 exec 9>/tmp/.endurkv_queue.lock; flock 9
 DEV=/data/local/tmp/pf6; HOST=/tmp/prefill_v6; PIN_KHZ=1632000
-SCRATCH=/tmp/claude-1001/-home-mislam22-EndurKV-workspace/1d283ef2-8bcb-4a99-8b56-fd8d8af9f80d/scratchpad
+SCRATCH="${SCRATCH:-$(cd "$(dirname "$0")/../.." && pwd)/eval_corpora}"
 CB=/data/local/tmp/endurkv/bin_cpu_kd
 MODELS=/data/local/tmp/endurkv/models
 mkdir -p $HOST

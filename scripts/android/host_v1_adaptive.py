@@ -1,24 +1,8 @@
 #!/usr/bin/env python3
-"""v1-adaptive: layer-aware blend between v1 (sharp regime) and TOVA (diffuse regime).
-
-Mechanism:
-  1. Compute per-LAYER attention sharpness:  L_sharp = mean over heads of max_a[h]
-  2. Blend factor:  b = clip( (L_sharp − tau_low) / (tau_high − tau_low) , 0, 1 )
-       b = 1  → full v1 behavior  (high layer sharpness)
-       b = 0  → TOVA behavior     (low layer sharpness, e.g., reasoning)
-  3. Effective α/β interpolated between TOVA (1.0, 1.0) and v1 (1.3, 0.6):
-       α_eff = 1.0 + 0.3·b
-       β_eff = 1.0 − 0.4·b
-  4. Per-head multiplier (within layer):
-       μ[h] = α_eff − (α_eff − β_eff) · clip((max_a[h] − 0.4)/0.4, 0, 1)
-       K_h  = round(K_nominal · μ[h])
-  5. Selection: top-K_h by current attention (same as TOVA / v1)
-
-Defaults (chosen by inspection of layer-sharpness distributions in our captures):
-  tau_low  = 0.30   below → reasoning regime  (TOVA)
-  tau_high = 0.50   above → retrieval regime   (full v1)
-
-Then runs on all 168 cells from unified_all_models_results.csv and merges.
+"""v1-adaptive: per-layer blend between v1 (sharp attention) and TOVA (diffuse attention).
+b = clip((mean over heads of max_a - TAU_LOW) / (TAU_HIGH - TAU_LOW), 0, 1) moves alpha/beta
+from TOVA (1.0, 1.0) to v1 (1.3, 0.6). Per-head budget K_h = round(K * mu[h]), then top-K_h
+by attention. Runs on the cells in unified_all_models_results.csv and merges the results.
 """
 import sys, time
 from multiprocessing import Pool, set_start_method
@@ -30,9 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from host_simulate_kv_baselines import load_attn_perhead
 
 
-# ---------------------------------------------------------------------------
 # v1-adaptive policy
-# ---------------------------------------------------------------------------
 TAU_LOW = 0.30
 TAU_HIGH = 0.50
 ALPHA_V1 = 1.3
@@ -50,8 +32,8 @@ def policy_v1_adaptive(attn_ph, K, **kw):
     denom = max(TAU_HIGH - TAU_LOW, 1e-6)
     b = max(0.0, min(1.0, (L_sharp - TAU_LOW) / denom))
     # 3. Effective α/β
-    alpha_eff = 1.0 + (ALPHA_V1 - 1.0) * b      # 1.0 → 1.3
-    beta_eff  = 1.0 - (1.0 - BETA_V1) * b       # 1.0 → 0.6
+    alpha_eff = 1.0 + (ALPHA_V1 - 1.0) * b      # 1.0 to 1.3
+    beta_eff  = 1.0 - (1.0 - BETA_V1) * b       # 1.0 to 0.6
     # 4. Per-head budget
     m = np.zeros((nh, nk), dtype=bool)
     for h in range(nh):
@@ -64,9 +46,7 @@ def policy_v1_adaptive(attn_ph, K, **kw):
     return m
 
 
-# ---------------------------------------------------------------------------
 # Reuse the simulator from the comprehensive eval
-# ---------------------------------------------------------------------------
 def kl(p, q, eps=1e-12):
     pf = np.clip(p.astype(np.float32, copy=False), eps, 1.0)
     pe = np.clip(q.astype(np.float32, copy=False), eps, 1.0)
@@ -99,9 +79,7 @@ def simulate_v1_adaptive(attn_ph, n_kv_at, K_nominal):
     return out_kl.mean(axis=1), out_K.mean(axis=1), out_mass.mean(axis=1)
 
 
-# ---------------------------------------------------------------------------
 # All capture cells from the unified dataset
-# ---------------------------------------------------------------------------
 LOGS = Path("/home/mislam22/EndurKV_workspace/logs")
 LONG_K = [512, 1024]
 MED_K = [256, 512]
@@ -179,7 +157,7 @@ LLAMA_K = {
     "llama8b_short": SHORT_K, "llama8b_long": MED_K,
 }
 
-# Build the full task list — same shape as unified data
+# Build the full task list - same shape as unified data
 def all_cells():
     out = []
     for model, dataset, d, prompts, K_budgets in CELLS:
@@ -269,7 +247,7 @@ def main():
     common = ['model','dataset','prompt_id','K_nominal','policy','n_kv',
               'actual_K','kl_mean','kl_min','kl_max','mass_pct',
               'pct_vs_v1','pct_vs_tova','cache_ratio_vs_tova']
-    # df_new doesn't have kl_std — fill 0
+    # df_new doesn't have kl_std - fill 0
     df_new['kl_std'] = 0.0
     if 'kl_std' in unified.columns:
         common2 = common + (['kl_std'] if 'kl_std' in unified.columns else [])

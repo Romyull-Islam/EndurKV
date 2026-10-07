@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Phase 0 environment probe for EndurKV.
 # Run from the EndurKV root:  bash scripts/00_env_check.sh
-# Then paste the entire output back to Claude.
 
 set +e
 sep() { printf '\n=== %s ===\n' "$1"; }
@@ -74,4 +73,3 @@ else
 fi
 
 sep "Done"
-echo "Paste this entire output back to Claude (everything from the first '=== System ===' to here)."

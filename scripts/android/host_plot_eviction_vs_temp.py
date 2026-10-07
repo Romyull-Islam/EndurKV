@@ -1,42 +1,8 @@
 #!/usr/bin/env python3
-"""
-Eviction events visibly reduce DDR temperature  (15_eviction_rate_vs_temp.png)
-================================================================================
+"""Eviction rate vs DDR temperature over time (15_eviction_rate_vs_temp.png).
 
-Cause -> effect on the timeline:
-  - eviction-driving policies (v1, h2o, tova, v1_fa2_stack) trigger token
-    drops during decode.  Each drop avoids a load/store of those KV tiles
-    on the very next attention step, removing DDR traffic.  We expect
-    the DDR temperature trace to *cool* (or stop rising) shortly after
-    each eviction burst.
-
-For every cell with eviction we have:
-  * stress.csv               -- per-iter scalar "evicted"
-                                (cumulative tokens dropped, decode-only).
-  * iter*/meta.json          -- canonical "evicted_total_decode" per iter
-                                (preferred -- stress.csv's per-iter value
-                                 sometimes only updates at the *first* iter
-                                 when the run is restarted between chunks).
-  * sensors.csv              -- per-sample wall_clock_s + ddr_temp_mc
-                                (millidegree C).
-
-Streaming-LLM was on the wave-11 plan but the run was *interrupted* after the
-h2o cell -- so there is no on-device sensors.csv for it.  We still draw it in
-the legend as "(not measured on-device; sim-only baseline)" for completeness.
-
-Figure: 3 rows, shared x-axis = wall_time_s_since_cell_start (seconds).
-  Top    -- cumulative evictions vs wall_time (one line per policy)
-  Middle -- per-iter eviction RATE (delta tokens / delta wall_time) [tokens/s]
-  Bottom -- DDR temperature (deg C) vs wall_time
-
-Annotation: at each iter boundary with a positive eviction delta we draw a
-vertical band at the corresponding wall-time, and mark the DDR temperature
-*drop* in the next 30 s.  Where the drop magnitude is >= DROP_THRESHOLD_C we
-flag it with a "drop = Xdeg" callout.
-
-Output:
-  /home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/15_eviction_rate_vs_temp.png
-  /home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/15_eviction_rate_vs_temp.schema.json
+Panels: cumulative evictions, per-iter eviction rate, DDR temperature. StreamingLLM
+has no on-device run and appears in the legend only. Output: figures/relationship_plots/.
 """
 
 from __future__ import annotations
@@ -54,7 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-# ----------------------------- configuration ----------------------------------
+# configuration
 
 OUT_PATH = Path(
     "/home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/"
@@ -62,9 +28,8 @@ OUT_PATH = Path(
 )
 SCHEMA_PATH = OUT_PATH.with_suffix(".schema.json")
 
-# Each entry maps a policy label to one phone-run cell directory that
-# contains BOTH stress.csv AND sensors.csv (and per-iter meta.json).
-# These are the richest on-device runs we have for each eviction policy.
+# One phone-run cell dir per policy, with stress.csv, sensors.csv and
+# per-iter meta.json.
 POLICIES = [
     {
         "policy":  "v1",
@@ -112,7 +77,7 @@ POST_EVICT_WINDOW_S = 45.0
 PRE_EVICT_WINDOW_S = 5.0
 
 
-# ----------------------------- helpers ----------------------------------------
+# helpers
 
 def _to_float(x: str) -> float:
     try:
@@ -144,11 +109,8 @@ def load_sensors(cell_dir: Path):
 
 
 def load_stress(cell_dir: Path):
-    """Return list of {iter, t_elapsed_s, evicted_csv} from stress.csv.
-
-    Some cells use the column name `chunk_idx` instead of `iter`.  Both are
-    integer sequence indices for the on-device perplexity / decode chunk.
-    """
+    """Return [{iter, t_elapsed_s, evicted_csv}] from stress.csv.
+    The index column is `iter` or `chunk_idx`."""
     p = cell_dir / "stress.csv"
     if not p.exists():
         return []
@@ -170,11 +132,8 @@ def load_stress(cell_dir: Path):
 
 
 def load_meta_per_iter(cell_dir: Path):
-    """Return dict iter_idx -> evicted_total_decode harvested from meta.json.
-
-    iter dirs are named e.g. iter0001, iter0002, .. (1-indexed in wave3/9/11)
-    OR iter0000, iter0001, .. (0-indexed in wave11).  We accept both.
-    """
+    """Return {iter_idx: evicted_total_decode} from iter*/meta.json.
+    Accepts both 0-indexed and 1-indexed iter dirs."""
     out = {}
     for sub in sorted(cell_dir.glob("iter*")):
         meta = sub / "meta.json"
@@ -202,20 +161,8 @@ def load_meta_per_iter(cell_dir: Path):
 
 
 def build_eviction_series(stress_rows, meta_by_iter):
-    """Return arrays (t_iter_s, cumulative_evictions, delta_evictions).
-
-    - t_iter_s[k] is the wall-clock-since-start time at which iter k
-      *finishes* (best estimate: use stress.csv's t_elapsed_s for the
-      NEXT iter; for the last iter we extrapolate by the median iter span).
-    - cumulative_evictions[k] = sum of per-iter eviction counts up to and
-      including iter k.
-    - delta_evictions[k] = the per-iter eviction count (rate is delta / dt).
-
-    Per-iter eviction COUNT is taken in priority order:
-      1. meta.json's evicted_total_decode (canonical, paper-grade)
-      2. stress.csv's evicted delta vs previous iter   (fallback)
-      3. stress.csv's evicted ABSOLUTE on first iter   (fallback)
-    """
+    """Return (iter end times, cumulative evictions, per-iter evictions).
+    Counts come from meta.json evicted_total_decode, falling back to stress.csv."""
     if not stress_rows:
         return np.array([]), np.array([]), np.array([])
 
@@ -239,18 +186,14 @@ def build_eviction_series(stress_rows, meta_by_iter):
         if ev_meta is not None and ev_meta > 0:
             per_iter_evicted.append(ev_meta)
         elif not math.isnan(ev_csv):
-            # CSV "evicted" is a per-chunk decode total in wave11 (already
-            # the per-iter count), but in wave3 it is the cumulative total
-            # carried over from the previous iter.  Heuristic: if the value
-            # ever DECREASES below the previous, treat it as per-iter;
-            # otherwise treat it as cumulative-decode.
+            # stress.csv "evicted" is per-iter in wave11 but cumulative in
+            # wave3. A decrease means per-iter, otherwise take the delta.
             per_iter_evicted.append(max(0.0, ev_csv - prev_csv) if ev_csv >= prev_csv else ev_csv)
             prev_csv = ev_csv
         else:
             per_iter_evicted.append(0.0)
 
-    # iter end times: t[k] -> finish time approximated as start time of iter
-    # k+1; for the last iter we add the median span.
+    # Iter k ends when iter k+1 starts. The last iter gets the median span.
     starts = np.array([r["t_elapsed_s"] for r in stress_rows], dtype=float)
     if len(starts) >= 2:
         spans = np.diff(starts)
@@ -274,7 +217,7 @@ def per_iter_rate(t_iter_s, delta_evict, starts):
     return delta_evict / durations
 
 
-# ----------------------------- compute ----------------------------------------
+# compute
 
 per_policy = []
 for cfg in POLICIES:
@@ -347,7 +290,7 @@ for cfg in POLICIES:
     per_policy.append(rec)
 
 
-# ----------------------------- plot -------------------------------------------
+# plot
 
 fig, axes = plt.subplots(
     nrows=3, ncols=1, figsize=(13.2, 11.0), sharex=False,
@@ -355,9 +298,8 @@ fig, axes = plt.subplots(
 )
 ax_cum, ax_rate, ax_ddr = axes
 
-# x-axis: stack cells side-by-side along a common "wall_time_s_since_cell_start"
-# axis.  Because each cell ran on a separate boot, we DO NOT try to merge their
-# absolute clocks; instead we re-zero each cell at its own t=0 and overlay.
+# Each cell ran on a separate boot, so each is re-zeroed at its own t=0 and
+# the traces are overlaid.
 for rec in per_policy:
     if not rec["has_data"]:
         # streamingllm: draw a legend-only proxy line so it appears in the key
@@ -387,8 +329,7 @@ for rec in per_policy:
                 edgecolor=rec["color"], linewidth=0.8,
                 label=rec["label"])
 
-    # DDR temp
-    # downsample for plotting if very long
+    # DDR temp, downsampled if very long
     if len(t_sens) > 6000:
         idx = np.linspace(0, len(t_sens) - 1, 6000).astype(int)
         t_sens_p, ddr_p = t_sens[idx], ddr[idx]
@@ -489,7 +430,7 @@ OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 fig.savefig(OUT_PATH, dpi=150)
 plt.close(fig)
 
-# ----------------------------- schema -----------------------------------------
+# schema
 
 schema = {
     "kind": "PLOT_SCHEMA",

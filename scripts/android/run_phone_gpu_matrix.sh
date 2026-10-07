@@ -1,11 +1,9 @@
 #!/bin/bash
-# Phone GPU (Adreno 840) matrix: 4 models x 3 policies on the SAME workload the RTX
-# runs (12K wikitext prompt, 256-token decode, ctx 16384), so the two devices are
-# directly comparable. Compaction is forced ON for muKV: measured 2.28x on Adreno,
-# which contradicts the old "round-trip is prohibitive" assumption the default was
-# built on. meta.json now records compaction_applied, so a silent fallback is visible.
-# Records prefill / decode / wall separately -- the speedup is a DECODE effect and
-# wall includes prefill, which eviction does not shrink.
+# run_phone_gpu_matrix.sh: phone GPU (Adreno 840), 4 models x 3 policies on the same
+# workload as the RTX runs (12K wikitext prompt, 256-token decode, ctx 16384).
+# Compaction is forced on for muKV, and meta.json records compaction_applied so a silent
+# fallback is visible. Prefill, decode and wall time are kept separate because eviction
+# speeds up decode, not prefill.
 set -u
 for _p in ${ADB_PORTS:-5152 5037 5151}; do
   (exec 3<>/dev/tcp/127.0.0.1/$_p) 2>/dev/null || continue

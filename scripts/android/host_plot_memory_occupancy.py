@@ -1,16 +1,7 @@
 #!/usr/bin/env python3
-"""Per-model per-benchmark KV memory occupancy figure.
-
-Reads the unified long-context CSV (concatenation of pareto_summary.csv from
-each model's longctx sim) and produces:
-
-  fig1_memory_full_vs_evicted.png — grouped bar chart: full cache vs evicted
-                                    cache, by model. Annotates attn-mass retained.
-  fig2_memory_pareto.png          — scatter: KV memory after eviction (x) vs
-                                    attention mass retained (y), per (model, K)
-                                    point. Connects same-model points to show
-                                    each architecture's eviction Pareto curve.
-"""
+"""KV memory occupancy figures from the unified long-context CSV (each model's pareto_summary.csv).
+fig1_memory_full_vs_evicted.png: full vs evicted cache per model, with attention mass retained.
+fig2_memory_pareto.png: KV memory after eviction vs attention mass retained, one curve per model."""
 import sys
 from pathlib import Path
 
@@ -41,18 +32,8 @@ MODEL_ORDER = ["phi3", "mistral", "r1distill", "gemma2", "qwen2"]
 def plot_full_vs_evicted(df: pd.DataFrame, out_path: Path,
                          policy: str = "perhead_v1",
                          budgets=(256, 512, 1024, 2048)):
-    """Grouped bars: full vs evicted memory per model, per K budget.
-
-    Color scheme:
-      - Dark gray bar: full cache (no eviction)
-      - 4 graduated blue shades for K=256, 512, 1024, 2048
-        (light blue = smallest budget / most aggressive eviction;
-         darkest blue = largest budget / mildest eviction)
-      - Annotations: MB on top, % attention mass retained on bottom
-
-    Legend explicitly enumerates each K budget so the reader knows which
-    bar belongs to which budget without guessing.
-    """
+    """Grouped bars per model: full cache (gray) and evicted memory per K budget (blues, light =
+    small K), labelled with MB on top and % attention mass retained below."""
     df = df[df["policy"] == policy].copy()
     fig, ax = plt.subplots(figsize=(13, 6.5), dpi=130)
 
@@ -61,7 +42,7 @@ def plot_full_vs_evicted(df: pd.DataFrame, out_path: Path,
     bar_w = 0.13
     xs = np.arange(n_models)
 
-    # Solid color per K budget — graduated blues. Light = small budget.
+    # Solid color per K budget - graduated blues. Light = small budget.
     budget_colors = plt.cm.Blues(np.linspace(0.35, 0.85, len(budgets)))
 
     # Group 0: full cache
@@ -173,8 +154,8 @@ def plot_memory_pareto(df: pd.DataFrame, out_path: Path):
 
 def plot_kl_winrate_long_ctx(df: pd.DataFrame, out_path: Path,
                               K_compare: int = 1024):
-    """Mean KL comparison at fixed budget K — perhead_v1 vs TOVA vs KVzip
-    across the 5 long-context models. Lower KL = closer to full attention."""
+    """Mean KL at fixed K for perhead_v1, TOVA and KVzip across the 5 long-context models.
+    Lower KL is closer to full attention."""
     fig, ax = plt.subplots(figsize=(12, 6.5), dpi=130)
     bar_w = 0.27
     xs = np.arange(len(MODEL_ORDER))

@@ -1,10 +1,10 @@
 #!/bin/bash
-# run_gpu_watchdog_test.sh -- does a GPU ladder that steps before the vendor limiter beat the
-# limiter on the request that trips it? (2026-09-07)
-#   wd_off : muKV, GPU 1200 MHz uncapped, 4096 tokens; the vendor limiter handles the heat
-#   wd_on  : same, with gpu_watchdog.sh stepping 1050 / 967 / 902 at DDR 60 / 62 / 63.5 C
+# run_gpu_watchdog_test.sh: compares a GPU clock ladder that steps before the vendor limiter
+# with the limiter alone, on a request long enough to trip it.
+#   wd_off  muKV, GPU 1200 MHz, 4096 tokens, the vendor limiter handles the heat
+#   wd_on   same, with gpu_watchdog.sh stepping 1050 / 967 / 902 MHz at DDR 60 / 62 / 63.5 C
 # n=3 per arm, interleaved, cooled (DDR <= 35 C, battery <= 33 C), charging off, CPU caps pinned,
-# bench pinned to the big cores. Each request launched detached on the phone and polled.
+# bench pinned to the big cores. Each request runs detached on the phone and is polled.
 set -u
 export ANDROID_SERIAL=${ANDROID_SERIAL:-3C15B8003ZA00000}
 export ADB_CALL_TIMEOUT=1500

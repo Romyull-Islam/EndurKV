@@ -1,31 +1,11 @@
 #!/bin/bash
-# ============================================================================
-# run_phi3_cpu_complete.sh -- Phi-3 phone-CPU table, CURRENT build, PUBLISHED
-# configs. (2026-08-25)
-#
-# WHY. The existing Phi-3 CPU table (phone_7k_strict, 2026-07-05) is unusable
-# twice over:
-#   1. BUILD. It predates 2026-07-17, when the Android builds gained
-#      dotprod/i8mm (armv8.7-a). Its tok/s and mWh are not comparable with any
-#      current cell.
-#   2. CONFIG. Every policy ran at a UNIFORM k_nominal=1024, n_sink=4 -- not the
-#      setting each paper publishes. Verified from its own meta.json.
-# This re-runs the same 7K prompt + 2048 decode so it supersedes that table
-# directly, on bin_cpu_kd, with every baseline at ITS OWN published config --
-# the same discipline the Llama-1B table uses.
-#
-# CONFIGS (as published): SnapKV window 32 / pool 7; Ada-KV 2048; TOVA 2048;
-# H2O 20%-of-N (7542 tok -> 1508); StreamingLLM start 4 + recent 2000 = 2004;
-# KeyDiff 2048 (its smallest published budget) with block-wise decode eviction
-# B=128 and gather-compaction, which is intrinsic to KeyDiff, not a gift.
-#
-# muKV uses --compact-inplace: the state-API round-trip needs a second full
-# cache and is OS-killed for Phi-3 at this size.
-#
-# GENERATIONS KEPT (--out-gen) so every cell is <unk>-gradeable, and BATTERY
-# VOLTAGE recorded per cell: the cool gate fixes temperature but not electrical
-# state, and a 4.45 V vs 3.79 V difference is invisible in the thermal log.
-# ============================================================================
+# run_phi3_cpu_complete.sh: Phi-3 phone-CPU table on bin_cpu_kd (armv8.7-a, dotprod/i8mm),
+# each baseline at its published config. 7K prompt + 2048 decode.
+# Configs: SnapKV window 32 / pool 7, Ada-KV 2048, TOVA 2048, H2O 20% of N (1508),
+# StreamingLLM 4 + 2000, KeyDiff 2048 with block-wise decode eviction (B=128).
+# muKV uses --compact-inplace because the state-API round trip needs a second full
+# cache and is killed by the OS for Phi-3 at this size.
+# Battery voltage is logged per cell, since the cool gate fixes temperature only.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 LOG(){ echo "[$(date +%H:%M:%S)] $*"; }

@@ -1,14 +1,8 @@
 #!/system/bin/sh
-# 2026-07-21 — matched Llama-1B GPU comparison.
-#
-# vanilla: clean llama.cpp snapshot e03fdcf / llama-completion, with its normal
-#          Vulkan defaults. No μKV code or policy flags are present.
-# mukv:    current EndurKV eviction_bench with μKV mass + Solution 2 FA-on.
-#
-# The phone's GPU governor and charging state are deliberately NOT changed.
-# Both cells wait for the same cool gate, use the same model/prompt/context,
-# batch sizes, threads, GPU offload, seed, and 4096-token decode length.
-# GPU-side defrag is unavailable by design; record that rather than implying it.
+# Matched Llama-1B GPU comparison: stock llama.cpp e03fdcf llama-completion with its
+# Vulkan defaults vs μKV (FA-on eviction) in eviction_bench. Both cells wait for the
+# same cool gate and use the same model, prompt, context, batch sizes, threads, GPU
+# offload, seed and 4096-token decode. GPU governor and charging are left unchanged.
 
 set -u
 OUT=${1:?output directory required}
@@ -40,8 +34,8 @@ run_cell() {
   cool | tee "$D/cold_gate.txt"
   sh "$WORK/scripts/sample_sensors.sh" --out "$D/sensors.csv" --hz 5 >/dev/null 2>&1 & SPID=$!
   sleep 1
-  # Android mksh arithmetic is 32-bit on this phone; nanosecond epoch values
-  # overflow. Whole seconds are sufficient for the auxiliary wall clock.
+  # mksh arithmetic is 32-bit on this phone, so nanosecond epochs overflow.
+  # Whole seconds are enough for this wall clock.
   T0=$(date +%s)
   "$@" > "$D/stdout.log" 2> "$D/stderr.log"
   RC=$?
@@ -52,16 +46,14 @@ run_cell() {
   date -Iseconds > "$D/finished_at.txt"
 }
 
-# No clock cap, watchdog, charging toggle, or Flash-Attention override: normal
-# llama.cpp CLI settings, except matched workload and resource parameters.
+# Stock CLI settings: no clock cap, watchdog, charging toggle or flash-attention override.
 mkdir -p "$OUT/vanilla_stock"
 sha256sum "$STOCK/llama-completion" "$STOCK/libllama.so" "$STOCK/libggml-vulkan.so" > "$OUT/vanilla_stock/binary_and_libs.sha256"
 run_cell vanilla_stock env LD_LIBRARY_PATH="$STOCK" "$STOCK/llama-completion" \
   -m "$MODEL" -f "$OUT/prompt.txt" -n 4096 -c 16384 -b 512 -ub 64 \
   -t 4 -tb 4 -ngl 99 --temp 0 --seed 42 --no-warmup --no-display-prompt -no-cnv
 
-# μKV mass + Solution 2. GPU defrag is intentionally unavailable (the runner's
-# n_gpu_layers=99 causes the CPU-only defrag guard to skip it).
+# No defrag here: with n_gpu_layers=99 the CPU-only defrag guard skips it.
 mkdir -p "$OUT/mukv_mass_sol2_gpu_no_defrag"
 sha256sum "$MUKV_BIN" "$MUKV_LIB/libllama.so" "$MUKV_LIB/libggml-vulkan.so" > "$OUT/mukv_mass_sol2_gpu_no_defrag/binary_and_libs.sha256"
 run_cell mukv_mass_sol2_gpu_no_defrag env LD_LIBRARY_PATH="$MUKV_LIB" "$MUKV_BIN" \

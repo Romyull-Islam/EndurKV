@@ -1,26 +1,13 @@
 #!/bin/bash
-# ============================================================================
-# run_sched_proof.sh -- does the adaptive scheduler save energy when the battery is low,
-# and give full performance when it is not? (2026-09-03)
-#
-# The scheduler (ukv_sched.sh, on the phone) reads the battery and the request, picks a
-# plan from its measured cost table, runs it, measures the request's energy and updates
-# the table. Here every arm sends the SAME prompt through the scheduler; only the battery
-# state it is told differs (forced, since the phone sits at 100%). One arm is the control:
-# the scheduler told it is on mains, which is the full-performance plan and equals "no
-# adaptation" (GPU 1200 MHz, K=1024, 4096 tokens).
-#     control        mains          -> gpu 1200, K 1024, 4096 tokens
-#     sched_healthy  SoC 80         -> expected gpu 1200, 4096 tokens (full performance)
-#     sched_mid      SoC 40         -> expected gpu 902, cap 1024 tokens
-#     sched_low      SoC 15         -> expected gpu 902 or 726, cap 512 tokens
-#     sched_low_nocap SoC 15, caller fixes 4096 tokens -> the clock saving alone, equal output
-# --ignore-eos in every arm so the decoded length is exactly the cap and energy per token
-# and per request are both comparable. n=2 per arm, interleaved.
-#
-# Matched conditions as in run_energy_aware_proof_v2.sh: CPU caps pinned (1497.6 / 1785.6
-# MHz, min = max), cool gate DDR <= 35 C and battery <= 33 C, charging off during cells,
-# scheduler pins the bench to the big cores at high priority and writes the GPU clock.
-# ============================================================================
+# run_sched_proof.sh: the same prompt through the scheduler (ukv_sched.sh) at forced
+# battery states, against a mains control that gets the full-performance plan.
+#   control          mains   gpu 1200, K 1024, 4096 tokens
+#   sched_healthy    SoC 80  expected gpu 1200, 4096 tokens
+#   sched_mid        SoC 40  expected gpu 902, cap 1024 tokens
+#   sched_low        SoC 15  expected gpu 902 or 726, cap 512 tokens
+#   sched_low_nocap  SoC 15 with 4096 tokens fixed, the clock saving alone
+# --ignore-eos so decoded length equals the cap. n=2 per arm, interleaved. CPU caps
+# pinned (1497.6 / 1785.6 MHz), cool gate DDR <= 35 C and battery <= 33 C, charging off.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 P=/data/local/tmp/endurkv/corpora/prompt_12k.txt
@@ -67,7 +54,7 @@ cell(){ # tag  scheduler-args
 }
 
 for R in 1 2; do
-  echo "=== replicate $R ==="
+  echo "replicate $R"
   cell control_r$R          --force-status charging --max-tokens 4096
   cell sched_healthy_r$R    --force-soc 80 --force-status discharging
   cell sched_mid_r$R        --force-soc 40 --force-status discharging
@@ -77,5 +64,5 @@ done
 adb_safe_pull /data/local/tmp/endurkv/ukv_sched_table.txt $HOST/ukv_sched_table.learned.txt >/dev/null 2>&1
 adb_safe_pull /data/local/tmp/endurkv/ukv_sched_table.seed.txt $HOST/ukv_sched_table.seed.txt >/dev/null 2>&1
 adb_safe_pull /data/local/tmp/endurkv/ukv_sched.log $HOST/ukv_sched.log >/dev/null 2>&1
-echo "=== learned table vs seed ==="; diff $HOST/ukv_sched_table.seed.txt $HOST/ukv_sched_table.learned.txt | grep "^[<>]" | sed 's/^/  /'
+echo "learned table vs seed"; diff $HOST/ukv_sched_table.seed.txt $HOST/ukv_sched_table.learned.txt | grep "^[<>]" | sed 's/^/  /'
 echo SCHEDPROOF_DONE

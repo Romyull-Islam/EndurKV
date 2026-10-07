@@ -1,13 +1,6 @@
 #!/usr/bin/env python3
-"""perhead_v1 architecture — minimalist vertical flow.
-
-Design rules:
-  * Single column, top-to-bottom flow.
-  * Each stage is one row: numbered circle + box on the LEFT, small icon on the RIGHT.
-  * No formulas, no equations, no overlapping text anywhere.
-  * Generous whitespace between rows.
-  * One color per stage (orange / blue / gold / green / red).
-"""
+"""Draw the perhead_v1 architecture figure as a top-to-bottom flow of five stages.
+Each stage is a numbered box on the left with a small icon on the right, one color per stage."""
 import sys
 from pathlib import Path
 
@@ -44,7 +37,7 @@ def main() -> int:
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis("off")
 
-    # ─── Title ───
+    # Title
     ax.text(0.5, 0.965,
             "perhead_v1 (EndurKV-Evict)",
             fontsize=24, weight="bold", ha="center", color="#0f2e57")
@@ -52,7 +45,7 @@ def main() -> int:
             "Per-Head Adaptive KV Cache Eviction — Architecture",
             fontsize=14, ha="center", color="#555")
 
-    # ─── 5 stages ───
+    # 5 stages
     stages = [
         ("1", "Full KV cache in RAM",        "#fff0e8", "#d24a1d"),
         ("2", "Compute per-head attention",  "#e7f1ff", "#1f5fa8"),
@@ -112,11 +105,11 @@ def main() -> int:
             )
             ax.add_patch(arr)
 
-    # ─── Icons (one per stage, right side) ───
+    # Icons, one per stage, right side
     rng = np.random.default_rng(7)
     icon_pad = 0.014
 
-    # Stage 1: full grid (all cells filled — every position stored)
+    # Stage 1: full grid (all cells filled - every position stored)
     y_top, y_bot, y_c = stage_y_centers[0]
     draw_grid(ax, icon_x0, y_bot + icon_pad, icon_w, stage_h - 2 * icon_pad,
               n_rows=8, n_cols=20,
@@ -139,7 +132,7 @@ def main() -> int:
     curve_x1 = icon_x0 + icon_w - 0.010
     curve_y0 = y_bot + icon_pad + 0.012
     curve_y1 = y_top - icon_pad - 0.012
-    # data domain x ∈ [0,1] (max_a), y = 1.3 − 0.6·clip((x−0.4)/0.4, 0, 1)
+    # x in [0,1] is max_a, y = 1.3 - 0.6*clip((x-0.4)/0.4, 0, 1)
     n = 60
     xs = np.linspace(0, 1, n)
     ys = 1.3 - 0.6 * np.clip((xs - 0.4) / 0.4, 0, 1)
@@ -200,7 +193,7 @@ def main() -> int:
     draw_grid(ax, icon_x0, y_bot + icon_pad, icon_w, stage_h - 2 * icon_pad,
               n_rows=8, n_cols=20, color_fn=evict_color)
 
-    # ─── Bottom: 3-step summary bar ───
+    # Bottom: 3-step summary bar
     y_summary = 0.045
     box_h_sum = 0.045
     summary_color = "#0f2e57"

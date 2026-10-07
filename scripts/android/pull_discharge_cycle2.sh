@@ -1,10 +1,8 @@
 #!/bin/bash
-# ============================================================================
 # pull_discharge_cycle2.sh -- collect the second discharge cycle once the phone
 # is back on the cable. Waits for the phone, reports progress, and when the
 # loop has written DONE pulls everything to /tmp/discharge2 and the archive.
 # Safe to run any time: with the loop still running it only prints progress.
-# ============================================================================
 set -u
 export ANDROID_SERIAL=${ANDROID_SERIAL:-3C15B8003ZA00000}
 export ADB_PORTS=${ADB_PORTS:-"5162 5161 5037"} ADB_CALL_TIMEOUT=${ADB_CALL_TIMEOUT:-600}

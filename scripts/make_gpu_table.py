@@ -1,24 +1,9 @@
 #!/usr/bin/env python3
-# ============================================================================
-# make_gpu_table.py -- phone-GPU results table, f16 KV.  (2026-08-05)
-#
-# f16 EVERYWHERE, and that is not a preference. Quantized KV is numerically broken
-# on this Adreno/Vulkan build: with q8_0 the model emits random tokens and
-# teacher-forced NLL exceeds ln(vocab). The first pass of this table ran vanilla
-# and muKV at q8_0 (corrupt) while SnapKV's preset forced f16 (valid), so every
-# ratio divided a good run by a bad one. f16 is both correct and the only format
-# every policy can share -- a per-head evictor needs FA-off, and llama.cpp requires
-# flash-attention for a quantized V.
-#
-# MEDIAN, NOT MEAN, over repeats, with the full range shown. Run 1 of the
-# Llama-1B vanilla and muKV arms is 18-33% faster than runs 2-3 while the
-# no-compaction arm is tight to 1% -- a thermal-state artifact of the first cell
-# after a long cool-down. Dropping run 1 would be cherry-picking; a mean lets it
-# drag the estimate. The median is robust and the range makes the spread visible.
-#
-# Retention is in CELLS, which is invariant to cache format, so it stays comparable
-# with the LongBench and NIAH tables.
-# ============================================================================
+# Phone GPU results table (LaTeX). Usage: make_gpu_table.py [BASE_DIR]  (default /tmp/phone_gpu_16k)
+# Only f16 K/V runs are used: quantized KV gives corrupt output on this Adreno/Vulkan build,
+# and f16 is the only format every policy can share. Speeds are the median over repeats
+# with the range shown, since the first run after a long cool-down can be an outlier.
+# Retention is in KV cells, which does not depend on cache format.
 import json, re, os, sys, statistics as st
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "/tmp/phone_gpu_16k"
@@ -97,10 +82,8 @@ for mt, disp in MODELS:
         g = runs(mt, suf)
         if not g:
             missing.append("%s/%s" % (mt, suf))
-            # Phi-3 muKV at 16K is not "pending" -- it is INFEASIBLE on this device and
-            # we have measured why (compaction's 2x peak exceeds phone RAM). Saying
-            # "pending" would imply a number is still coming. The 8K block below is the
-            # measurement; this row states the bound.
+            # Phi-3 muKV at 16K does not fit in phone RAM (compaction's 2x peak), so the
+            # row says so and the 8K block below carries the measurement.
             note = (r"\emph{does not fit at 16K --- see ctx 8192 below}"
                     if (mt, suf) == ("phi3", "mukv_dfg") else r"\emph{not measured}")
             print(r"  & %-24s & \multicolumn{4}{c}{%s} & --- \\" % (lab, note))
@@ -112,11 +95,9 @@ for mt, disp in MODELS:
             st.median(tps), rng, vd / st.median([x["decode_ms"] for x in g]),
             g[0]["retained_kv_bytes"] / (L_ * H * D * 2 * 2.0)))
     print(r"\midrule")
-# Phi-3 muKV+compaction CANNOT be measured at 16K on this phone: compaction needs a
-# SECOND context, so peak demand is 2 x 6.44 GB of f16 KV + 2.4 GB of weights =
-# 15.28 GB against 15.1 GB of RAM. Every f16 Phi-3 cell at 16K records
-# compaction_applied=False for that reason. At 8K the peak is 8.84 GB and it fits.
-# Reported as its own block so the context is never confused with the 16K rows.
+# Phi-3 muKV with compaction does not fit at 16K: compaction needs a second context, so the
+# peak is 2 x 6.44 GB f16 KV + 2.4 GB weights = 15.28 GB against 15.1 GB RAM. At 8K the
+# peak is 8.84 GB, so it is reported as a separate ctx 8192 block.
 import os as _os
 if _os.path.isdir(BASE8):
     def r8(pol):

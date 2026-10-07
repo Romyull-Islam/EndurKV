@@ -1,25 +1,10 @@
 #!/bin/bash
-# ============================================================================
-# run_energy_tiers.sh -- what does each energy-aware tier actually cost and buy?
-# (2026-08-11, OnePlus 15 / Adreno 840)
-#
-# The energy-aware controller picks a k-pct tier from state of charge: 20% above 50% SoC,
-# 10% between 20-50%, 5% below 20%. Those tiers were chosen from an RTX SPEEDUP curve.
-# Nobody has measured what they cost or save ON THE PHONE, in energy or in quality, so the
-# ladder is currently justified by the wrong device and the wrong metric. This measures the
-# operating points directly.
-#
-# ENERGY IS RAIL + PACK. Integrating the USB rail alone undercounts by 4-36%: usb_online=1
-# and status="Not charging" look like a cleanly rail-powered run, but the SoC's peak draw
-# exceeds what the rail delivers and the battery silently makes up the difference. Measured
-# on these very cells: vanilla drew 52 mAh from the pack, muKV 26, muKV-no-compaction 14.
-# Rail-only therefore FLATTENS exactly the differences under test (it made three arms look
-# 3% apart when they are 20-28% apart). Both channels are captured here and summed.
-#
-# COOLING: gate (DDR<=35 C, batt<=33 C) then settle until DDR stops falling, then re-check
-# the gate. Crossing a threshold is not the same as being cooled -- an earlier Phi-3 pair
-# that merely passed the gate differed 134% between repeats of the same configuration.
-# ============================================================================
+# run_energy_tiers.sh: energy and quality of each energy-aware controller tier on the
+# phone (k-pct 20 above 50% SoC, 10 between 20 and 50%, 5 below 20%).
+# Energy is USB rail plus battery pack. With charging off the SoC's peak draw still
+# exceeds what the rail delivers and the pack covers the rest, so rail-only undercounts.
+# Cooling: gate (DDR<=35 C, batt<=33 C), settle until DDR stops falling, then re-check,
+# because just crossing the threshold left large run-to-run differences.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 BIN=/data/local/tmp/ukv

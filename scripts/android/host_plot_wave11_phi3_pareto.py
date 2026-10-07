@@ -1,15 +1,6 @@
 #!/usr/bin/env python3
-"""
-Wave-11 Phi-3 Pareto frontier figure.
-
-3-axis Pareto bubble plot:
-  x: total_latency_s (lower better)
-  y: mean_PPL (lower better)
-  bubble color: peak_DDR_°C (lower better, viridis)
-  bubble size: swap_MB + 1 (lower better)
-
-Uses 4 complete policies (vanilla, h2o, v1_fa2_stack, tova) plus
-streamingllm annotated as "in progress".
+"""Wave-11 Phi-3 Pareto bubble plot: latency (x), mean PPL (y), peak DDR (color),
+swap MB (size). All axes lower is better. streamingllm is annotated only.
 """
 
 from __future__ import annotations
@@ -28,14 +19,14 @@ OUT = Path(
 )
 
 
-# Real measured Phi-3 K=512 values (per task spec)
+# Measured Phi-3 values at K=512
 POLICIES = [
     # name,        lat_s,  PPL,   DDR_C, swap_MB, complete
     ("vanilla",      1036.0, 5.71,  64.8,  158.0, True),
     ("h2o",          1524.0, 5.77,  62.9,    0.0, True),
     ("v1_fa2_stack",  832.0, 6.39,  66.0,   58.0, True),
     ("tova",         1180.0, 5.92,  57.0,    0.0, True),  # tova lat approx
-    # streamingllm — partial run, annotate only (no bubble plotted in metric space)
+    # streamingllm - partial run, annotate only (no bubble plotted in metric space)
     ("streamingllm",  None,  None,  None,   None, False),
 ]
 
@@ -72,7 +63,7 @@ def main() -> None:
     pareto_idx = pareto_set(pts4)
     pareto_names = [names[i] for i in pareto_idx]
 
-    # ---- figure --------------------------------------------------------
+    # figure
     fig, ax = plt.subplots(figsize=(9.2, 6.4), dpi=130)
 
     # Bubble size: encode swap_MB+1 with sqrt scaling so swap=0 is still visible.
@@ -147,8 +138,7 @@ def main() -> None:
                 zorder=4,
             )
 
-    # ---- Pareto frontier curve (in lat / PPL plane) --------------------
-    # Sort Pareto-front policies by latency and draw a step line for visual cue.
+    # Pareto frontier in the latency/PPL plane, sorted by latency
     pareto_pts = sorted(
         [(lat[i], ppl[i], names[i]) for i in pareto_idx], key=lambda t: t[0]
     )
@@ -166,8 +156,7 @@ def main() -> None:
             label=f"Pareto frontier ({len(pareto_idx)}/{len(names)})",
         )
 
-    # ---- streamingllm "in progress" annotation -------------------------
-    # Place in the upper-right margin of the data area as a callout.
+    # Axis limits, then the streamingllm callout (partial run, not plotted)
     x_lo, x_hi = lat.min(), lat.max()
     y_lo, y_hi = ppl.min(), ppl.max()
     x_pad = 0.08 * (x_hi - x_lo + 1.0)
@@ -193,7 +182,7 @@ def main() -> None:
         zorder=5,
     )
 
-    # ---- axis cosmetics -----------------------------------------------
+    # axis cosmetics
     ax.set_xlabel("total_latency_s  (lower is better)", fontsize=11)
     ax.set_ylabel("mean_PPL  (lower is better)", fontsize=11)
     ax.set_title(

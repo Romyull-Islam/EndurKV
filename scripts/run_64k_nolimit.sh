@@ -1,31 +1,15 @@
 #!/bin/bash
-# ============================================================================
-# run_64k_nolimit.sh -- "does the policy compress ANYTHING on its own?" (2026-08-07)
-#
-# THE QUESTION. Every eviction policy here is usually run with a budget K, and the
-# resulting compression is then reported as the policy's achievement. But K is an
-# INPUT. This experiment removes it: give every policy K = n_ctx (no limit) and see
-# what each one still chooses to drop. Whatever survives that is the policy's own
-# intrinsic compression; everything else was the budget doing the work.
-#
-# f16 FOR EVERY POLICY, and this is forced, not preferred. The per-head evictors
-# (SnapKV, Ada-KV, H2O, TOVA) must run FA-OFF to read attention weights, and
-# llama.cpp requires flash-attention for a quantized V -- SnapKV core-dumps inside
-# llama_decode at q8_0. So the whole table runs f16 or the ratios divide a valid run
-# by a broken one, which is exactly how an earlier phone-GPU campaign was wasted.
-# NOTE: this makes the numbers here NOT directly comparable to the q8_0 64K matrix.
-#
-# 512 GENERATED TOKENS, not 4096. FA-off decode at 64K is slow enough that 4096 tokens
-# across six arms is hours. decode_tps is a rate so it is unaffected; the wall-clock
-# column is only comparable WITHIN this table, where every arm generates the same 512.
-# ============================================================================
+# 64K run with no budget (K = n_ctx) for every policy, to see what each one drops
+# on its own.
+# All policies use an f16 cache: the per-head evictors run FA-off to read attention
+# weights, and llama.cpp needs flash attention for a quantized V. So these numbers
+# are not directly comparable with the q8_0 64K matrix. 512 tokens are generated
+# because FA-off decode at 64K is slow, so wall time compares only within this table.
 set -u
 cd /home/mislam22/EndurKV_workspace
 B=EndurKV/entropy_probe/build-pc-cuda/eviction_bench
 P=EndurKV/benchmarks/ctx_sweep/llama1b_57344tok.txt
-# CHANGED 2026-08-13: was wiki_eval_disjoint_long.txt, which overlaps this 57344-token
-# prompt 70/119 (200-char windows). See run_64k_compaction_matrix.sh for the full note.
-# All 64K PPL measured before this date is void.
+# Eval slice disjoint from the 57344-token prompt. wiki_eval_disjoint_long.txt overlaps it.
 E=EndurKV/benchmarks/ppl/wiki_eval_disjoint_64k.txt
 M=models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 MU="--policy v1_fa2 --fa-on-evict --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70"

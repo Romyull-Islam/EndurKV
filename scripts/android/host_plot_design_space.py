@@ -1,16 +1,7 @@
 #!/usr/bin/env python3
-"""Draw the 4-axis design-space slide for the dissertation deck.
-
-Shows TOVA's eviction problem decomposed into four independent axes:
-  1. SIGNAL    — feature per position
-  2. SELECTION — top-K rule
-  3. BUDGET    — K_h per head  (← v1 lives here)
-  4. INTER-HEAD — coupling between heads
-
-Color code:
-  gray   = TOVA's default (baseline)
-  green  = explored / done by our work (only the BUDGET axis so far)
-  orange = open / queued for exploration in this study
+"""Design-space slide: TOVA-style eviction split into signal, selection, per-head budget
+and inter-head coupling axes. Gray is TOVA's default, green is done (budget, where v1 sits),
+orange is open.
 """
 from pathlib import Path
 import matplotlib.pyplot as plt
@@ -63,7 +54,7 @@ def draw_header(x, title, subtitle, color=NAVY):
 
 
 def draw_default_box(x, items):
-    # TOVA's default — gray
+    # TOVA's default - gray
     ax.add_patch(FancyBboxPatch((x, BOX1_Y), COL_W, BOX1_H,
                                 boxstyle="round,pad=0.04",
                                 facecolor=LIGHT_GRAY, edgecolor=GRAY, linewidth=1.3))
@@ -97,7 +88,7 @@ def draw_status_box(x, status, items, header_text):
         y -= 0.32 * lines + 0.05
 
 
-# ---- Column 1: SIGNAL ----
+# Column 1: SIGNAL
 x = COL_X[0]
 draw_header(x, "1. SIGNAL", "feature per position")
 draw_default_box(x, ["a[h, i] = current attn", "(plain TOVA scoring)"])
@@ -109,7 +100,7 @@ draw_status_box(x, "open", [
     "Cross-head consensus\n  vote count",
 ], "open ← we go next")
 
-# ---- Column 2: SELECTION ----
+# Column 2: SELECTION
 x = COL_X[1]
 draw_header(x, "2. SELECTION", "top-K rule")
 draw_default_box(x, ["argmax-K of score", "(hard top-K)"])
@@ -121,7 +112,7 @@ draw_status_box(x, "open", [
     "Compressed-sensing\n  reconstruction",
 ], "open ← we go next")
 
-# ---- Column 3: BUDGET (our work lives here) ----
+# Column 3: BUDGET (our work lives here)
 x = COL_X[2]
 draw_header(x, "3. BUDGET", "K_h per head", color=GREEN)
 draw_default_box(x, ["K_h = K  (fixed for all)", "(no per-head adaptation)"])
@@ -132,7 +123,7 @@ draw_status_box(x, "done", [
     "Result on Llama (720 cells):\n   median −11% Δ KL vs TOVA\n   93% per-cell wins\n   cache× = 1.02 (neutral)",
 ], "✓ explored (this paper)")
 
-# ---- Column 4: INTER-HEAD ----
+# Column 4: INTER-HEAD
 x = COL_X[3]
 draw_header(x, "4. INTER-HEAD", "coupling between heads")
 draw_default_box(x, ["each head decides alone", "(no information exchange)"])
@@ -144,7 +135,7 @@ draw_status_box(x, "open", [
     "Shared budget pool\n  within each layer",
 ], "open ← we go next")
 
-# Bottom bar — pivot A teaser
+# Bottom bar - pivot A teaser
 ax.add_patch(FancyBboxPatch((0.5, 0.35), 14.0, 0.85,
                             boxstyle="round,pad=0.06",
                             facecolor="#fff7e0", edgecolor="#f5b912", linewidth=1.5))

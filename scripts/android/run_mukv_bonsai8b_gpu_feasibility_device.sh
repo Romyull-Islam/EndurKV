@@ -1,11 +1,8 @@
 #!/system/bin/sh
-# 2026-07-21 — μKV-only Bonsai/Prism 8B Vulkan feasibility run.
-#
-# A 16,384-token f16 GPU KV allocation is known to be killed during context
-# reservation (2,304 MiB).  This uses the same 9,737-token workload, 128-token
-# decode, and 10,000-token context (1,406 MiB f16 KV) to test the real μKV
-# GPU path without claiming full-16k feasibility.  No watchdog, GPU cap,
-# charging toggle, or vanilla baseline is used.
+# μKV-only Bonsai/Prism 8B Vulkan feasibility run. A 16,384-token f16 GPU KV
+# (2,304 MiB) is killed during context reservation, so this uses the same
+# 9,737-token prompt with a 10,000-token context (1,406 MiB f16 KV) and a
+# 128-token decode. No watchdog, GPU cap, charging toggle or vanilla baseline.
 
 set -u
 OUT=${1:?output directory required}

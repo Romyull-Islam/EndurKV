@@ -1,17 +1,7 @@
 #!/usr/bin/env python3
-"""
-Generate comprehensive cache-thermal-memory relationship plots across all waves.
-
-Produces:
-  1. kv_cache_vs_ddr_temp.png      — the smoking gun
-  2. kv_cache_vs_cpu_temp.png
-  3. memory_rss_vs_ddr_temp.png    — memory pressure
-  4. swap_vs_kv_cache.png          — endurance arm
-  5. throughput_vs_kv_cache.png    — trade-off
-  6. ppl_vs_kv_cache.png           — accuracy trade-off
-  7. wave9_watchdog_trajectory.png — closed-loop control timeline
-  8. wave_thermal_timelines.png    — DDR/CPU/freq vs time, per wave
-  9. ksweep_pareto.png             — Wave-10 K-sweep (when available)
+"""KV cache vs temperature, memory, swap, throughput and PPL plots across the phone-log
+campaigns, plus the watchdog trajectory, the matched cache-size bar and the K-sweep.
+Writes PNGs to figures/thermal_plots/.
 """
 
 import os
@@ -168,9 +158,7 @@ if W10_GLOB:
                 points.append(a)
                 print(f"  Wave-10 K={k:4d}: kv={a['peak_kv']:5d} ddr={a['peak_ddr_c']:.1f}C cpu={a['peak_cpu_c']:.1f}C tps={a['mean_tps']:.2f} ppl={a['ppl']}")
 
-# ============================================================================
 # Plot helpers
-# ============================================================================
 def scatter_plot(xkey, ykey, xlabel, ylabel, title, out_name, log_x=True, ylim=None, hline=None):
     fig, ax = plt.subplots(figsize=(10,7))
     seen = set()
@@ -294,12 +282,9 @@ if W9_DIR:
             plt.savefig(os.path.join(OUT_DIR,'7_wave9_watchdog_trajectory.png'), dpi=140); plt.close()
             print('  saved 7_wave9_watchdog_trajectory.png')
 
-# 8. Matched-conditions bar: Wave-4 cache-size -> DDR (the smoking gun)
-# Previously hard-coded W4_DDR=[62.9,62.5,54.4] / W4_THROT=['YES','YES','NO'].
-# Now derived live from phone-logs/wave4_longdecode_1780750084/{vanilla,
-# v1_fa_K512,v1_K512}/sensors.csv via the existing aggregate() helper so the
-# figure is reproducible from raw data.
-W4_KERNEL_THROTTLE_C = 65.0  # documented threshold; see CAPTIONS.md
+# 8. Matched-conditions bar: cache size vs peak DDR, read from
+# phone-logs/wave4_longdecode_1780750084/<cell>/sensors.csv
+W4_KERNEL_THROTTLE_C = 65.0  # documented threshold, see CAPTIONS.md
 W4_CELLS = [
     ('vanilla',     'vanilla',      '#d62728'),
     ('v1_FA frozen','v1_fa_K512',   '#ff7f0e'),
@@ -345,7 +330,7 @@ if w4_ddr:
 else:
     print('  [skip] 8_wave4_smokinggun.png — no wave4 sensor data found')
 
-# 9. K-sweep partial — only if we have Wave-10 data
+# 9. K-sweep, only when Wave-10 data exists
 KSWEEP = sorted([p for p in points if p['label'].startswith('W10') or 'K=512' in p['label']],
                 key=lambda x: x['peak_kv'])
 if len(KSWEEP) >= 2:

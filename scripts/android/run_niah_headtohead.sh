@@ -1,24 +1,9 @@
 #!/bin/bash
-# ============================================================================
-# NIAH quality head-to-head: muKV vs canonical SnapKV vs vanilla  (HotMobile)
-# ----------------------------------------------------------------------------
-# The defensibility test. On llama.cpp's sequence-level engine canonical SnapKV
-# cannot compact (per-head union -> near-full), so it "retrieves" trivially by
-# keeping almost everything. muKV compacts to a real budget and must KEEP the
-# needle via its demand-aware selection + alpha-gate. So we report BOTH:
-#     (1) needle hit  (gen contains "mango sorbet" or "bi-rite", case-insensitive)
-#     (2) physical live cells after prefill eviction  (peak_kv - evicted_prefill)
-# The story is accuracy AT a given physical cache size -- muKV hits at ~K cells,
-# SnapKV only hits because it stays near-full (no efficiency).
-#
-# TIGHT budget K=256 (stress the gate) over the 14 mango/Bi-Rite needle files
-# (4K & 8K contexts x 7 depths). CPU, 64 greedy tokens, no cool-gate (retrieval
-# correctness is thermally invariant). Vanilla = full-cache accuracy ceiling.
-#
-# Canonical SnapKV: --policy snapkv --obs-window 64 --n-sink 0 (exact defaults).
-# muKV (CPU state-swap): --policy v1_fa2 --n-sink 4 --adaptive-anchor
-#   --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70
-# ============================================================================
+# NIAH on the phone CPU: muKV vs SnapKV vs vanilla over the 14 needle files (4K and
+# 8K contexts x 7 depths), 64 greedy tokens, K=256 by default (first argument).
+# Reports the needle hit rate and the live cells after prefill eviction, since on
+# llama.cpp the per-head SnapKV union keeps nearly the full cache.
+# No cool gate, since retrieval does not depend on temperature.
 set -u; export ANDROID_ADB_SERVER_PORT=5151
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 
@@ -55,7 +40,7 @@ for STIM in $STIMS; do
 done
 touch /tmp/niah_h2h_DONE; echo "[$(date +%H:%M:%S)] NIAH H2H DONE (K=$KBUD) -> $OUT_HOST"
 
-# ---- host-side scoring: needle hit + live cells, per policy ----
+# Host-side scoring per policy: needle hit and live cells (peak_kv - evicted_prefill)
 python3 - "$OUT_HOST" <<'PY'
 import json,re,sys,glob,os
 root=sys.argv[1]

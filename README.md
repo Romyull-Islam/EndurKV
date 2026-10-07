@@ -13,6 +13,25 @@ measures what each GPU clock, cache budget and answer length costs, lets the bat
 choose among them, and corrects itself with two feedback loops. A reduce-only watchdog lowers
 clock caps before the vendor's thermal throttle does.
 
+## HotMobile 2027 paper
+
+"μKV: Bridging Logical KV Eviction and Physical Efficiency on Mobile LLMs" covers the eviction
+policy only: prefill scoring, one keep set for all heads and layers, and in-place compaction,
+measured against six published eviction policies. It does not use the controller, the watchdog
+or `energy_rl/`. The parts of this repository it uses are:
+
+| Paper | Code |
+|---|---|
+| Stage 1, prefill scoring | the `kq_evict` side node in `llama.cpp/src/llama-graph.cpp` |
+| Stage 2, one keep set | policy `v1_fa2` in `entropy_probe/eviction_bench.cpp` |
+| Stage 3, in-place compaction | `endurkv_compact_seq()` in `llama.cpp/src/llama-kv-cache.cpp` |
+| Baselines | H2O, TOVA, SnapKV, Ada-KV, KeyDiff and StreamingLLM in `entropy_probe/eviction_bench.cpp` |
+| Needle test | `scripts/android/run_niah_current_build.sh`, scored by `eval_pipeline/score_niah_strict.py` |
+| Phone LongBench | `scripts/android/run_longbench_native_budgets.sh`, scored by `scripts/longbench_score.py` |
+| Budget sweep (Figure 1) | `figures/master_tables/figures/fig_why_col.py` |
+
+The exact μKV flags are under "μKV as run in the paper" below.
+
 ## Repository layout
 
 | Path | What it holds |

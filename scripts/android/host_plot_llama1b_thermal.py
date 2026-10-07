@@ -1,36 +1,7 @@
 #!/usr/bin/env python3
-"""
-FIGURE 20 - Llama-1B Wave-3 thermal trajectories (4-panel).
-
-Plots time-series traces of the four Wave-3 Llama-3.2-1B cells
-(narrativeqa_pub_001, 25 min sustained-stress protocol on OnePlus-15
-Snapdragon 8 Elite Gen 5):
-
-  vanilla       - stock llama.cpp, full KV (k_nominal=0)
-  v1_K512       - v1 selective-stack, K=512 budget
-  v1_K2048      - v1 selective-stack, K=2048 budget
-  v1_fa_K512    - v1 selective-stack + custom FA kernel, K=512
-
-Source per cell:
-  sensors.csv  -> wall_clock_s, ddr_temp_mc, cpullc-0-0_temp_mc
-  stress.csv   -> iter, t_elapsed_s (iter start offset within session)
-  iter*/steps.csv -> step, wall_us (iter-local microseconds),
-                     n_kv_cells, rss_kb
-
-Layout (2x2):
-  Top-left    : DDR temp (C) vs time, all 4 policies + 65 C kernel cliff
-  Top-right   : CPU (cpullc-0-0) temp (C) vs time, all 4 policies
-  Bottom-left : cache_size (n_kv_cells) vs time, all 4 policies
-  Bottom-right: RSS (MB) vs time, all 4 policies
-
-Headline:
-  "Llama-1B stays thermally comfortable (peak 51.7 C, 13 C below kernel
-  cliff) - eviction effect on thermals is small but measurable"
-
-Output:
-  /home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/
-  20_llama1b_thermal_trajectories.png
-  + matching .schema.json sidecar (RES_SCHEMA)
+"""Figure 20: Llama-3.2-1B thermal trajectories for vanilla, v1_K512, v1_K2048 and v1_fa_K512
+(25 min sustained stress). 2x2 panels of DDR temp, CPU temp, n_kv_cells and RSS vs time.
+Output: figures/relationship_plots/20_llama1b_thermal_trajectories.png + .schema.json sidecar.
 """
 
 from __future__ import annotations
@@ -49,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 
-# ----- inputs ---------------------------------------------------------------
+# inputs
 
 PHONE_LOGS = "/home/mislam22/EndurKV_workspace/phone-logs"
 WAVE3_DIR = f"{PHONE_LOGS}/wave3_real_1780680903"
@@ -81,7 +52,7 @@ CELLS = [
 ]
 
 
-# ----- helpers --------------------------------------------------------------
+# helpers
 
 def load_sensors(cell_dir: str) -> pd.DataFrame:
     """Load sensors.csv with wall_clock_s -> t_rel_s (sec from sensor start),
@@ -133,8 +104,7 @@ def load_steps(cell_dir: str, stress: pd.DataFrame) -> pd.DataFrame:
             off = float(stress.loc[stress["iter"] == it, "t_elapsed_s"].iloc[0])
         except (IndexError, KeyError):
             off = float("nan")
-        # wall_us inside each iter is measured from that iter's local clock
-        # start (validated: step0.wall_us == prefill_ms*1000 for iter0001)
+        # wall_us is measured from the iter's own start (step 0 wall_us equals prefill_ms*1000)
         s["t_session_s"] = off + s["wall_us"] / 1.0e6
         rows.append(s)
     if not rows:
@@ -146,7 +116,7 @@ def load_steps(cell_dir: str, stress: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# ----- main -----------------------------------------------------------------
+# main
 
 def main() -> None:
     os.makedirs(os.path.dirname(OUT_PNG), exist_ok=True)
@@ -198,12 +168,12 @@ def main() -> None:
             "peak_rss_mb": round(peak_rss_mb, 1),
         })
 
-    # ----- figure ----------------------------------------------------------
+    # figure
     fig, axes = plt.subplots(2, 2, figsize=(14, 9.5))
     ax_ddr, ax_cpu = axes[0]
     ax_kv,  ax_rss = axes[1]
 
-    # ----- (a) DDR temp vs time --------------------------------------------
+    # (a) DDR temp vs time
     for c, sn, _st, _sp in per_cell:
         ax_ddr.plot(
             sn["t_rel_s"] / 60.0, sn["ddr_c"],
@@ -224,7 +194,7 @@ def main() -> None:
             boxstyle="round,pad=0.30", fc="#ffe9e9", ec="#c00000", lw=0.9,
         ),
     )
-    # band showing all-cell peak well under cliff
+    # line at the all-cell DDR peak
     all_peak = max(s["peak_ddr_c"] for s in schema_cells)
     ax_ddr.axhline(
         all_peak,
@@ -248,7 +218,7 @@ def main() -> None:
     ax_ddr.set_ylim(44, 68)
     ax_ddr.legend(loc="lower right", fontsize=8.5, framealpha=0.92)
 
-    # ----- (b) CPU temp vs time --------------------------------------------
+    # (b) CPU temp vs time
     for c, sn, _st, _sp in per_cell:
         ax_cpu.plot(
             sn["t_rel_s"] / 60.0, sn["cpu_c"],
@@ -273,7 +243,7 @@ def main() -> None:
     ax_cpu.set_ylim(44, 64)
     ax_cpu.legend(loc="lower right", fontsize=8.5, framealpha=0.92)
 
-    # ----- (c) cache size vs time (n_kv_cells) -----------------------------
+    # (c) cache size vs time (n_kv_cells)
     for c, _sn, _st, sp in per_cell:
         if len(sp) == 0:
             continue
@@ -290,7 +260,7 @@ def main() -> None:
     ax_kv.grid(True, alpha=0.3)
     ax_kv.legend(loc="lower right", fontsize=8.5, framealpha=0.92)
 
-    # ----- (d) RSS vs time -------------------------------------------------
+    # (d) RSS vs time
     for c, _sn, _st, sp in per_cell:
         if len(sp) == 0:
             continue
@@ -317,7 +287,7 @@ def main() -> None:
     fig.savefig(OUT_PNG, dpi=160)
     print(f"[ok] wrote {OUT_PNG}")
 
-    # ----- schema sidecar --------------------------------------------------
+    # schema sidecar
     schema = {
         "kind": "RES_SCHEMA",
         "version": 1,

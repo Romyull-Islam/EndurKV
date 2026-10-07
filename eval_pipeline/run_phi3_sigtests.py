@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
-"""Paired stat tests for the 4 Phi-3 PPL cells in wave11_eval_1780862534.
-
-Pairing key: prompt_id (== chunk identifier shared across policies).
-Tests: paired t on log(PPL) deltas, Wilcoxon signed-rank, Cohen's d_z.
-Multiple-comparison correction: Holm–Bonferroni over the 6 pairs.
-
-stdlib-only. Uses exact incomplete-beta for Student-t two-sided p, and
-exact (enumeration) null distribution for Wilcoxon signed-rank when n <= 25.
-"""
+"""Paired stat tests for the 4 Phi-3 PPL cells in wave11_eval_1780862534, paired by prompt_id.
+Paired t on log(PPL) deltas, Wilcoxon signed-rank and Cohen's d_z, Holm-Bonferroni over the
+6 pairs. Stdlib only: exact incomplete beta for t p-values, exact Wilcoxon null for n <= 25."""
 from __future__ import annotations
 
 import glob
@@ -35,9 +29,7 @@ OUT_PATH = ("/home/mislam22/EndurKV_workspace/EndurKV/figures/"
             "master_tables/WAVE11_PHI3_SIGTESTS.md")
 
 
-# --------------------------------------------------------------------------- #
 # JSON loading (eviction_bench emits bareword inf/nan).
-# --------------------------------------------------------------------------- #
 
 _INFNAN = re.compile(
     r'(?<![A-Za-z0-9_."])(-?inf|nan)(?![A-Za-z0-9_])', re.IGNORECASE,
@@ -62,9 +54,7 @@ def load_meta(path: str) -> dict:
         return json.loads(_patch(raw))
 
 
-# --------------------------------------------------------------------------- #
 # Stats utilities (stdlib).
-# --------------------------------------------------------------------------- #
 
 def _betacf(a: float, b: float, x: float) -> float:
     """Lentz's algorithm for continued fraction of incomplete beta."""
@@ -144,13 +134,8 @@ def paired_t(deltas: List[float]) -> Tuple[float, float, float]:
 
 
 def wilcoxon_signed_rank(deltas: List[float]) -> Tuple[float, float, int]:
-    """Two-sided Wilcoxon signed-rank.
-
-    Returns (W_pos, p, n_used). Zero deltas are dropped (Wilcoxon convention).
-    For n_used <= 25, the exact null distribution is enumerated; otherwise a
-    normal approximation with continuity correction (and tie correction) is
-    used.
-    """
+    """Two-sided Wilcoxon signed-rank, zero deltas dropped. Returns (W_pos, p, n_used).
+    Exact null for n_used <= 25, else normal approximation with tie and continuity correction."""
     nz = [d for d in deltas if d != 0.0]
     n = len(nz)
     if n < 1:
@@ -172,9 +157,8 @@ def wilcoxon_signed_rank(deltas: List[float]) -> Tuple[float, float, int]:
     W_min = min(W_pos, W_neg)
 
     if n <= 25:
-        # Exact enumeration over 2^n sign assignments of the ranks.
-        # Probability under H0 of W+ <= W_min (two-sided = 2 * one-sided).
-        # Use DP over the integer doubled ranks (handle ties: ranks may be x.5).
+        # Exact null by DP over doubled integer ranks (tied ranks may be x.5).
+        # Two-sided p = 2 * P(W+ <= W_min) under H0.
         scaled = [int(round(2 * r)) for r in ranks]
         total = sum(scaled)
         target = int(round(2 * W_min))
@@ -189,8 +173,7 @@ def wilcoxon_signed_rank(deltas: List[float]) -> Tuple[float, float, int]:
         p_one = leq / total_count
         p = min(1.0, 2.0 * p_one)
     else:
-        # Normal approximation with tie correction + continuity.
-        # Tie correction: sum over tied groups of (t^3 - t).
+        # Normal approximation. Tie correction is the sum of (t^3 - t) over tied groups.
         from collections import Counter
         cnt = Counter(abs(d) for d in nz)
         tie_corr = sum(t * t * t - t for t in cnt.values() if t > 1)
@@ -228,9 +211,7 @@ def holm_bonferroni(ps: List[float]) -> List[float]:
     return adj
 
 
-# --------------------------------------------------------------------------- #
 # Load Phi-3 cells, indexed by prompt_id.
-# --------------------------------------------------------------------------- #
 
 def load_policy(policy: str) -> Dict[str, float]:
     """Return {prompt_id -> log(perplexity)} for a Phi-3 policy cell."""
@@ -288,7 +269,7 @@ def main() -> int:
             "deltas": deltas,
         })
 
-    # Holm–Bonferroni on the 6-test family, separately for t and Wilcoxon.
+    # Holm-Bonferroni on the 6-test family, separately for t and Wilcoxon.
     t_ps = [r["t_p"] if math.isfinite(r["t_p"]) else 1.0 for r in rows]
     w_ps = [r["w_p"] if math.isfinite(r["w_p"]) else 1.0 for r in rows]
     t_adj = holm_bonferroni(t_ps)
@@ -297,9 +278,7 @@ def main() -> int:
         r["t_p_holm"] = ta
         r["w_p_holm"] = wa
 
-    # ------------------------------------------------------------------ #
     # Render Markdown.
-    # ------------------------------------------------------------------ #
     L: List[str] = []
     L.append("# Wave-11 Phi-3-mini-128k — Paired PPL Significance Tests")
     L.append("")
@@ -391,8 +370,7 @@ def main() -> int:
         wp_ok = math.isfinite(wp) and wp < 0.05
         v = "SIGNIFICANT" if tp_ok else "indistinguishable"
         verdicts[(r["a"], r["b"])] = v
-        # Wilcoxon floor heuristic: if the raw two-sided p is at the n=2/2^n
-        # minimum it's at the detection floor for that pair.
+        # A raw p at the 2/2^n minimum is the Wilcoxon detection floor for that pair.
         n_used = r["w_n"]
         if isinstance(n_used, int) and n_used >= 1:
             min_raw = 2.0 / (2 ** n_used)

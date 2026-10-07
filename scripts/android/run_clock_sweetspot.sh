@@ -1,34 +1,12 @@
 #!/bin/bash
-# ============================================================================
-# run_clock_sweetspot.sh -- find the GPU clock cap that sheds heat without
-# costing throughput. (2026-08-11, OnePlus 15 / Adreno 840)
-#
-# WHY THERE MIGHT BE A SWEET SPOT AT ALL. On the CPU, measured dynamic power on this phone
-# follows P ~ f^1.10 (voltage is pinned at Vmin, so the textbook V^2 term never scales).
-# Since time ~ 1/f for compute-bound work, energy goes as f^0.10 -- capping the clock 40%
-# saves 4.7% energy and costs 67% more time. That makes clock capping a poor ENERGY lever
-# for compute-bound phases.
-#
-# But muKV's DECODE is BANDWIDTH-bound, not compute-bound: each token reads weights + KV
-# from DRAM, and that traffic does not get faster with a higher shader clock. If decode is
-# genuinely memory-limited, its throughput should be nearly FLAT in GPU clock over some
-# range, while power and temperature keep falling with it. That range is the sweet spot,
-# and it cannot be predicted from the CPU exponent -- it has to be measured.
-#
-# WHAT IS SWEPT. gpu_max_clock over the Adreno's authorized rungs, muKV held fixed at its
-# frozen config so the only variable is the clock. Reported per cap: decode tok/s, peak
-# skin/DDR/battery, mean power, and energy per token (rail + PACK -- rail alone undercounts
-# by 4-36% because the battery silently supplements it).
-#
-# The knee is where d(tok/s)/d(clock) is still ~0 but temperature has already dropped.
-# ============================================================================
+# run_clock_sweetspot.sh: sweep the Adreno GPU clock cap with muKV fixed, to find a cap that
+# lowers temperature without costing decode throughput. Decode is bandwidth-bound, so its
+# tok/s should stay nearly flat over some clock range while power falls.
+# Per cap: decode tok/s, peak temperatures, mean power and energy per token (rail + pack,
+# since the battery supplements the rail).
 set -u
-# FIXED 2026-08-11: use adb_safe_pull, never bare `adb pull`. adb_resilient.sh exports
-# ANDROID_ADB_SERVER_PORT after probing for the device, which conflicts with an
-# ADB_SERVER_SOCKET set by the caller -- so adb_safe_shell reached the phone and ran the
-# benchmark while every bare `adb pull` silently retrieved nothing. The first cell of the
-# tier sweep looked FAILED for exactly this reason although the run had completed on-device
-# (decode_tps=33.0, meta.json present). adb_safe_pull uses the resolved port and retries.
+# Use adb_safe_pull, not bare adb pull. adb_resilient.sh exports the resolved server port,
+# and a bare pull can silently fetch nothing when the caller set ADB_SERVER_SOCKET.
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 BIN=/data/local/tmp/ukv
 M=/data/local/tmp/endurkv/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
@@ -55,7 +33,7 @@ cell(){ local CLK=$1
   local D=$HOST/clk_$CLK; [ -f "$D/meta.json" ] && { echo "  [clk $CLK] cached"; return; }
   mkdir -p "$D"
   echo "[$(date +%H:%M:%S)] cooling for clk=$CLK ..."; settle || { echo "  [SKIP-HOT] $CLK"; return; }
-  # pin BOTH ends so the governor cannot wander: max=cap, min stays at the floor
+  # Set the max clock to the cap, the min stays at the floor.
   adb_safe_shell "su -c 'echo $CLK > /sys/kernel/gpu/gpu_max_clock; cat /sys/kernel/gpu/gpu_max_clock'" < /dev/null | tail -1 | sed 's/^/    cap set to /'
   adb_safe_shell "su -c 'rm -f /data/local/tmp/sc_$CLK.csv; nohup sh /data/local/tmp/sample_sensors.sh --out /data/local/tmp/sc_$CLK.csv --hz 2 >/dev/null 2>&1 &'" < /dev/null
   echo "[$(date +%H:%M:%S)] running clk=$CLK ..."

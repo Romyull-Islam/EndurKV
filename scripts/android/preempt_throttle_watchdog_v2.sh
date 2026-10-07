@@ -1,48 +1,8 @@
 #!/system/bin/sh
-# preempt_throttle_watchdog v2 (PREEMPTIVE battery+skin ladder, 2026-07-18)
-# Zones resolved BY NAME (was hardcoded, went stale: battery read the USB zone at
-# 4C -> watchdog never fired). Battery ladder >=35.0/35.5/36.0C -> 1497/1382/1267;
-# skin ladder >=39.5/40.0/40.5C -> 1497/1382/1267; CPU/DDR warn/crit as backstop.
-# Gradual glide (immediate up, debounced down) so the clock never drops suddenly.
-#
-# v2 upgrades v1 (DDR-only, hand-picked thresholds) to a multi-sensor watchdog
-# whose per-sensor warn/crit trip points were derived EMPIRICALLY from observed
-# pre-throttle events across Wave3..Wave11 (n=7 events).
-#
-# Empirical derivation:
-#   warn_S = p50(pre-throttle T_S) - 5 C
-#   crit_S = p50(pre-throttle T_S)
-#   Pre-throttle anchor = last sensor row in the prior iter's decode window
-#   with cpu6_freq_hz still >= 90% of that iter's median (cleanest signal).
-#
-# Philosophy (MINIMUM-ENERGY cliff-insurance, 2026-06-09 re-tune):
-#   The watchdog is CLIFF-INSURANCE: it engages ONLY to prevent the kernel hard
-#   cliff (sudden drop 1632 -> 883 MHz = -46%). It is NOT preemptive cooling.
-#   For typical workloads where DDR stays below 60 C, the watchdog stays at
-#   tier 0 entirely -- NO performance cost, NO energy cost from preemptive
-#   throttling. The thresholds sit very close to the cliff with minimal cushion,
-#   the eager tier 1 NUDGE is removed entirely, and tier 2 MILD doesn't engage
-#   until T_eff >= 0.50. Only fires when actually about to hit kernel cliff.
-#
-# Algorithm (sampled at 2 Hz, 0.5 s period):
-#   1. Read DDR / CPU-big / SoC-skin (sys-therm-2) / Skin (shell_front) /
-#      Battery temp + Battery current (via dumpsys, slow path).
-#   2. Per sensor, compute a normalized THREAT in [0, 1]:
-#         threat_S = clamp01( (T_S - warn_S) / (crit_S - warn_S) )
-#      (battery current uses an inverse drop-rule: threat rises as I drops fast).
-#   3. T_EFF = max(threat_S over all sensors).
-#   4. Map T_EFF to a 4-tier cap (tier 1 NUDGE removed in minimum-energy mode),
-#      with 0.1 hysteresis on the down-leg:
-#         T_EFF >= 0.90 -> tier 4 STRONG (1267 MHz, -22%)
-#         T_EFF >= 0.75 -> tier 3 MOD    (1382 MHz, -15%)
-#         T_EFF >= 0.50 -> tier 2 MILD   (1497 MHz,  -8%)
-#         else            tier 0 MAX    (1632 MHz)
-#         downgrade only when T_EFF < (threshold - 0.10).
-#   5. Each tier transition is logged with the dominating sensor:
-#         "tier 2 MILD engaged: cpu at 65.0C (warn=64.5 crit=65.5 threat=0.50)"
-#
-# All arithmetic is in fixed-point (millidegC, milli-units) so the script runs
-# under Android's POSIX /system/bin/sh without bc/awk-loops.
+# preempt_throttle_watchdog v2: preemptive CPU clock caps from battery and skin temperature.
+# Each ladder caps both clusters at 1497/1382/1267/1132/1017 MHz as temperature climbs
+# toward the vendor deep throttle. The tighter of the two ladders wins.
+# Sampled at 2 Hz. Fixed-point math (milli-degC) so it runs under Android /system/bin/sh.
 #
 # Args:
 #   $1  log file path
@@ -55,10 +15,8 @@ set -u
 LOG=${1:-/sdcard/preempt_throttle_v2.log}
 STOP=${2:-/sdcard/preempt_throttle_v2.stop}
 
-# --- Thermal zone paths (validated on CPH2749 / OnePlus 15, Android 16) ---
-# RESOLVE ZONES BY NAME (2026-07-18 fix): thermal zones re-enumerate across
-# reboots, so hardcoded numbers go stale (battery was reading the USB zone at
-# 4 C, skin was reading a PMIC zone). Resolve dynamically by type name.
+# Thermal zones (OnePlus 15, Android 16) are resolved by type name because zone
+# numbers change across reboots and hardcoded ones point at the wrong sensor.
 resolve_zone() {  # $1 = thermal-zone type name; echoes zone dir, empty if none
     local z
     for z in /sys/class/thermal/thermal_zone*; do
@@ -79,105 +37,59 @@ SOC_ZONE=${SOC_ZONE_OVERRIDE:-$SOC_ZONE}
 SKIN_ZONE=${SKIN_ZONE_OVERRIDE:-$SKIN_ZONE}
 BAT_ZONE=${BAT_ZONE_OVERRIDE:-$BAT_ZONE}
 
-# --- Frequency tiers (kHz). cpu6/cpu7 (big cluster) max settings. ---
-# MINIMUM-ENERGY schedule: tier 1 NUDGE is SKIPPED entirely. The ladder jumps
-# straight from tier 0 MAX to tier 2 MILD only when T_eff >= 0.50.
-#   tier 0 MAX     1632000  (no reduction)
-#   tier 1 NUDGE   1574400  (-3.5%)  -- DISABLED in minimum-energy mode
-#   tier 2 MILD    1497600  (-8%)
-#   tier 3 MOD     1382400  (-15%)
-#   tier 4 STRONG  1267200  (-22%, only when really close to crit)
+# Threat-tier frequency caps (kHz). Tier 1 is never reached (see TH_T1).
 F_MAX=1632000
 F_NUDGE=1574400   # tier 1 (unreachable in minimum-energy mode)
 F_MILD=1497600    # tier 2
 F_MOD=1382400     # tier 3
 F_STRONG=1267200  # tier 4
 
-# -------------------------------------------------------------------------
-# EMPIRICAL THRESHOLDS (degC, milli-degC units used internally).
-#
-# REVERTED 2026-06-09: CPU thresholds restored to empirical 64.5/65.5 C from
-# confirmed multi-wave throttle data. Earlier raise to 68/70 C was based on
-# single ambiguous observation and reverted per user direction.
-#
-#   The CPU warn/crit (68.0/70.0 C) introduced earlier today rested on ONE
-#   vanilla run where T_cpu peaked at 68.6 C without a visible kernel
-#   throttle event. That is insufficient evidence to override the prior
-#   thresholds (64.5/65.5 C), which were anchored on MULTIPLE confirmed
-#   pre-throttle samples across Wave-4 / Wave-8 / Wave-9. The user's most
-#   recent run with the OLD 64.5/65.5 C thresholds achieved -33.8% energy
-#   savings (27.95 vs 42.19 mAh) -- a known working configuration. Reverting
-#   to it.
-#
-#   - DDR crit = 64.5 C (0.5 C before the 65 C kernel cliff)  [unchanged]
-#                warn = 63.0 C (2 C before the cliff)
-#   - CPU big crit = 65.5 C (empirical, multi-wave)            [RESTORED]
-#                    warn = 64.5 C (empirical, multi-wave)
-#   - Skin shell_front warn = 42.0 C, crit = 42.7 C            [unchanged]
-#   - Battery temp warn = 39.0 C, crit = 39.8 C                [unchanged]
-#   - SoC sys-therm-2 thresholds left alone (advisory; not a known cliff).
-#   - Battery current drop signature unchanged.
-#
-# All values are millideg C (raw zone temp units), so we can compare directly
-# to /sys/class/thermal/thermal_zoneN/temp without dividing by 1000.
-# -------------------------------------------------------------------------
+# Per-sensor warn/crit thresholds in milli-degC, the raw thermal_zone temp units.
 
-# DDR: 65 C kernel cliff -> crit 64.5 C (0.5 C before), warn 63.0 C (2 C before).
-# Observed vanilla peak 61.4 C is below warn -> watchdog dormant on DDR.
+# DDR: kernel cliff at 65 C, so crit is 0.5 C and warn 2 C below it.
 DDR_WARN_MC=63000
 DDR_CRIT_MC=64500
 
-# CPU big (cpu-1-0-0): empirical thresholds derived from Wave-4/8/9 confirmed
-# pre-throttle samples. Restored 2026-06-09 after a single-observation raise
-# to 68/70 C was reverted (insufficient evidence to override multi-wave data).
-#   warn 64.5 C (p50(pre-throttle T_cpu) - 1.0 C)
-#   crit 65.5 C (p50(pre-throttle T_cpu))
-# USER-DIRECTED 2026-06-09: CPU warn=65.5 C (raised from 65.0), CPU crit=67.0 C.
-# Effective dormant band <=66 C, control band 66.0-67.0 C.
+# CPU big cluster (cpu-1-0-0).
 CPU_WARN_MC=65500
 CPU_CRIT_MC=67000
 
-# SoC sys-therm-2: p50 49.4 C -> warn 44.4 / crit 49.4 (unchanged; advisory).
+# SoC sys-therm-2: advisory, not a known cliff. crit is the pre-throttle median.
 SOC_WARN_MC=44400
 SOC_CRIT_MC=49400
 
-# Skin shell_front: warn 42.0 C (only when truly hot), crit 42.7 C.
+# Skin (shell_front).
 SKIN_WARN_MC=42000
 SKIN_CRIT_MC=42700
 
-# Battery temp: warn 39.0 C, crit 39.8 C.
+# Battery temperature.
 BAT_WARN_MC=39000
 BAT_CRIT_MC=39800
 
-# Battery current drop (mA from baseline). >=392 mA drop -> max threat.
-# (Power gating signature seen consistently in pre-throttle samples; p50=392.)
+# Battery current drop from baseline (mA). A sharp drop is the power-gating
+# signature seen in pre-throttle samples.
 BAT_CUR_DROP_WARN_MA=128       # p10 of drops -> warn (rising threat)
 BAT_CUR_DROP_CRIT_MA=392       # p50 of drops -> crit
 
-# --- Sample period ---
+# Sample period
 SAMPLE_DT=0.5
 # dumpsys battery is slow (~200-400 ms). Poll once every BAT_EVERY ticks.
 BAT_EVERY=4   # 4 * 0.5 s = 2 s
 
-# Hysteresis (in milli-threat units; 0.10 -> 100).
+# Hysteresis in milli-threat units (0.10 = 100).
 HYS_MTHREAT=100
 
-# Tier thresholds in milli-threat units.
-# MINIMUM-ENERGY CLIFF-INSURANCE schedule (2026-06-09): tier 1 NUDGE is REMOVED
-# entirely so we never preemptively throttle. The watchdog jumps from tier 0
-# straight to tier 2 MILD at T_eff >= 0.50, only when truly approaching cliff.
-# Engage at -- / 0.50 / 0.75 / 0.90.
+# Tier thresholds in milli-threat units. Tier 1 is disabled, so the ladder goes
+# from tier 0 straight to tier 2 at 0.50.
 TH_T1=1001   # unreachable (tier 1 NUDGE disabled in minimum-energy mode)
 TH_T2=500    # 0.50
 TH_T3=750    # 0.75
 TH_T4=900    # 0.90
 
-# -------------------------------------------------------------------------
 # Helpers
-# -------------------------------------------------------------------------
 
 read_zone_mc() {
-    # $1 = zone dir; emits temp in millideg C (raw), 0 if unreadable.
+    # $1 = zone dir. Prints temp in milli-degC (raw), 0 if unreadable.
     local p=$1
     if [ -r "$p/temp" ]; then
         cat "$p/temp" 2>/dev/null
@@ -186,13 +98,14 @@ read_zone_mc() {
     fi
 }
 
-# fmt_c_from_mc <milli-degC>  ->  XX.X
+# fmt_c <milli-degC> prints XX.X
 fmt_c() {
-    # Use awk for one-shot float formatting (cheap; once per transition only).
+    # awk float formatting, only called when logging.
     awk -v v="$1" 'BEGIN { printf "%.1f", v/1000.0 }'
 }
 
-# threat_mc <T_mc> <warn_mc> <crit_mc>  ->  threat in milli-units (0..1000)
+# threat_mc <T_mc> <warn_mc> <crit_mc>: threat in milli-units (0..1000),
+# clamp01((T - warn) / (crit - warn))
 threat_mc() {
     local t=$1 w=$2 c=$3
     if [ "$t" -le "$w" ]; then
@@ -210,7 +123,7 @@ threat_mc() {
     echo $(( num / den ))
 }
 
-# threat_drop <drop_ma> <warn_ma> <crit_ma>  ->  milli-threat (0..1000)
+# threat_drop <drop_ma> <warn_ma> <crit_ma>: milli-threat (0..1000)
 threat_drop() {
     local d=$1 w=$2 c=$3
     # drop may be negative (current rose). Clamp to 0.
@@ -222,11 +135,9 @@ threat_drop() {
     echo $(( num / den ))
 }
 
-# BUG#2 FIX (2026-07-19): cap BOTH clusters, not just the prime cores. The
-# --threads workload runs on cpu2-5 (performance, policy0) + cpu6-7 (prime,
-# policy6); capping only cpu6/7 left 4 of 6 working cores at full clock, so the
-# temperature kept rising. Write scaling_max on cpu0 (policy0=cpu0-5) AND cpu6
-# (policy6=cpu6-7). Natural per-cluster ceilings are read once at startup.
+# Cap both clusters. The workload runs on cpu2-5 (policy0) and cpu6-7 (policy6),
+# so capping only cpu6/7 leaves 4 of 6 working cores at full clock.
+# Per-cluster hardware maxima are read once at startup.
 PERF_MAX=$(cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq 2>/dev/null)
 PRIME_MAX=$(cat /sys/devices/system/cpu/cpu6/cpufreq/cpuinfo_max_freq 2>/dev/null)
 set_freq() {
@@ -251,8 +162,8 @@ apply_tier() {
     esac
 }
 
-# EASED per-cluster application (2026-07-19). tier 0 = restore that cluster's
-# vendor max; tiers 1..4 = 1632/1497/1382/1267 kHz. $1=cpu0|cpu6 $2=tier $3=cluster_max
+# Per-cluster cap. Tier 0 restores the cluster max, tiers 1..4 = 1632/1497/1382/1267 MHz.
+# $1=cpu0|cpu6 $2=tier $3=cluster_max
 apply_cluster() {
     local f
     case "$2" in
@@ -265,24 +176,11 @@ apply_cluster() {
     echo "$f" > "/sys/devices/system/cpu/$1/cpufreq/scaling_max_freq" 2>/dev/null
 }
 
-# --- PREEMPTIVE ladders anchored at the MEASURED vendor throttle (2026-07-19) ---
-# Measured on Bonsai vanilla: the vendor holds a FLAT 1498 MHz from battery 46C through
-# 49C, then deep-throttles BOTH clusters to ~883 MHz the instant BATTERY hits 50.0C
-# (skin ~52.8C at that point). No vendor glide -- a hard cliff. So the watchdog stays
-# DORMANT (full clock, vendor-governed) until it enters the run-up window, then glides
-# BELOW the vendor's 1498 clamp in 0.5C steps so the temperature curve bends before it
-# can reach 50C. It only has EFFECT below 1498, so it holds 1497 across a 47.0-48.0C
-# plateau (near-full perf), then cuts in tight 0.5C steps 48.0->1382 / 48.5->1267 /
-# 49.0->1132 / 49.5->1017, bottoming at 1017 MHz right before the 50C throttle -- still
-# above the 883 floor, so we never self-throttle. Same targets for both clusters (both
-# drive battery/skin heat). Skin ladder offset +3C to track battery (skin ~50C @ bat ~47C).
-# LADDER THRESHOLDS, ENV-OVERRIDABLE (2026-08-27). Two validated settings:
-#   vendor-anchored (default): battery 47.0..49.5, skin 50.0..52.5 -- glide inside
-#     the run-up window just before the measured 50.0C deep-throttle.
-#   early (user-directed): battery 35.0-base, skin 39.5-base -- same staircase
-#     shifted down so BOTH sensors act during workloads that never near the cliff.
-# Same shape, same 0.5C spacing, same code path; only the anchor moves. Pass e.g.
-#   BAT_L0=35000 SKIN_L0=39500 sh preempt_throttle_watchdog_v2.sh ...
+# Battery and skin ladders. The vendor holds 1498 MHz, then deep-throttles both
+# clusters to about 883 MHz when the battery reaches 50.0 C. The ladder stays idle
+# until L0, then caps at 1497/1382/1267/1132/1017 MHz at L0 +0/+1.0/+1.5/+2.0/+2.5 C,
+# ending above the 883 floor. Default anchors: battery 47.0 C, skin 50.0 C.
+# Anchors are env-overridable, e.g. BAT_L0=35000 SKIN_L0=39500 for an early ladder.
 BAT_L0=${BAT_L0:-47000}; BAT_L1=$((BAT_L0+1000)); BAT_L2=$((BAT_L0+1500)); BAT_L3=$((BAT_L0+2000)); BAT_L4=$((BAT_L0+2500))
 SKIN_L0=${SKIN_L0:-50000}; SKIN_L1=$((SKIN_L0+1000)); SKIN_L2=$((SKIN_L0+1500)); SKIN_L3=$((SKIN_L0+2000)); SKIN_L4=$((SKIN_L0+2500))
 perf_bat_cap() {
@@ -338,24 +236,21 @@ label_for_tier() {
     esac
 }
 
-# Battery current in mA from dumpsys (negative = discharging on this device).
-# We track the ABS so "drop in load current" can be detected. The watchdog
-# baseline is established at startup from the first few samples.
+# Battery current in mA from dumpsys, as an absolute value (negative means
+# discharging on this device) so a drop in load current can be detected.
 read_battery_ma() {
-    # Try dumpsys battery; the line is "current now: <microamps>".
+    # dumpsys line is "current now: <microamps>".
     local raw
     raw=$(dumpsys battery 2>/dev/null | awk -F': ' '/current now/ {print $2; exit}')
     if [ -z "$raw" ]; then
         echo 0
         return
     fi
-    # raw is micro-amperes; convert to mA. Use absolute value.
+    # microamps to mA, absolute value.
     awk -v v="$raw" 'BEGIN { x = v/1000; if (x<0) x=-x; printf "%d", x }'
 }
 
-# -------------------------------------------------------------------------
 # Header
-# -------------------------------------------------------------------------
 TS=$(date +%s)
 echo "[$TS] preempt_throttle_watchdog v2 (PREEMPTIVE battery+skin ladder -- gradual glide before throttle)" > "$LOG"
 echo "[$TS] zones (resolved by name): ddr=$DDR_ZONE cpu=$CPU_ZONE soc=$SOC_ZONE skin=$SKIN_ZONE bat=$BAT_ZONE" >> "$LOG"
@@ -377,16 +272,14 @@ echo "[$TS] LOG=$LOG STOP=$STOP" >> "$LOG"
 echo "[$TS] tier=0 MAX=$F_MAX kHz (initial)" >> "$LOG"
 apply_tier 0
 
-# -------------------------------------------------------------------------
 # Main loop
-# -------------------------------------------------------------------------
 TIER=0
 DOM_SENSOR=none
 DOM_THREAT=0
 DOWN_CNT=0
 PRIME_TIER=0 ; PERF_TIER=0 ; LAST_PRIME=-1 ; LAST_PERF=-1 ; PDOWN=0 ; FDOWN=0
 
-# Battery-current baseline (mA). Established as max of first ~6 samples.
+# Battery-current baseline (mA), the running max of polled values.
 BAT_BASE_MA=0
 BAT_TICK=0
 LAST_BAT_MA=0
@@ -400,12 +293,12 @@ while [ ! -f "$STOP" ]; do
 
     # Slow path: battery temp + current (dumpsys is expensive).
     if [ "$BAT_TICK" -le 0 ]; then
-        # Battery temp is also exposed as a thermal zone; read it cheaply.
+        # Battery temp comes from its thermal zone, which is cheap to read.
         t_bat_zone=$(read_zone_mc "$BAT_ZONE")
         T_BAT_MC=$t_bat_zone
         ima=$(read_battery_ma)
         LAST_BAT_MA=$ima
-        # Update baseline: max of first 6 polls then frozen.
+        # Baseline is the running max.
         if [ "$BAT_BASE_MA" -lt "$ima" ]; then
             BAT_BASE_MA=$ima
         fi
@@ -429,21 +322,20 @@ while [ ! -f "$STOP" ]; do
         fi
     fi
 
-    # Max-of-threats arbitration (CPU/DDR/SOC/current -> BACKSTOP only; the primary
-    # drivers are the direct battery+skin ladders below).
+    # Max of DDR/CPU/SoC/current threats, a backstop signal only. The battery
+    # and skin ladders below set the caps.
     T_EFF=$th_ddr ; BS_DOM=DDR ; BS_T=$t_ddr ; BS_W=$DDR_WARN_MC ; BS_C=$DDR_CRIT_MC
     if [ "$th_cpu" -gt "$T_EFF" ];  then T_EFF=$th_cpu ;  BS_DOM=CPU_big ; BS_T=$t_cpu ;  BS_W=$CPU_WARN_MC ;  BS_C=$CPU_CRIT_MC ; fi
     if [ "$th_soc" -gt "$T_EFF" ];  then T_EFF=$th_soc ;  BS_DOM=SOC ;     BS_T=$t_soc ;  BS_W=$SOC_WARN_MC ;  BS_C=$SOC_CRIT_MC ; fi
     if [ "$th_bati" -gt "$T_EFF" ]; then T_EFF=$th_bati ; BS_DOM=Bat_I ;   BS_T=0 ;       BS_W=0 ;             BS_C=0 ; fi
 
-    # --- Per-cluster frequency ladders (user-directed 2026-07-19) ---
-    # perf & prime caps = min(battery ladder, skin ladder); DDR>=64C floors both to 1267.
+    # Per-cluster cap = min(battery ladder, skin ladder).
     pf_b=$(perf_bat_cap "$T_BAT_MC") ; pf_s=$(perf_skin_cap "$t_skin")
     perf_cap=$pf_b ; [ "$pf_s" -lt "$perf_cap" ] && perf_cap=$pf_s
     pr_b=$(prime_bat_cap "$T_BAT_MC") ; pr_s=$(prime_skin_cap "$t_skin")
     prime_cap=$pr_b ; [ "$pr_s" -lt "$prime_cap" ] && prime_cap=$pr_s
-    # DDR backstop only: DDR runs 66-69C normally on this workload and is NOT the throttle
-    # trigger (battery 50C is), so floor to 1267 only at a genuinely high 71C.
+    # DDR backstop. DDR runs 66-69 C on this workload and is not the throttle
+    # trigger (battery 50 C is), so floor to 1267 only at 71 C.
     if [ "$t_ddr" -ge 71000 ]; then
         [ 1267200 -lt "$perf_cap" ] && perf_cap=1267200
         [ 1267200 -lt "$prime_cap" ] && prime_cap=1267200

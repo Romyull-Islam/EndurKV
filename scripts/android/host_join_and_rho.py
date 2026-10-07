@@ -1,28 +1,8 @@
 #!/usr/bin/env python3
-"""
-host_join_and_rho.py — post-run analysis for the on-phone study.
+"""Join per-step entropy (and .attn.bin top-1 attention, if present) with sensor samples
+per prompt, write <log_dir>.joined.csv, and print pooled Spearman rho, thermal and pswpout.
 
-For each prompt_id in --log-dir:
-  * read <id>.entropy.csv  (per-step entropy + top-k)
-  * read <id>.sensors.csv  (per-sample thermal + memory + endurance signals)
-  * read <id>.run.json     (start_wall_s for time-join)
-  * IF .attn.bin present: parse and compute per-step layer-averaged top-1 attention
-                          (the metric used in the paper for ρ = -0.37)
-
-Outputs:
-  <log_dir>.joined.csv     all per-step rows joined to nearest sensor sample
-                           + an `attn_top1_layer_avg` column when .attn.bin was found
-
-Console summary:
-  * Pooled Spearman ρ between H_nats and attn_top1_layer_avg (paper metric)
-  * Pooled Spearman ρ between H_nats and top1_prob (entropy_probe fallback)
-  * Gate decision against the proposal's fallback threshold ρ <= -0.20
-  * Thermal trajectory: max ACTIVE zone (filtering trip-point zones with constant
-    high values), and the dT over the run
-  * pswpout delta in pages and KB (4 KB pages) — primary non-root endurance signal
-
-Run:
-  python scripts/android/host_join_and_rho.py [--log-dir logs/study_phone_1b]
+Usage: python scripts/android/host_join_and_rho.py [--log-dir logs/study_phone_1b]
 """
 from __future__ import annotations
 
@@ -37,12 +17,10 @@ HERE = Path(__file__).resolve()
 WORKSPACE = Path(os.environ.get("WORKSPACE", HERE.parents[3]))
 
 
-# ---------- attn.bin parser --------------------------------------------------
+# attn.bin parser
 def parse_attn_bin(path: Path) -> list[float]:
-    """Return a list of length n_steps with per-step layer-averaged top-1 attention.
-
-    Returns [] if the file is missing or malformed.
-    """
+    """Per-step layer-averaged top-1 attention (length n_steps), or [] if the file
+    is missing or malformed."""
     if not path.exists():
         return []
     try:
@@ -92,9 +70,8 @@ def parse_attn_bin(path: Path) -> list[float]:
         return []
 
 
-# ---------- thermal zone classifier ------------------------------------------
-# Thermal zones that report STATIC values are configured trip thresholds, not
-# real readings; they pollute "max temp" stats.  Filter them out.
+# Thermal zones with static values are trip thresholds, not readings, so they are
+# excluded from max-temperature stats.
 TRIP_PATTERNS = ("cpu-hw-trip", "_trip_", "bcl-lvl", "ibat-lvl", "vbat", "pmh", "pmr", "pmih010")
 
 
@@ -103,7 +80,7 @@ def is_trip_zone(col: str) -> bool:
     return any(pat in low for pat in TRIP_PATTERNS)
 
 
-# ---------- main ------------------------------------------------------------
+# main
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--log-dir", default=str(WORKSPACE / "logs" / "study_phone_1b"))
@@ -158,7 +135,7 @@ def main() -> int:
         # Wall-clock join.
         ent["step_wall_s"] = run["start_wall_s"] + ent["wall_clock_us"] / 1e6
 
-        # Optional attention sidecar — produces a new column.
+        # Optional attention sidecar - produces a new column.
         attn_top1 = parse_attn_bin(attn_path)
         if attn_top1:
             have_attn = True
@@ -177,9 +154,7 @@ def main() -> int:
             tolerance=1.0,
         )
         merged["prompt_id"] = pid
-        # run.json doesn't carry the task, but every prompt_id is "<task>_<NNN>".
-        # Derive task from the prefix so per-task rollups work without a join
-        # back to the original prompts.jsonl.
+        # prompt_id is "<task>_<NNN>", so take the task from the prefix.
         if "_" in pid and pid.rsplit("_", 1)[-1].isdigit():
             merged["task"] = pid.rsplit("_", 1)[0]
         else:
@@ -217,9 +192,7 @@ def main() -> int:
             except Exception:
                 dT_C = 0.0
 
-        # Endurance proxy: pswpout delta from /proc/vmstat would be in the sampler
-        # output. The smoke-version sampler doesn't yet emit it; defensively read
-        # whatever endurance columns are present.
+        # Endurance proxy: pswpout (or pgmajfault) delta, if the sampler logged it.
         pswpout_delta = 0
         for col in ("vmstat_pswpout", "vmstat_pgmajfault"):
             if col in sen.columns:

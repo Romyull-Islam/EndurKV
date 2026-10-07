@@ -1,17 +1,8 @@
 #!/bin/bash
-# boot_watch.sh -- record device reboots against campaign activity.  (2026-08-04)
-#
-# WHY. The phone restarted several times mid-campaign and we could not say whether
-# a benchmark was running at the time. That matters: "sustained Adreno load reboots
-# the device" would be a finding worth reporting, while "the user rebooted it"
-# is not -- and we nearly wrote the former. Android's boot reason distinguishes
-# them (reboot / kernel_panic / watchdog / shutdown,thermal) but only for the MOST
-# RECENT boot, and /sys/fs/pstore is cleared once read. So we sample continuously.
-#
-# Each boot is detected via /proc/sys/kernel/random/boot_id, which is regenerated
-# on every boot. On a change we log: the new boot id, Android's boot reason, and
-# -- the part that was missing -- whether an eviction_bench was running just
-# before, plus the last thermal reading we saw. Cheap: one adb call every 30 s.
+# boot_watch.sh: log phone reboots with the boot reason, whether eviction_bench was
+# running just before, and the last DDR and battery temperatures. Polls every 30 s
+# because Android keeps the boot reason only for the most recent boot.
+# A reboot shows up as a change in /proc/sys/kernel/random/boot_id.
 LOG=${1:-/tmp/boot_watch.log}
 PORT=${ANDROID_ADB_SERVER_PORT:-5152}
 prev_id=""; last_busy=0; last_ddr=""; last_bat=""

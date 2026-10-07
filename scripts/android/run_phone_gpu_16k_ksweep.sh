@@ -1,22 +1,9 @@
 #!/bin/bash
-# ============================================================================
-# Phone GPU 16K -- Phi-3 K sweep (2026-08-02)
-#
-# WHY. run_phone_gpu_16k_wikitext.sh fixes K=1024, which on Phi-3 gives a
-# compression ratio r~11.5 and a batch-1 roofline ceiling of
-#     S = (W + KV)/(W + KV/r) = (2.2 + 2.88)/(2.2 + 0.25) = 2.00x.
-# Llama-1B was measured at 87% of its own ceiling, so K=1024 Phi-3 is expected
-# to land ~1.7-1.9x -- just short of the 2x target. Lowering K raises r and
-# therefore raises the ceiling:  K=512 -> r~23 -> 2.19x ;  K=256 -> r~46 -> 2.30x.
-# NIAH put the retrieval quality knee at K=128, so K=512 and K=256 are both
-# inside the region where quality is already shown to hold -- this buys speedup
-# without spending accuracy, which is the only reason it is worth running.
-#
-# Vanilla is NOT re-run: the K=1024 pass already measured it on this exact
-# workload and vanilla does not depend on K. Speedups are computed against that
-# same-session vanilla cell, so no cross-session comparison is introduced.
-# Watchdog v5 on (muKV-only); cool gate before every cell.
-# ============================================================================
+# run_phone_gpu_16k_ksweep.sh: Phi-3 on the phone GPU at 16K context, muKV at lower K than the
+# K=1024 run of run_phone_gpu_16k_wikitext.sh. Smaller K raises the compression ratio and the
+# bandwidth roofline speedup S = (W + KV) / (W + KV/r).
+# Vanilla is not rerun, it does not depend on K and the K=1024 run already measured it.
+# Watchdog v5 on muKV cells only, cool gate before every cell.
 set -u
 for _p in ${ADB_PORTS:-5152 5037 5151}; do
   (exec 3<>/dev/tcp/127.0.0.1/$_p) 2>/dev/null || continue

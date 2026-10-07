@@ -1,8 +1,7 @@
 #!/bin/bash
-# assert_binary_current.sh — guard against running a stale eviction_bench.
-# Aborts if the SOURCE is newer than the built binary, or if the on-device
-# binary differs from the freshly-built host binary. Source this (or call) at
-# the top of any GPU/CPU run script BEFORE launching eviction_bench.
+# assert_binary_current.sh: abort if eviction_bench.cpp is newer than the built binary,
+# or if the device binary's SHA-256 differs from the host build. Call it in run scripts
+# before launching eviction_bench.
 #
 # Usage: bash assert_binary_current.sh <build-dir> [device-binary-path]
 #   e.g. bash assert_binary_current.sh entropy_probe/build-android-vulkan \

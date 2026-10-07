@@ -1,39 +1,19 @@
 #!/bin/bash
-# phone_full_sweep_3model_3policy.sh — full GPU sweep across 3 models × 3 policies.
-#
-# Models (Q4_K_M, on phone):
-#   1. Llama-3.2-1B-Instruct          ngl=16  (all layers on GPU)
-#   2. Phi-3-mini-4k-instruct (~3.8B) ngl=32
-#   3. Llama-3.1-8B-Instruct          ngl=32  (NOT 33 → output layer crashes Adreno)
-#
-# Policies (priority order):  v1 (ours)  →  vanilla  →  tova
-# Prompts:                    5 LongBench tasks
-# K budgets:                  1024  (aggressive ≈12%),  2048 (paper-standard ≈25%)
-# Replicates:                 3 per cell → mean ± std
-# Sampling protocol:          IDENTICAL across all policies
-#     repeat-penalty 1.1  temperature 0.8  top-k 40  top-p 0.95  n-sink 4
-# Vanilla:                    FA-on (production-realistic baseline)
-# Eviction policies:          FA-off (need kq_soft_max)
-# Vulkan / Adreno safety:     ubatch=64  (TDR-safe — see README)
-#
-# Cells: 3 models × 3 policies × 5 prompts × 2 K × 3 reps = 270 runs
-# Wall time estimate (GPU): 3 - 6 min/cell on 8B, less on smaller models
-#   → roughly 12 - 24 h total
-#
-# Output:  /data/local/tmp/endurkv/logs/sweep3M_<ts>/<model>/<policy>/K<K>/<prompt>/rep<N>/
-#
-# Pulled to: /home/mislam22/EndurKV_workspace/phone-logs/sweep3M_<ts>/
+# Phone GPU sweep: MODELS x POLICIES x K x prompts x reps (settings below).
+# Sampling settings are the same for every policy. Vanilla runs FA-on, eviction
+# policies run FA-off because they need kq_soft_max. ubatch=64 keeps Vulkan on
+# Adreno under the TDR limit.
+# Phone output: /data/local/tmp/endurkv/logs/sweep3M_<ts>/<model>/<policy>/K<K>/<prompt>/rep<N>/
+# Pulled to:    /home/mislam22/EndurKV_workspace/phone-logs/sweep3M_<ts>/
 
 set -e
 export PATH=/home/mislam22/tools/platform-tools:$PATH
 
 POLICIES="v1 vanilla tova"
-# Single K budget (1024) for the first wave — fits 8B CPU runs in ~10h total.
-# Add K=2048 in a follow-on phase once Wave-1 results land.
+# One K budget keeps the sweep short.
 K_BUDGETS="1024"
 PROMPT_DIR=prompts/longbench
-# 3 prompts (one per task category) — Wave-1 grid is intentionally small.
-# Full 5-prompt grid is a Wave-2 expansion.
+# 3 prompts, one per task category.
 PROMPT_IDS="qasper_pub_001 hotpotqa_pub_001 multifieldqa_en_pub_001"
 N_REPLICATES=2
 MAX_TOKENS=128
@@ -46,11 +26,8 @@ UBATCH=${UBATCH:-64}
 BIN_DIR=${BIN_DIR:-bin}
 
 # model_path|model_tag|ngl|n_batch|ubatch|ctx_size
-# All-GPU sweep across 3 distinct architectures (Llama, Gemma, Phi), all <7B.
-# Why not 7B/8B: Adreno 840 TDR watchdog kills attention kernels at long prompts
-# for any 7B+ model (Llama-8B, Mistral-7B, Qwen2-7B, DeepSeek-Llama-8B all
-# DeviceLost-crashed at LongBench prompt lengths). Phi-3 (3.8B) is the upper
-# end of what fits on this GPU.
+# Models stay under 7B: on Adreno 840 the TDR watchdog kills attention kernels
+# of 7B+ models at LongBench prompt lengths (DeviceLost).
 MODELS=(
     "models/Llama-3.2-1B-Instruct-Q4_K_M.gguf|Llama-3.2-1B|16|512|64|10240"
     "models/gemma-2-2b-it-Q4_K_M.gguf|Gemma-2-2B|26|512|64|8192"
@@ -89,9 +66,9 @@ run_count=0
 for MODEL_ENTRY in "${MODELS[@]}"; do
     IFS='|' read -r MODEL MODEL_TAG NGL NBATCH UB CTX <<< "$MODEL_ENTRY"
     echo "" | tee -a "$PROG_LOG"
-    echo "=========================================================================" | tee -a "$PROG_LOG"
+    echo "=" | tee -a "$PROG_LOG"
     echo "[$(date)] MODEL=$MODEL_TAG  ngl=$NGL  n_batch=$NBATCH  ubatch=$UB  ctx=$CTX" | tee -a "$PROG_LOG"
-    echo "=========================================================================" | tee -a "$PROG_LOG"
+    echo "=" | tee -a "$PROG_LOG"
 
     REP=0
     while [ $REP -lt $N_REPLICATES ]; do

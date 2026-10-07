@@ -12,9 +12,7 @@ echo "[orch] starting at $(date)" | tee -a "$LOG"
 MODEL=models/Llama-3.1-8B-Instruct-Q4_K_M.gguf
 PHONE_ROOT=/data/local/tmp/endurkv
 
-# ------------------------------------------------------------------------
 # STEP 1: wait for WT2-PPL
-# ------------------------------------------------------------------------
 echo "[orch] waiting for llama-perplexity (WT2-PPL) to finish ..." | tee -a "$LOG"
 while adb shell "ps -A | grep -q llama-perplexity" 2>/dev/null; do
     sleep 60
@@ -33,9 +31,7 @@ adb pull $PHONE_ROOT/logs/wt2_ppl/ /home/mislam22/EndurKV_workspace/phone-logs/ 
 echo "[orch] WT2 PPL final estimate:" | tee -a "$LOG"
 grep -E "Final estimate|estimate.*PPL" /home/mislam22/EndurKV_workspace/phone-logs/wt2_ppl/ppl_output.txt 2>/dev/null | tee -a "$LOG"
 
-# ------------------------------------------------------------------------
 # STEP 2: validate Vulkan (push GPU stack, run llama-bench briefly)
-# ------------------------------------------------------------------------
 echo "" | tee -a "$LOG"
 echo "[orch] === STEP 2: VALIDATE VULKAN ===" | tee -a "$LOG"
 
@@ -73,9 +69,7 @@ else
     echo "[orch] ✗ Vulkan failed (no benchmark numbers); falling back to CPU" | tee -a "$LOG"
 fi
 
-# ------------------------------------------------------------------------
 # STEP 3: deploy whichever backend + launch full sweep
-# ------------------------------------------------------------------------
 echo "" | tee -a "$LOG"
 echo "[orch] === STEP 3: DEPLOY + LAUNCH SWEEP (use_vulkan=$USE_VULKAN) ===" | tee -a "$LOG"
 
@@ -125,9 +119,7 @@ adb push /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/phone_cool_the
         $PHONE_ROOT/scripts/ 2>&1 | tail -1
 adb shell "chmod 755 $PHONE_ROOT/scripts/phone_cool_then_run.sh"
 
-# ------------------------------------------------------------------------
 # STEP 4: launch the full sweep
-# ------------------------------------------------------------------------
 echo "" | tee -a "$LOG"
 echo "[orch] === STEP 4: LAUNCH FULL SWEEP (8B) ===" | tee -a "$LOG"
 N_GPU_LAYERS=$N_GPU_LAYERS \

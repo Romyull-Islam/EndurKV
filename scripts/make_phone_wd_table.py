@@ -1,30 +1,10 @@
 #!/usr/bin/env python3
-# ============================================================================
-# make_phone_wd_table.py -- the complete phone-GPU watchdog x compaction table.
-# (2026-08-08)
-#
-# EVERY TIMING COLUMN, because the summary form hid what the run actually cost.
-# prefill and decode are separated (not folded into wall) since muKV's scoring adds
-# to PREFILL while its saving is entirely in DECODE -- a wall-clock-only view nets
-# those against each other and understates both. Energy is reported as total joules
-# AND as mJ/token, because the two answer different questions: joules is what the
-# battery pays for the whole request, mJ/token is what it pays per unit of output.
-#
-# mJ/token IS ONLY COMPARABLE WHEN THE STEP COUNT MATCHES. Every gen cell generates
-# exactly 4096 tokens, so mJ/token is comparable across the gen block. The ppl cells
-# are teacher-forced over a different number of steps per arm (4165 vs 5474), so their
-# mJ/token is NOT comparable and this table prints total joules for them instead of a
-# per-token figure that would invite a false comparison.
-#
-# PEAK TEMPS ARE IN THE TABLE because the watchdog arms are a NULL and the temperatures
-# are the evidence for why: both daemons started correctly and neither ever stepped the
-# clock, since a cold-start 4096-token generation never reaches their trip points
-# (v5LOW battery 36.0 C / skin 39.5 C; v5HIGH 47.0 / 50.0). Printing wd_steps beside the
-# peaks is what separates "the controller did not help" from "the controller never ran".
-#
-# ENERGY is integrated from the USB rail (see phone_cell_report.py): battery current_now
-# reads 0 with USB online on this device, so a gauge-based number would read zero.
-# ============================================================================
+# make_phone_wd_table.py: phone-GPU table of watchdog setting x compaction mode for muKV.
+# Prefill and decode are separate columns, since muKV adds cost to prefill and saves in decode.
+# mJ/token is printed only for gen cells (all 4096 tokens). PPL cells run different step
+# counts per arm, so they get total joules. Peak temperatures sit beside wd_steps to show
+# whether the watchdog ever stepped. Energy is the USB rail integral, because battery
+# current_now reads 0 while USB is online on this device.
 import csv, json, math, os, re, sys
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "/tmp/phone_wd_matrix"
@@ -114,10 +94,10 @@ def row(tag):
                 e=energy_j(d), ppl=ppl, bat=b, skin=s, wd=wd_steps(d))
 
 
-# ------------------------------- text ---------------------------------------
+# text
 g = {t: row(t) for t, *_ in GEN}
 van = g.get("gen_vanilla")
-print("=== GENERATION: 12K prompt + 4096 tokens, ctx 16384, f16, cool gate before each cell ===")
+print("GENERATION: 12K prompt + 4096 tokens, ctx 16384, f16, cool gate before each cell")
 h = ("%-22s %-7s %-11s %8s %8s %8s %7s %7s %7s %7s %8s %9s %6s %6s %4s" %
      ("policy", "wdog", "compaction", "prefill", "decode", "wall", "tok/s", "dec x",
       "wall x", "cells", "peakRSS", "energy", "mJ/tok", "bat C", "wd"))
@@ -138,7 +118,7 @@ for tag, lab, wd, cm in GEN:
 p = {t: row(t) for t, *_ in PPL}
 vp = p.get("ppl_vanilla")
 print()
-print("=== QUALITY: teacher-forced PPL on a slice verified DISJOINT from the prompt (0/119 windows) ===")
+print("QUALITY: teacher-forced PPL on a slice verified DISJOINT from the prompt (0/119 windows)")
 h2 = ("%-22s %-11s %8s %8s %8s %7s %8s %9s %9s" %
       ("policy", "compaction", "prefill", "wall", "cells", "kept", "peakRSS", "energy", "PPL"))
 print(h2); print("-" * len(h2))
@@ -154,7 +134,7 @@ for tag, lab, wd, cm in PPL:
 print("  (mJ/token omitted here: the arms are teacher-forced over different step counts,")
 print("   so a per-token energy figure would not be comparable across these rows.)")
 
-# watchdog verdict, stated from the data rather than assumed
+# watchdog verdict from the data
 print()
 for tag, lab, wd, cm in GEN:
     r = g.get(tag)

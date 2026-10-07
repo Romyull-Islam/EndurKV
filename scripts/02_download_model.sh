@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase 0 — download Llama 3.2 1B Instruct Q4_K_M GGUF.
+# Phase 0 - download Llama 3.2 1B Instruct Q4_K_M GGUF.
 # Run from the EndurKV root:  bash scripts/02_download_model.sh
 # Idempotent. Skips if the file already exists with the right name.
 
@@ -23,7 +23,7 @@ if [ -f "$MODEL_PATH" ] && [ -s "$MODEL_PATH" ]; then
 fi
 
 echo "Downloading from $PRIMARY_URL ..."
-echo "(If this 401s, the bartowski mirror has gone gated; tell Claude and we'll switch source.)"
+echo "(If this returns 401, the bartowski mirror is gated. Switch to another source.)"
 wget --progress=bar:force -O "${MODEL_PATH}.tmp" "$PRIMARY_URL"
 mv "${MODEL_PATH}.tmp" "$MODEL_PATH"
 

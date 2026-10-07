@@ -1,51 +1,16 @@
 #!/bin/bash
-# host_wave11_progress.sh — Wave-11 interim watchdog.
-#
-# Purpose
-# -------
-# While `phone_wave11_eval.sh` is grinding through the 30-cell Wave-11 Tier-1
-# manifest on the OnePlus 15, we want a *cheap* host-side check we can run
-# from a cron / a tmux babysitter (or just by hand) that:
-#
-#   1. Reads /tmp/wave11_phone.txt for the absolute phone-side run directory
-#      (written by phone_wave11_eval.sh at launch time).
-#   2. Pulls NEW data only — rsync-style by comparing on-device mtime to the
-#      host mirror mtime so a wedged USB cable doesn't cost us 10 GB of
-#      redundant pulls. Uses scripts/android/adb_resilient.sh helpers so
-#      transient adb hiccups self-heal.
-#   3. Computes interim aggregates from the mirror:
-#        - cells_complete / cells_total           (cell == model x policy x bench)
-#        - per-policy mean PPL (across chunks done so far, all models pooled)
-#        - ETA based on observed per-cell wall time when available, otherwise
-#          the manifest's expected_cell_minutes.
-#   4. Prints ONE clean status line per invocation (cron-friendly):
-#        [wave11 watchdog HH:MM:SS] cells X/30 (Y partial) | per-policy ppl: ...
-#                                 | ETA Zh | last cell done HH:MM:SS
-#   5. Optionally renders figures/eval_plots/wave11_interim_pareto.png — a
-#      tiny per-policy mean-PPL vs cells-complete pareto — IF matplotlib is
-#      importable in the workspace venv. The full ppl/niah/markdown render
-#      is delegated to eval_pipeline/wave11_interim_plot.py.
-#
-# Idempotent: every step is safe to re-run. Locks itself with flock so two
-# cron ticks don't fight over the same adb session.
-#
-# Exit codes:
-#   0 — produced a status line (regardless of whether evals are done)
-#   2 — /tmp/wave11_phone.txt missing or empty (cannot determine run dir)
-#
-# Usage:
-#   bash /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/host_wave11_progress.sh
-#
-# Cron example (every 5 minutes):
-#   */5 * * * * /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/host_wave11_progress.sh \
-#       >> /tmp/wave11_watchdog.log 2>&1
+# Host-side progress check for a running phone_wave11_eval.sh campaign.
+# Reads the phone run dir from /tmp/wave11_phone.txt, pulls only files whose
+# mtime changed, prints one status line (cells done, per-policy mean PPL, ETA),
+# and renders figures/eval_plots/wave11_interim_pareto.png if matplotlib exists.
+# Safe to re-run, flock prevents overlapping cron ticks. Exit 2 if no run dir.
+# Usage: bash scripts/android/host_wave11_progress.sh
+# Cron:  */5 * * * * .../host_wave11_progress.sh >> /tmp/wave11_watchdog.log 2>&1
 
 set -u
 set -o pipefail
 
-# ---------------------------------------------------------------------------
 # Paths
-# ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENDURKV_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 WORKSPACE_ROOT="$(cd "$ENDURKV_ROOT/.." && pwd)"
@@ -66,28 +31,21 @@ for cand in "$WORKSPACE_ROOT/.venv/bin/python" "$WORKSPACE_ROOT/.venv/bin/python
 done
 [ -z "$PY" ] && PY="python3"
 
-# ---------------------------------------------------------------------------
 # Resilient ADB helpers
-# ---------------------------------------------------------------------------
 # shellcheck source=adb_resilient.sh
 source "$SCRIPT_DIR/adb_resilient.sh"
 
 ts() { date '+%H:%M:%S'; }
 say() { printf '[wave11 watchdog %s] %s\n' "$(ts)" "$*"; }
 
-# ---------------------------------------------------------------------------
 # Single-instance lock (cron safety)
-# ---------------------------------------------------------------------------
 exec 9>"$LOCK_FILE" || { say "could not open lock $LOCK_FILE"; exit 0; }
 if ! flock -n 9; then
-    # Another invocation already running — nothing to do.
     say "another instance is running (lock $LOCK_FILE); exiting"
     exit 0
 fi
 
-# ---------------------------------------------------------------------------
 # 1. Resolve the phone-side run dir
-# ---------------------------------------------------------------------------
 if [ ! -s "$PHONE_TXT" ]; then
     say "missing or empty $PHONE_TXT — no run to watch"
     exit 2
@@ -104,9 +62,7 @@ mkdir -p "$FIG_OUT_DIR"
 mkdir -p "$(dirname "$MTIME_DB")"
 touch "$MTIME_DB"
 
-# ---------------------------------------------------------------------------
 # 2. rsync-style pull: enumerate remote files with mtimes, compare to local DB
-# ---------------------------------------------------------------------------
 ADB_OK=0
 if adb get-state 2>/dev/null | grep -q '^device$'; then
     ADB_OK=1
@@ -117,10 +73,8 @@ SKIPPED=0
 PULL_ERRORS=0
 
 if [ "$ADB_OK" -eq 1 ]; then
-    # `find -printf` isn't available on Android toybox find, so use stat per
-    # file via a single shell command. Listing files newer than the recorded
-    # global watermark would also work, but a per-file mtime sweep is more
-    # robust to partially-pulled trees (a previous tick that died mid-pull).
+    # Toybox find has no -printf, so stat each file. A per-file mtime sweep
+    # also recovers from a previous tick that died mid-pull.
     REMOTE_LIST_RAW="$(adb_safe_shell "
         if [ -d '$PHONE_RUN_DIR' ]; then
             find '$PHONE_RUN_DIR' -type f 2>/dev/null \
@@ -131,13 +85,12 @@ if [ "$ADB_OK" -eq 1 ]; then
         fi
     " 2>/dev/null || true)"
 
-    # Build an associative map from the local mtime DB.
     declare -A LOCAL_MTIME
     while IFS=$'\t' read -r p m; do
         [ -n "$p" ] && LOCAL_MTIME["$p"]="$m"
     done < "$MTIME_DB"
 
-    # New DB content is accumulated in a tmp file and atomically swapped at end.
+    # new DB is written to a tmp file and swapped in at the end
     NEW_DB="$MTIME_DB.tmp.$$"
     : > "$NEW_DB"
 
@@ -167,10 +120,7 @@ else
     say "adb device offline; using local mirror as-is"
 fi
 
-# ---------------------------------------------------------------------------
-# 3. Compute interim aggregates (pure Python, stdlib only).
-#    Emits a single JSON line on stdout that the shell parses below.
-# ---------------------------------------------------------------------------
+# 3. Interim aggregates (stdlib Python), emitted as one JSON line.
 AGG_JSON="$("$PY" - "$LOCAL_RUN_DIR" "$MANIFEST_JSON" <<'PYEOF' 2>/dev/null || echo '{}'
 import json, math, os, sys, time
 from pathlib import Path
@@ -183,12 +133,11 @@ try:
 except Exception:
     manifest = {}
 
-# Defaults that match wave11_interim_plot.py's contract.
+# defaults match wave11_interim_plot.py
 chunks_per_cell = manifest.get("n_ppl_chunks_per_cell_group", 8)
 total_cells = 30                              # 3 models x 5 policies x 2 benches
 total_expected_minutes = float(manifest.get("total_expected_minutes") or 1395.6)
-# wave11_cells.json lists 240 cells (== 30 cell-groups x 8 chunks). Convert
-# expected minutes/chunk into minutes/cell-group:
+# wave11_cells.json lists 240 cells (30 cell groups x 8 chunks), so convert to minutes per group
 minutes_per_cell = total_expected_minutes / max(total_cells, 1)
 
 def read_ppl(meta):
@@ -241,11 +190,10 @@ if run_dir.is_dir():
 n_complete = sum(1 for c in cells if c["status"] == "complete")
 n_partial = sum(1 for c in cells if c["status"] == "partial")
 n_pending_seen = sum(1 for c in cells if c["status"] == "pending")
-# The denominator is the wave manifest size even if some cells haven't been
-# created on disk yet.
+# denominator is the manifest size, even for cells not yet on disk
 remaining = max(0, total_cells - n_complete)
 
-# Per-policy mean PPL (pool across models & chunks).
+# per-policy mean PPL, pooled across models and chunks
 per_policy = {}
 for c in cells:
     if c["bench"] != "ppl" or not c["ppls"]:
@@ -256,7 +204,7 @@ for c in cells:
         bucket["sum"] += v
 per_policy_mean = {p: (b["sum"] / b["n"]) for p, b in per_policy.items() if b["n"] > 0}
 
-# Per-policy progress (cells complete out of (models * benches) per policy).
+# per-policy cells complete out of models x benches
 per_policy_progress = {}
 for c in cells:
     pp = per_policy_progress.setdefault(c["policy"], {"complete": 0, "total": 0})
@@ -264,7 +212,7 @@ for c in cells:
     if c["status"] == "complete":
         pp["complete"] += 1
 
-# ETA: prefer observed mean-time-per-completed-cell, fall back to manifest.
+# ETA from observed time per completed cell, else from the manifest
 done_mtimes = sorted(c["last_mtime"] for c in cells
                      if c["status"] == "complete" and c["last_mtime"] > 0)
 observed_min_per_cell = None
@@ -294,9 +242,7 @@ sys.stdout.write(json.dumps(out))
 PYEOF
 )"
 
-# ---------------------------------------------------------------------------
-# 4. Print a single clean status line
-# ---------------------------------------------------------------------------
+# 4. Status line
 SUMMARY="$("$PY" - <<PYEOF 2>/dev/null
 import json, math, time
 try:
@@ -325,18 +271,14 @@ if [ -z "$SUMMARY" ]; then
 fi
 say "pulled=$PULLED skipped=$SKIPPED errors=$PULL_ERRORS | $SUMMARY"
 
-# ---------------------------------------------------------------------------
-# 5. Optional matplotlib render of the interim pareto
-# ---------------------------------------------------------------------------
+# 5. Optional plots
 HAVE_MPL=0
 if "$PY" -c "import matplotlib" >/dev/null 2>&1; then
     HAVE_MPL=1
 fi
 
 if [ "$HAVE_MPL" -eq 1 ]; then
-    # Delegate the heavy lifting (ppl bar, niah bar, markdown table) to the
-    # existing audit-produced module. Pass --no-sync so we don't re-pull —
-    # we already did that above with rsync-style mtime tracking.
+    # Full PPL/NIAH plots and table. --no-sync because files were pulled above.
     if [ -f "$INTERIM_PY" ]; then
         "$PY" "$INTERIM_PY" --no-sync \
             --endurkv-root "$ENDURKV_ROOT" \
@@ -344,7 +286,7 @@ if [ "$HAVE_MPL" -eq 1 ]; then
             >/dev/null 2>&1 || say "wave11_interim_plot.py failed (non-fatal)"
     fi
 
-    # Render the per-policy mean-PPL pareto. Tiny, deterministic, overwrites.
+    # Per-policy mean-PPL plot, overwritten each run.
     "$PY" - "$AGG_JSON" "$PARETO_PNG" <<'PYEOF' 2>/dev/null || say "pareto render failed (non-fatal)"
 import json, math, os, sys
 import matplotlib

@@ -1,22 +1,8 @@
 #!/bin/bash
-# ============================================================================
-# run_n3_headline.sh -- n=3 for the CPU headline rows. (2026-08-26)
-#
-# WHY. Table~1 (phone CPU, Llama-1B) is the paper's central claim and every cell
-# in it is n=1 with no error bar. The GPU table already reports n=3 with SD<=0.5%;
-# the CPU table does not, and it is the table the "best policy" claim rests on.
-# A reviewer comparing muKV 4.66x against KeyDiff 3.46x is entitled to ask whether
-# the gap survives run-to-run variance -- and we have direct evidence variance can
-# be large: vanilla_g reproduced at 3.53 tok/s where the table says 5.02, a 30%
-# swing we could not attribute to voltage, temperature or build.
-#
-# WHAT. Three repeats of the four rows the claim depends on: vanilla (the divisor),
-# muKV (the claim), KeyDiff 2K (the strongest baseline), StreamingLLM (the faithful
-# sequence-level competitor, and the row Table 1 is currently missing entirely).
-# Interleaved r1,r2,r3 rather than blocked, so slow drift hits every arm equally.
-#
-# Generations kept, battery voltage recorded per cell, cool gate authoritative.
-# ============================================================================
+# n=3 repeats of the phone CPU headline rows (Llama-3.2-1B): vanilla, muKV, KeyDiff at
+# K=2048 and StreamingLLM 4+2000. Repeats are interleaved so slow drift hits every arm
+# equally. Each cell waits for the cool gate (skipped if hot), records the starting battery
+# voltage, and keeps its generation.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 LOG(){ echo "[$(date +%H:%M:%S)] $*"; }
@@ -28,7 +14,7 @@ CB=/data/local/tmp/endurkv/bin_cpu_kd
 M=/data/local/tmp/endurkv/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 DEV=/data/local/tmp/n3head; HOST=/tmp/n3_headline
 mkdir -p $HOST; adb_safe_shell "mkdir -p $DEV/wt" < /dev/null >/dev/null 2>&1
-timeout 180 adb push /tmp/claude-1001/-home-mislam22-EndurKV-workspace/1d283ef2-8bcb-4a99-8b56-fd8d8af9f80d/scratchpad/wikitext_16k_p12k_d4k.txt "$DEV/wt/prompt.txt" < /dev/null >/dev/null 2>&1
+timeout 180 adb push "$(cd "$(dirname "$0")/../.." && pwd)/eval_corpora"/wikitext_16k_p12k_d4k.txt "$DEV/wt/prompt.txt" < /dev/null >/dev/null 2>&1
 MU="--policy v1_fa2 --fa-on-evict --compact-inplace --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70"
 
 cell(){

@@ -1,18 +1,8 @@
 #!/usr/bin/env python3
-"""Online contextual bandit trained on the real phone, one pull = one real request.
-
-Context : battery tier (healthy / mid / low), cycled, which sets the reward weights.
-Arms    : GPU clock cap {1200, 902, 726} MHz with K held at 1024 (the GPU ladder).
-Request : the 9737-token prompt, 1024 output tokens, Llama-3.2-1B on the GPU.
-Reward  : r = w_q * 1  -  w_t * T / T_ref  -  w_e * E / E_ref, from the METERED energy (USB rail
-          + battery pack, integrated from the 2 Hz sampler) and wall time of that pull.
-          E_ref, T_ref are the table's full-performance prediction for this request shape.
-Agent   : epsilon-greedy (eps 0.25) with a warm start (every arm once per context), running
-          mean per (context, arm). State persists in state.json, so the run is resumable.
-Protocol: cool gate (DDR <= 35 C, battery <= 33 C) before every pull, CPU caps pinned at
-          1785.6 / 1497.6 MHz, taskset f0 nice -20 for the bench, GPU cap restored after
-          each pull, caps and charging restored on exit.
-Usage   : run_bandit_online.py [--pulls 24] [--eps 0.25] [--out /tmp/bandit_online]
+"""Online epsilon-greedy contextual bandit on the phone, one pull = one real request.
+Context is the battery tier (sets reward weights), arms are GPU caps {1200, 902, 726} MHz at K=1024.
+Reward r = w_q - w_t T/T_ref - w_e E/E_ref from metered energy and wall time. Resumable via state.json.
+Usage: run_bandit_online.py [--pulls 24] [--eps 0.25] [--out /tmp/bandit_online]
 """
 import argparse, json, os, random, subprocess, sys, time, statistics as st
 

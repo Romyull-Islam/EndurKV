@@ -1,24 +1,7 @@
 #!/bin/bash
-# ============================================================================
-# ctx-invariance A/B (2026-07-28)
-#
-# WHY: the 336-cell NIAH table in the draft was swept at ctx=16384 for EVERY
-# cell. The current muKV/SnapKV re-run uses ctx=4096 (L4K) and 8192 (L8K), so
-# the new rows are not protocol-matched to the retained baseline rows.
-#
-# Rather than re-run all 112 cells at 16384 (~6 h without cooling), test whether
-# ctx changes RETRIEVAL at all. llama1b is the cheapest model (30-126 s/cell), so
-# 14 cells cost ~20 min. Compare hit-for-hit against the 14 llama1b muKV cells
-# already banked at 4K/8K.
-#   all 14 agree -> ctx is irrelevant to retrieval; the existing dataset stands
-#                   with a footnote, and no re-run is needed.
-#   any differ   -> pay for the full 16384 re-run, but only then.
-#
-# NO COOL GATE, deliberately. This measures HIT RATE only, which the NIAH harness
-# header states is thermally invariant; energy and tps from these cells are NOT
-# comparable and must not be reported. The cooled 4K/8K dataset remains the source
-# for anything timing- or energy-related.
-# ============================================================================
+# ctx-invariance A/B: run muKV on the 14 NIAH stimuli at ctx=$CTX (default 16384) and
+# compare hits against the existing 4K/8K cells, to check whether ctx changes retrieval.
+# No cool gate, so use these cells for hit rate only, never for timing or energy.
 set -u
 for _p in ${ADB_PORTS:-5152 5037 5151}; do
   (exec 3<>/dev/tcp/127.0.0.1/$_p) 2>/dev/null || continue   # never poke a dead port (spawns a squatting adb server)
@@ -44,7 +27,7 @@ MU="--policy v1_fa2 --fa-on-evict --n-sink 4 --adaptive-anchor --adaptive-rmin 3
 adb_safe_shell "mkdir -p $OUT" < /dev/null
 for f in "$SRC"/niah_L*_n0.txt; do adb push "$f" "$OUT/$(basename "$f")" < /dev/null >/dev/null 2>&1; done
 
-echo "=== $MODEL_TAG muKV at ctx=$CTX, no cool gate, 14 stimuli ==="
+echo "$MODEL_TAG muKV at ctx=$CTX, no cool gate, 14 stimuli"
 for STIM in $(cd "$SRC" && ls niah_L*_n0.txt); do
   id="${MODEL_TAG}__mukv__${STIM%.txt}"; PD=$OUT/$id
   [ -f "$OUT_HOST/$id/meta.json" ] && continue
@@ -57,4 +40,4 @@ for STIM in $(cd "$SRC" && ls niah_L*_n0.txt); do
   h=$(grep -qiE 'mango sorbet|bi-rite' "$OUT_HOST/$id/gen.txt" 2>/dev/null && echo HIT || echo miss)
   echo "  ${STIM%.txt}: $h"
 done
-echo "=== done -> $OUT_HOST ==="
+echo "done -> $OUT_HOST"

@@ -1,8 +1,8 @@
 #!/system/bin/sh
-# 2026-07-21 — vanilla Bonsai/Prism 8B Vulkan run using the CPU WikiText-2
-# workload: 9,737-token prompt + 4,096 decode, ctx=16,384.  Full GPU offload
-# is deliberately bounded: if prefill has not finished within 600 s, terminate
-# it and preserve logs/sensors as a prefill-timeout result.
+# Vanilla Bonsai 8B on Vulkan with the CPU WikiText-2 workload
+# (9,737-token prompt, 4,096 decode tokens, ctx 16,384, full GPU offload).
+# If prefill has not finished within 600 s, the run is killed and logs and
+# sensors are kept as a prefill-timeout result.
 
 set -u
 OUT=${1:?output directory required}

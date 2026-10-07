@@ -1,24 +1,8 @@
 #!/bin/bash
-# ============================================================================
-# run_compaction_allmodels.sh -- does compaction preserve output on EVERY model?
-# (2026-08-28)
-#
-# The gap. The byte-identity check (compacted vs uncompacted muKV at a FIXED
-# keep-set -> identical generated text) was run on Llama-3.2-1B / hotpotqa only,
-# n=15. The paper cannot claim it for Phi-3, gemma-2 (interleaved SWA) or
-# Bonsai-8B (1-bit) without running it there, and gemma is the interesting case:
-# its iSWA cache is the one layout where a sliding compaction could plausibly
-# disturb positions.
-#
-# The test. For each model, the same prompt is run twice with an identical policy
-# and budget, differing ONLY in --compact-inplace vs --no-defrag. Same seed,
-# greedy. If compaction is position-preserving the two generations must be
-# byte-identical; any difference is a real defect, not a quality trade.
-#
-# Scope. 5 hotpotqa prompts x 2 arms x 3 models = 30 cells. Quality-only, so no
-# cool gate (nothing timed is quoted from these). Ordered fastest model first so
-# an interruption still leaves complete models behind.
-# ============================================================================
+# Checks that in-place compaction preserves output on Phi-3, Bonsai-8B and gemma-2:
+# each hotpotqa prompt runs with --compact-inplace and with --no-defrag, same policy,
+# budget and greedy seed. The two generations should be byte-identical.
+# 5 prompts x 2 arms x 3 models. No cool gate, since nothing is timed.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 LOG(){ echo "[$(date +%H:%M:%S)] $*"; }
@@ -53,10 +37,8 @@ for i in 000 001 002 003 004; do
   src=/tmp/longbench_adaptive_3x3/phi3_vanilla_hotpotqa/prompt_$i.txt
   [ -f "$src" ] && timeout 180 adb push "$src" "$DEV/hp_$i.txt" < /dev/null >/dev/null 2>&1
 done
-# REORDERED 2026-08-29: gemma is already answered (2/2 pairs differ; in-place declines
-# to round-trip on its interleaved-SWA cache every time). Phi-3 and Bonsai both ENGAGE
-# in-place and are the models that decide whether the compaction claim generalises, so
-# they run first. Completed cells are cached and skipped, so nothing is repeated.
+# Phi-3 and Bonsai first, since in-place compaction engages on them but declines on
+# the gemma interleaved-SWA cache. Completed cells are skipped.
 for spec in "phi3:$MOD/Phi-3-mini-128k-instruct-Q4_K_M.gguf" "bonsai:$MOD/Bonsai-8B-Q1_0.gguf" "gemma:$MOD/gemma-2-2b-it-Q4_K_M.gguf"; do
   tag="${spec%%:*}"; gguf="${spec#*:}"
   LOG "=== model $tag ==="

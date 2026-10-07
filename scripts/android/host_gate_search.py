@@ -1,24 +1,9 @@
 #!/usr/bin/env python3
-"""Finer hyperparameter + gate-shape search for v1.
+"""Hyperparameter and gate-shape search for the v1 per-head gate.
 
-Goal: find a config with cache× ≤ 1.01 and Δ TOVA ≤ −10% (or as close as possible).
-
-Test set:
-  5 models × 1 long-context prompt × K ∈ {512, 1024} = 10 cells per config.
-
-Configs tested:
-  (A) 4-parameter linear-clipped sweep: (alpha, beta, thresh_low, thresh_high)
-      Tighter thresh windows + softened endpoints to widen per-head spread
-      while keeping average cache near 1.0.
-  (B) Sigmoid gates: smoother saturation, parameterised by (alpha, beta,
-      center c, steepness gamma).
-  (C) Quadratic gates: steeper near saturation (more bimodal allocation).
-  (D) Step gates: hard threshold — sharp heads get β, diffuse get α.
-
-Output:
-  EndurKV/figures/gate_search_results.csv
-  EndurKV/figures/gate_search_ranking.csv
-  console: cache-neutral champion
+Gates: linear-clipped, sigmoid, quadratic, inverse quadratic and step, on 5 models x
+K in {512, 1024}. Target is cache ratio <= 1.01 at the lowest KL vs TOVA.
+Writes figures/gate_search_results.csv and figures/gate_search_ranking.csv.
 """
 import sys, time
 from itertools import product
@@ -30,9 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from host_simulate_kv_baselines import load_attn_perhead, simulate, POLICIES
 
 
-# ---------------------------------------------------------------------------
 # Gate-shape policy factory
-# ---------------------------------------------------------------------------
 
 def make_linear_clipped(alpha, beta, tl, th):
     def policy(attn_ph_layer_step, K, **kw):
@@ -80,7 +63,7 @@ def make_quadratic(alpha, beta, tl, th):
             a = attn_ph_layer_step[h]
             max_a = float(a.max())
             norm = max(0.0, min(1.0, (max_a - tl) / denom))
-            # quadratic: more bimodal — slow at edges, fast in middle
+            # quadratic in norm, so the allocation is more bimodal
             mult = alpha - (alpha - beta) * (norm * norm)
             K_t = max(1, min(nk, int(round(K * mult))))
             idx = np.argpartition(-a, K_t - 1)[:K_t]
@@ -126,14 +109,12 @@ def make_step(alpha, beta, c):
     return policy
 
 
-# ---------------------------------------------------------------------------
 # Configs to test
-# ---------------------------------------------------------------------------
 
 CONFIGS = []
 
-# (A) Linear-clipped sweep — focus on cache-neutral region (α≈1.2, β≈0.8)
-# Vary thresh_low / thresh_high to find the sensitive sweet spot
+# (A) Linear-clipped sweep around the cache-neutral region (alpha 1.2, beta 0.8),
+# varying thresh_low and thresh_high
 for alpha, beta in [(1.2, 0.8), (1.25, 0.75), (1.3, 0.7), (1.3, 0.8), (1.4, 0.6)]:
     for tl, th in [(0.3, 0.6), (0.3, 0.7), (0.3, 0.8), (0.4, 0.7), (0.4, 0.8),
                    (0.5, 0.8), (0.2, 0.6)]:
@@ -144,7 +125,7 @@ for alpha, beta in [(1.2, 0.8), (1.25, 0.75), (1.3, 0.7), (1.3, 0.8), (1.4, 0.6)
             "policy_fn": make_linear_clipped(alpha, beta, tl, th),
         })
 
-# (B) Sigmoid sweep — same (alpha, beta) range, different (center, steepness)
+# (B) Sigmoid sweep over center and steepness
 for alpha, beta in [(1.3, 0.7), (1.4, 0.6), (1.5, 0.5)]:
     for c, gamma in [(0.4, 8.0), (0.4, 12.0), (0.5, 8.0), (0.5, 12.0), (0.6, 8.0)]:
         CONFIGS.append({
@@ -154,7 +135,7 @@ for alpha, beta in [(1.3, 0.7), (1.4, 0.6), (1.5, 0.5)]:
             "policy_fn": make_sigmoid(alpha, beta, c, gamma),
         })
 
-# (C) Quadratic — more bimodal
+# (C) Quadratic
 for alpha, beta in [(1.3, 0.7), (1.4, 0.6), (1.5, 0.5)]:
     for tl, th in [(0.3, 0.7), (0.4, 0.8)]:
         CONFIGS.append({
@@ -174,7 +155,7 @@ for alpha, beta in [(1.3, 0.7), (1.4, 0.6)]:
             "policy_fn": make_inv_quadratic(alpha, beta, tl, th),
         })
 
-# (E) Step — hardest split
+# (E) Step: sharp heads get beta, diffuse heads get alpha
 for alpha, beta in [(1.5, 0.5), (1.4, 0.6), (1.3, 0.7)]:
     for c in [0.4, 0.5, 0.6]:
         CONFIGS.append({
@@ -263,12 +244,12 @@ def main():
     agg = agg.sort_values("cache_adj")
     agg.to_csv(out_dir / "gate_search_ranking.csv", index=False)
 
-    print("\n=== TOP 20 by cache-adjusted Δ TOVA (lower = better) ===")
+    print("TOP 20 by cache-adjusted Δ TOVA (lower = better)")
     print(agg.head(20).to_string(index=False))
-    print("\n=== Cache-neutral (cache ≤ 1.01) best Δ TOVA ===")
+    print("Cache-neutral (cache ≤ 1.01) best Δ TOVA")
     neutral = agg[agg.mean_cache <= 1.01].sort_values("mean_delta_tova")
     print(neutral.head(10).to_string(index=False))
-    print("\n=== Best 10+% gain at any cache ===")
+    print("Best 10+% gain at any cache")
     big_gain = agg[agg.mean_delta_tova <= -10.0].sort_values("cache_pp_over")
     print(big_gain.head(10).to_string(index=False))
     return 0

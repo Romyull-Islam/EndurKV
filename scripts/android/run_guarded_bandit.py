@@ -1,33 +1,7 @@
 #!/usr/bin/env python3
-"""Guarded contextual bandit on the real phone: go for the bandit's plan only when it has learned
-it is better, otherwise fall back to the rule. The two loops stay on throughout. (2026-09-21)
-
-WHY. The first online bandit (run_bandit_online.py, 2026-09-05) had two flaws. Its fixed seed made
-all 15 of its exploration draws land at or above 0.25, so it never explored after warm-up. And it
-learned each (tier, clock) pair separately, although a plan's energy and time do not depend on the
-battery tier; only the reward weights do. It also ran with the loops off, so how learning and the
-two loops interact was never measured together.
-
-WHAT THIS DOES, per request:
-  1. context  : battery tier, cycled healthy (80%) / mid (40%) / low (15%) through --force-soc,
-                cooled first, charging off, CPU pinned as in the loop and bandit experiments.
-  2. the rule : a --dry-run of ukv_sched.sh gives the rule's plan and the weights (q, t, e) at the
-                current lever. The lever includes the loops' bias, so the loops steer the objective.
-  3. learning : per plan, the measured energy and time of every request that ran it, SHARED across
-                tiers. Reward for tier t: r = w_q - w_t T / T_ref - w_e E / E_ref, with a standard
-                error from the spread of the measurements.
-  4. decision :
-       warm-up   every plan measured twice (5 plans x 2 = 10 requests, not 9 per tier x ...)
-       go        the best-estimated plan beats the rule's plan with confidence: its lower 95% bound
-                 is above the rule's upper 95% bound  -> run it with --plan
-       explore   no confident winner, but some plan could still beat the rule (its upper bound is
-                 above the rule's lower bound) and has fewer than 6 samples -> measure it
-       fallback  otherwise -> the rule's own plan, no --plan
-  5. run      : ukv_sched.sh executes the plan, meters USB + battery pack, updates its cost table
-                and runs both loops against the plan's own budgets, exactly as deployed.
-
-The scheduler's seed table and bias are restored from bak_20260921 on the phone afterwards.
-Output goes to a persistent directory, because this host clears /tmp at every boot.
+"""Guarded contextual bandit on the phone: run the bandit's plan only when its lower 95% bound
+beats the rule plan's upper bound, explore plans that still might win, else use the rule's plan.
+Plan costs are shared across battery tiers. Output stays outside /tmp, which clears at boot.
 Usage: run_guarded_bandit.py [--requests 30] [--out ...]
 """
 import argparse, csv, json, math, os, re, statistics as st, subprocess, sys, time
@@ -154,9 +128,8 @@ def run_request(tag, soc, plan, rule, out):
     kill_strays()
     adb(f"rm -rf {ROOT}/sched/{tag}; sed -i '/tag={tag} /d' {ROOT}/ukv_sched.log", su=True)
     arg = f"--plan {plan}" if plan != rule else ""
-    # 2026-09-21: an attached nohup could keep "adb shell" open; the old code then retried the launch and
-    # started a SECOND copy of the request. Detach fully, and never re-send a launch: after a timeout,
-    # look for the request instead.
+    # Launch fully detached and never re-send it, since a retry would start a second copy.
+    # After a timeout, look for the running request instead.
     cmd = (f"su -c 'mkdir -p {ROOT}/sched; cd {ROOT} && setsid nohup sh {SCHED} --prompt {PROMPT} --tag {tag} --ignore-eos "
            f"--max-tokens 1024 --force-soc {soc} --force-status discharging {arg} > {ROOT}/sched/{tag}.stderr 2>&1 < /dev/null &'")
     try:

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""The scheduler on a real discharge of the OnePlus 15 (phone_discharge_loop.sh, 2026-09-05/06).
-Every request's energy is rebuilt from its raw sensor trace with the start-anchored split (the
-scheduler's own on-battery readings before request 100 were wrong: teardown tail and gauge lag).
-x axis: the battery level the scheduler read before the request. Sources: /tmp/discharge_final.
+"""Scheduler over a real discharge of the OnePlus 15 (phone_discharge_loop.sh), x = battery level
+read before each request. Energy is rebuilt from raw sensor traces with the start-anchored split,
+since the scheduler's own readings before request 100 were wrong. Data: /tmp/discharge_final.
 """
 import os, sys, csv, json, glob, statistics as st
 import numpy as np
@@ -54,7 +53,7 @@ plab = {"gpu1200_k1024": "1200 MHz", "gpu1200d902_k1024": "1200, decode 902", "g
 tband = {"healthy": "#eef3fb", "mid": "#fff3e3", "low": "#fde9e9"}
 
 
-# per-tier means on battery (unchanged formulas)
+# per-tier means on battery
 stats = {}
 for t, lo, hi in (("healthy", 50.5, 100), ("mid", 20.5, 50.5), ("low", 0, 20.5)):
     g = [x for x in bat if lo < x["soc"] <= hi]

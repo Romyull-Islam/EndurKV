@@ -1,15 +1,7 @@
 #!/usr/bin/env python3
-"""Quick hyperparameter exploration for EndurKV-Evict v2 (Participation Resonance).
-
-Goal: find a cache-neutral setting (avg actual_K ≈ K_nominal across heads), then
-compare KL vs perhead_v1 and TOVA at the same actual_K.
-
-Sweeps (cheap, ~20 configs total):
-  α_low ∈ {0.80, 0.85}                # min multiplier (sharp heads)
-  α_high ∈ {1.15, 1.20, 1.25, 1.30}   # max multiplier (diffuse heads)
-  γ      ∈ {6.0, 10.0}                # logistic steepness
-  c0     ∈ {0.45, 0.55}               # sigmoid center
-  λ      ∈ {0.0, 0.3, 0.6}            # edge-aware mixing (0 = off)
+"""Hyperparameter sweep for EndurKV-Evict v2 (Participation Resonance): find a cache-neutral
+setting (mean actual_K close to K_nominal), then compare KL with perhead_v1 and TOVA there.
+Grid: α_low, α_high (multiplier range), γ (logistic steepness), c0 (center), λ (edge mixing).
 """
 import sys
 from itertools import product
@@ -111,9 +103,9 @@ def main() -> int:
              .reset_index())
     # Focus on cache-neutral configs (ratio within 5% of 1.0)
     neutral = agg[(agg["mean_cache_ratio"] > 0.95) & (agg["mean_cache_ratio"] < 1.05)]
-    print("\n=== Cache-neutral configs (0.95 ≤ ratio ≤ 1.05), sorted by v2_vs_v1 ===")
+    print("Cache-neutral configs (0.95 ≤ ratio ≤ 1.05), sorted by v2_vs_v1")
     print(neutral.sort_values("v2_vs_v1").to_string(index=False))
-    print("\n=== Top 10 by v2_vs_v1 across ALL configs (any ratio) ===")
+    print("Top 10 by v2_vs_v1 across ALL configs (any ratio)")
     print(agg.sort_values("v2_vs_v1").head(10).to_string(index=False))
     return 0
 

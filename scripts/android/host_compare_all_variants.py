@@ -1,19 +1,7 @@
 #!/usr/bin/env python3
-"""Cross-variant comparison: v1, v2, v3, v4, v5, v6 vs TOVA.
-
-Runs every perhead variant on the 5 long-context LongBench captures and the
-NIAH captures, at multiple K budgets. Computes:
-  * mean KL per (model, K, variant)
-  * cache ratio (actual_K / K_nominal) per variant
-  * cache-matched KL improvement vs TOVA (so configs that use MORE cache
-    don't get unfair credit)
-  * per-cell rank
-  * overall win-rate
-
-Outputs:
-  EndurKV/figures/all_variants_comparison.csv
-  EndurKV/figures/all_variants_ranked.csv
-  EndurKV/figures/all_variants_summary.txt
+"""Compare per-head variants v1 to v6 against TOVA on the LongBench and NIAH captures:
+mean KL, cache ratio and a cache-matched KL improvement, per model and K.
+Writes figures/all_variants_{comparison,ranked}.csv and all_variants_summary.txt.
 """
 import sys
 import time
@@ -88,7 +76,7 @@ def main() -> int:
     df.to_csv(csv_path, index=False)
     print(f"\n[compare] wrote {len(df)} rows to {csv_path}")
 
-    # Aggregate per (variant, K) — average across model/prompt
+    # Aggregate per (variant, K) - average across model/prompt
     agg = (df.groupby(["variant", "K_nominal"])
              .agg(n=("model", "count"),
                   mean_cache_ratio=("cache_ratio", "mean"),
@@ -98,9 +86,8 @@ def main() -> int:
                   raw_kl_pct=("kl_pct_vs_tova", "mean"),
                   raw_mass_pp=("mass_pp_vs_tova", "mean"))
              .reset_index())
-    # Cache-matched score: penalize variants that use more cache than TOVA.
-    # Score = raw_kl_pct + κ * max(0, (cache_ratio - 1) * 100)
-    # where κ=1.0 means "1% extra cache buys you 1% KL improvement for free".
+    # Penalize variants that use more cache than TOVA: each 1% of extra cache
+    # costs KAPPA percentage points of KL improvement.
     KAPPA = 1.0
     agg["cache_adjusted_kl_pct"] = (
         agg["raw_kl_pct"] + KAPPA * np.maximum(0.0, (agg["mean_cache_ratio"] - 1.0) * 100))

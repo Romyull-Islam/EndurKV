@@ -1,10 +1,7 @@
 #!/bin/bash
-# run_snapkv_gpu_canonical.sh -- canonical per-head SnapKV on the GPU under the revised protocol (2026-09-07)
-# limiter on the request that trips it? (2026-09-07)
-#   wd_off : muKV, GPU 1200 MHz uncapped, 4096 tokens; the vendor limiter handles the heat
-#   wd_on  : same, with gpu_watchdog.sh stepping 1050 / 967 / 902 at DDR 60 / 62 / 63.5 C
-# n=3 per arm, interleaved, cooled (DDR <= 35 C, battery <= 33 C), charging off, CPU caps pinned,
-# bench pinned to the big cores. Each request launched detached on the phone and polled.
+# run_snapkv_gpu_canonical.sh: per-head SnapKV (window 64, no sinks, K 1024) on the phone GPU,
+# n=3, 4096 tokens, no watchdog. Each run is cooled (DDR <= 35 C, battery <= 33 C) with charging
+# off, CPU caps pinned and the bench on the big cores, then launched detached and polled.
 set -u
 export ANDROID_SERIAL=${ANDROID_SERIAL:-3C15B8003ZA00000}
 export ADB_CALL_TIMEOUT=1500

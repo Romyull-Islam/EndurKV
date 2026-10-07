@@ -1,26 +1,6 @@
-"""Multi-axis robust-policy ranker.
-
-Extends host_rank_best_policies.py with the metrics the dissertation needs to
-defend "alltime best eviction algorithm":
-
-  1. mean_kl_overall            — avg KL across every (dataset, K_nominal) cell
-  2. worst_case_kl              — max KL across cells (catastrophic-failure guard)
-  3. mean_kl_tightK             — avg KL filtered to the TIGHTEST K per dataset
-                                  (minimum-memory regime)
-  4. mean_margin_vs_tova_pct    — average margin over TOVA at matched K
-  5. win_rate_pct               — fraction of cells where this policy is the
-                                  rank-1 winner
-  6. latency_class              — hand-graded per-step compute cost
-                                  (cheap=O(K), midweight=O(K*H), heavy=O(K^2))
-  7. coverage                   — n_observations / n_cells_total
-                                  (penalises policies tested in fewer regimes)
-
-Produces a single "robust_rank" by rank-product across the four primary axes:
-mean_kl_overall, worst_case_kl, mean_kl_tightK, mean_margin_vs_tova_pct.
-
-Outputs (logs/_consolidated/):
-  - robust_ranking.csv           (full table, sorted by robust_rank)
-  - robust_top10.md              (markdown summary for EXPERIMENTS.md)
+"""Rank eviction policies by the sum of their ranks on mean KL, worst-case KL, KL at the
+tightest K, margin over TOVA and (at half weight) coverage. Also reports win rate.
+Writes logs/_consolidated/robust_ranking.csv and robust_top10.md.
 """
 from __future__ import annotations
 import os
@@ -33,8 +13,8 @@ import pandas as pd
 WORKSPACE = Path(os.environ.get("WORKSPACE", str(Path(__file__).resolve().parents[3])))
 LOGS = WORKSPACE / "logs"
 
-# Hand-graded per-step compute cost. "cheap" = ~TOVA cost. "midweight" = adds
-# accumulators / EWMA but still O(K*H). "heavy" = matrix ops O(K^2) or SVD.
+# Hand-graded per-step cost: cheap is about TOVA, midweight adds accumulators or
+# EWMA at O(K*H), heavy uses O(K^2) matrix ops or SVD.
 LATENCY_CLASS = {
     # cheap layer-avg
     "tova": "cheap", "h2o": "cheap", "h2o_norec": "cheap",
@@ -46,7 +26,7 @@ LATENCY_CLASS = {
     "endurkv_differential": "cheap", "endurkv_v1_differential": "cheap",
     "lazyeviction": "cheap", "lwkd": "cheap", "ahakv": "cheap",
     "pyramidkv": "cheap", "cake": "cheap", "cake_entropy": "cheap",
-    # midweight layer-avg (FFT / Wasserstein require sorting / fft per step)
+    # midweight layer-avg (FFT or sorting per step)
     "endurkv_spectral": "midweight", "endurkv_v1_spectral": "midweight",
     "endurkv_v1_spec_nodc": "midweight", "endurkv_v1_spec_diff": "midweight",
     "endurkv_wasserstein": "midweight", "endurkv_v1_wasserstein": "midweight",
@@ -70,7 +50,7 @@ def tag_dir(dirname: str) -> tuple[str, str, str]:
     name = dirname.lower()
     if "smoke" in name:
         return ("smoke", "smoke", "smoke")
-    # Model detection — order matters (Llama-3.2 is 1B/8B; cross-arch models named explicitly).
+    # Order matters: named architectures first, then Llama 8B and 1B.
     if "mistral" in name:
         model = "Mistral-7B"
     elif "qwen2" in name or "qwen_2" in name:
@@ -88,7 +68,7 @@ def tag_dir(dirname: str) -> tuple[str, str, str]:
     else:
         model = "?"
 
-    # Context — explicit benchmarks override generic short/long detection.
+    # Named benchmarks take precedence over short/long detection.
     if "longbench" in name:
         ctx = "longbench"
     elif "niah" in name:
@@ -103,11 +83,8 @@ def tag_dir(dirname: str) -> tuple[str, str, str]:
     else:
         ctx = "short-ctx"
 
-    # Probe kind. Explicit suffix wins. Order matters here:
-    #   *_layeravg          → layer-avg (cross-arch ATTN sister dirs)
-    #   *perhead* / *per_head* → per-head
-    #   eval_<arch>_<bench>  (without _layeravg) → per-head (default cross-arch sim)
-    #   anything else        → layer-avg
+    # Probe kind: *_layeravg is layer-avg, *perhead* and eval_<arch>_<bench> are
+    # per-head, anything else is layer-avg.
     if name.endswith("_layeravg") or "_layeravg_" in name:
         kind = "layer-avg"
     elif "perhead" in name or "per_head" in name:
@@ -155,8 +132,7 @@ def main() -> int:
     if df.empty:
         return 1
 
-    # Prefer the freshest sim per cell — pick source_dir with the most rows
-    # (so the comprehensive 38-policy sim wins over an older 22-policy sim).
+    # Per cell, use the source_dir with the most rows (the sim with the most policies).
     pref = (df.groupby(["cell", "source_dir"]).size().rename("n_rows").reset_index())
     pref = pref.sort_values(["cell", "n_rows"], ascending=[True, False])
     chosen = pref.drop_duplicates("cell", keep="first")[["cell", "source_dir"]]
@@ -181,12 +157,11 @@ def main() -> int:
         winner = g.sort_values("mean_kl").iloc[0]["policy"]
         win_counter[winner] = win_counter.get(winner, 0) + 1
 
-    # Margin vs TOVA per (policy, cell, K) — TOVA at matched cell+K
+    # Margin vs TOVA at the same cell and K
     margin_rows = []
     for _, r in df.iterrows():
         if r["policy"] in ("full", "tova", "perhead_tova", "local"):
             continue
-        # Find matching TOVA row in the same cell at matched K
         tova_name = "perhead_tova" if "per-head" in r["sim_kind"] else "tova"
         match = df[(df["cell"] == r["cell"])
                    & (df["K_nominal"] == r["K_nominal"])
@@ -229,11 +204,10 @@ def main() -> int:
         })
     rank = pd.DataFrame(rows)
 
-    # Robust rank = rank-product across the four primary axes (lower = better).
-    # Penalise low coverage by adding a coverage-rank too.
+    # Robust rank sums the ranks of the four main axes plus a coverage rank (lower is better).
     for col in ("mean_kl_overall", "worst_case_kl", "mean_kl_tightK"):
         rank[f"r_{col}"] = rank[col].rank(method="min", ascending=True)
-    # margin: NaN means "couldn't compare to TOVA" — push to the bottom.
+    # NaN margin (no TOVA row to compare) ranks last
     rank["r_margin"] = rank["mean_margin_vs_tova_pct"].rank(method="min", ascending=True, na_option="bottom")
     rank["r_coverage"] = rank["coverage_pct"].rank(method="min", ascending=False)  # higher coverage = lower rank number
 
@@ -250,7 +224,6 @@ def main() -> int:
 
     print("\n" + "=" * 100)
     print(f"ROBUST RANKING — across {n_cells} cells × {total_cells_K} (cell, K) pairs")
-    print("=" * 100)
     cols_display = [
         "robust_rank", "policy", "latency_class",
         "mean_kl_overall", "worst_case_kl", "mean_kl_tightK",

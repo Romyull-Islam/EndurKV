@@ -1,29 +1,15 @@
 #!/bin/bash
-# ============================================================================
-# NATURAL-DVFS CPU campaign (HotMobile, correct protocol -- 2026-07-18).
-#
-# CHANGE vs run_definitive_cpu.sh: NO artificial 1632 cap. The 1632 cap was an
-# experimental sub-cap below the vendor's own limits; the vendor.oplus.ha perf
-# daemon raised scaling_max back to 2438 under load, so some cells "breached" it.
-# The kernel's REAL sustained thermal limit is ~1.6 GHz (it clamps big cores from
-# the 2438 boost ceiling down to ~1.5-1.6 GHz once the phone heats), so we let the
-# vendor DVFS + thermal engine govern EVERY cell identically from a cold start.
-# This is realistic, comparable, and captures muKV's "finishes before throttle"
-# advantage instead of hiding it.
-#
-# Build: bin_cpu_v87 = NEW armv8.7-a build (i8mm/dotprod/repack kernels; matches
-# Bonsai). All prior /tmp/def_cpu data was armv8-a -> NOT comparable, hence a
-# clean full re-run of all 9 policies here.
-# Baselines: canonical, native DVFS, NO watchdog. muKV: native DVFS + surface-aware
-# watchdog v2 (muKV-only; glides clock down before the kernel cliff).
-# WikiText 9737-tok prompt + 4096 decode, ctx 16384, Llama-3.2-1B Q4_K_M, k=1024.
-# ============================================================================
+# Bonsai-8B CPU campaign under natural DVFS: no artificial clock cap, so the vendor
+# DVFS and thermal engine govern every cell the same way from a cold start.
+# Baselines run without a watchdog, muKV runs with watchdog v2.
+# WikiText prompt plus 4096 decoded tokens, ctx 16384, K=1024, on the armv8.7-a build
+# bin_cpu_v87, whose results are not comparable with the older armv8-a builds.
 set -u; export ANDROID_ADB_SERVER_PORT=5151
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 OUT_HOST=/tmp/nat_bonsai; mkdir -p "$OUT_HOST"
 TS=$(date +%Y%m%d_%H%M%S); OUT=/data/local/tmp/endurkv/logs/natbonsai_$TS
 adb_safe_shell "mkdir -p $OUT" < /dev/null
-SCR=/tmp/claude-1001/-home-mislam22-EndurKV-workspace/1d283ef2-8bcb-4a99-8b56-fd8d8af9f80d/scratchpad
+SCR="${SCR:-$(cd "$(dirname "$0")/../.." && pwd)/eval_corpora}"
 adb push "$SCR/wikitext_16k_p12k_d4k.txt" "$OUT/prompt.txt" < /dev/null >/dev/null 2>&1
 adb push "$SCR/wiki_eval_disjoint.txt" "$OUT/eval.txt" < /dev/null >/dev/null 2>&1
 adb push /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/preempt_throttle_watchdog_v2.sh \
@@ -44,8 +30,8 @@ while true; do
 done
 adb_safe_shell "su -c 'echo 0 > /sys/class/oplus_chg/battery/mmi_charging_enable'" < /dev/null
 
-# NATURAL DVFS: undo any leftover experimental cap by restoring scaling_max to the
-# vendor ceiling (writing cpuinfo_max is clamped to 2438 by the vendor). NO 1632.
+# Undo any leftover clock cap by restoring scaling_max to the vendor ceiling
+# (the vendor clamps a cpuinfo_max write to 2438).
 platform_natural(){ adb_safe_shell "su -c 'pkill -9 -f eviction_bench 2>/dev/null; pkill -9 -f sample_sensors 2>/dev/null; touch $WD_STOP; for c in cpu6 cpu7; do cat /sys/devices/system/cpu/\$c/cpufreq/cpuinfo_max_freq > /sys/devices/system/cpu/\$c/cpufreq/scaling_max_freq; done'" < /dev/null; }
 start_wd(){ adb_safe_shell "su -c 'rm -f $WD_STOP; nohup sh /data/local/tmp/preempt_throttle_watchdog_v2.sh /data/local/tmp/cpu_wd_$1.log $WD_STOP >/dev/null 2>&1 &'" < /dev/null; }
 stop_wd(){ adb_safe_shell "su -c 'touch $WD_STOP'" < /dev/null; }
@@ -64,14 +50,14 @@ coolidle(){ local T0=$(date +%s)
   done; }
 
 run(){ local CELL=$1 WD=$2; shift 2; local PD=$OUT/$CELL
-  # RESUME: skip only fully-complete cells (ppl.json written last). A tunnel drop costs at most the in-flight cell.
+  # Resume: skip cells whose ppl.json, written last, exists.
   [ -f "$OUT_HOST/$CELL/ppl.json" ] && { echo "[$(date +%H:%M:%S)] skip $CELL (already complete)"; return; }
   echo "[$(date +%H:%M:%S)] $CELL (wd=$WD)"; platform_natural; coolidle
   adb_safe_shell "mkdir -p $PD" < /dev/null
   [ "$WD" = 1 ] && start_wd "$CELL"
   adb_safe_shell "su -c 'nohup sh /data/local/tmp/endurkv/scripts/sample_sensors.sh --out $PD/sensors.csv --hz 5 >/dev/null 2>&1 &'" < /dev/null
   sleep 2; local t0=$(date +%s%N)
-  # tunnel-resilient GEN: write a device runner, nohup it (survives a tunnel drop), poll for DONE
+  # Run gen through a nohup device script so a tunnel drop does not kill it, then poll for DONE.
   cat > /tmp/rest2_bench.sh <<EOF
 #!/system/bin/sh
 rm -f $PD/gen.DONE
@@ -84,7 +70,7 @@ EOF
   local t1=$(date +%s%N)
   adb_safe_shell "su -c 'pkill -f sample_sensors 2>/dev/null'" < /dev/null
   mkdir -p "$OUT_HOST/$CELL"; echo "$(( (t1-t0)/1000000 ))" > "$OUT_HOST/$CELL/wall_ms"
-  # tunnel-resilient PPL: same pattern
+  # PPL, same pattern
   cat > /tmp/rest2_ppl.sh <<EOF
 #!/system/bin/sh
 rm -f $PD/ppl.DONE
@@ -99,7 +85,7 @@ EOF
   echo "  [done $CELL] gen=$(grep -oE 'decode_tps=[0-9.]+' "$OUT_HOST/$CELL/gen.err" 2>/dev/null|head -1) ppl=$(grep -oiE 'ppl[= ][0-9.]+|perplexity[= :]+[0-9.]+' "$OUT_HOST/$CELL/ppl.err" 2>/dev/null|head -1)"
 }
 MU="--policy v1_fa2 --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70"
-# all 9 policies, one consistent build + natural DVFS
+# One build, natural DVFS
 run mukv_faon     1 $MU --fa-on-evict   # muKV-mass-full (Solution 2 fa-on-evict + CPU defrag), NEW watchdog active
 run adakv         0 --policy adakv --n-sink 0 --obs-window 32
 run streamingllm  0 --policy streamingllm --n-sink 4

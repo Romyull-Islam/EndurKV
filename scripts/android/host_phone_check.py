@@ -1,21 +1,7 @@
 #!/usr/bin/env python3
-"""
-host_phone_check.py — first thing to run after the phone is plugged in.
-
-Checks:
-  1. adb sees the device (state == 'device', not 'unauthorized'/'offline')
-  2. Reports model / device / SoC / Android version / kernel / ABI
-  3. Reports whether `su` is available (root status, optional for the study)
-  4. Pushes scripts/discover_sensors.sh and runs it
-  5. Pulls the resulting sensor_map.txt back to logs/sensor_map_<device>.txt
-  6. Prints a one-line OK / FAIL summary the user can read at a glance
-
-No build artifacts are pushed yet; that happens in host_run_study.py.
-
-Usage:
-  python scripts/android/host_phone_check.py
-  WORKSPACE=/d/Research/EndurKV_workspace python scripts/android/host_phone_check.py
-"""
+"""Phone check to run after plugging in: adb state, device identity, root status, then runs
+discover_sensors.sh and pulls logs/sensor_map_<device>.txt. Prints a one-line OK/FAIL summary.
+Usage: [WORKSPACE=...] python scripts/android/host_phone_check.py"""
 from __future__ import annotations
 
 import os
@@ -39,9 +25,7 @@ def shell(s: str) -> str:
 
 
 def main() -> int:
-    print("=" * 60)
     print("  EndurKV phone-side setup check")
-    print("=" * 60)
 
     # 1) adb devices
     r = run([ADB, "devices"])
@@ -117,13 +101,13 @@ def main() -> int:
         print(f"OK: sensor map saved to {out_path}")
         with open(out_path, encoding="utf-8", errors="replace") as f:
             head = f.read(2000)
-        print("\n--- first 2 KB of sensor map ---")
+        print("first 2 KB of sensor map")
         print(head)
-        print("--- (truncated) ---")
+        print("(truncated)")
     else:
         print("WARN: could not pull sensor map.")
 
-    print("\n=== ready for host_run_study.py ===")
+    print("ready for host_run_study.py")
     return 0
 
 

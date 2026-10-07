@@ -1,36 +1,28 @@
 #!/bin/bash
-# ============================================================================
-# WATCHDOG PREEMPTION TEST (2026-07-19). Vanilla Bonsai-8B + PREEMPTIVE watchdog v3
-# (ladders anchored at the MEASURED battery-50C vendor throttle).
-#
-# WHY vanilla: it reliably drives the battery to 50C and the vendor deep-throttles
-# BOTH clusters to ~883 MHz (see /tmp/nat_bonsai/vanilla: 85.6min, 883 sawtooth 40-86min).
-# This runs the SAME vanilla workload (4096 decode) WITH the new watchdog, whose 47-49C
-# glide (1497->1017 MHz, below the vendor's flat 1498) is designed to bend the temp curve
-# and keep the battery UNDER 50C so the 883 cliff never triggers.
-# COMPARE against the no-watchdog baseline /tmp/nat_bonsai/vanilla.
-# ============================================================================
+# Watchdog preemption test: vanilla Bonsai-8B (4096 decode) with the preemptive CPU watchdog.
+# Vanilla drives the battery to the vendor's 50 C deep-throttle point, so this checks whether
+# stepping the clock down earlier keeps the battery below it. Compare with the no-watchdog
+# run in /tmp/nat_bonsai/vanilla.
 set -u; export ANDROID_ADB_SERVER_PORT=5151
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 OUT_HOST=/tmp/wd_vanilla; mkdir -p "$OUT_HOST"
 OUT=/data/local/tmp/endurkv/logs/wdvanilla_$(date +%s 2>/dev/null || echo run)
 adb_safe_shell "mkdir -p $OUT" < /dev/null
-SCR=/tmp/claude-1001/-home-mislam22-EndurKV-workspace/1d283ef2-8bcb-4a99-8b56-fd8d8af9f80d/scratchpad
+SCR="${SCR:-$(cd "$(dirname "$0")/../.." && pwd)/eval_corpora}"
 adb push "$SCR/wikitext_16k_p12k_d4k.txt" "$OUT/prompt.txt" < /dev/null >/dev/null 2>&1
-# push the NEW (reframed) watchdog
+# push the watchdog
 adb push /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/preempt_throttle_watchdog_v2.sh \
          /data/local/tmp/preempt_throttle_watchdog_v2.sh < /dev/null >/dev/null 2>&1
 MODEL=/data/local/tmp/endurkv/models/Bonsai-8B-Q1_0.gguf
 CB=/data/local/tmp/endurkv/bin_cpu_v87
 WD_STOP=/data/local/tmp/cpu_wd.stop
 
-# SKIP charge: phone is already cold (battery ~32C = matched to the no-wd baseline cold
-# start); charging would heat the battery and break that match. Just disable charging so
-# battery temp reflects load, not charging.
+# No pre-charge: charging would heat the battery and break the cold-start match with the
+# baseline. Charging is disabled so battery temperature reflects load only.
 adb_safe_shell "su -c 'echo 0 > /sys/class/oplus_chg/battery/mmi_charging_enable'" < /dev/null
 echo "  [skip charge; matched cold start, SoC $(adb_safe_shell "su -c 'cat /sys/class/power_supply/battery/capacity'" < /dev/null|tr -d '\r')%]"
 
-# zone resolution (same as the systems campaign)
+# resolve thermal zones by name
 ZMAP=$(adb_safe_shell "su -c 'for z in /sys/class/thermal/thermal_zone*; do printf \"%s:%s \" \$(basename \$z|sed s/thermal_zone//) \$(cat \$z/type 2>/dev/null); done'" < /dev/null|tr -d '\r')
 z_by_name(){ echo "$ZMAP" | tr ' ' '\n' | grep -E ":$1\$" | head -1 | cut -d: -f1; }
 DDR_Z=$(z_by_name ddr); SHELL_Z=$(z_by_name shell_front)
@@ -40,7 +32,7 @@ echo "  [zones] cpu=($CPU_ZS) ddr=$DDR_Z shell=$SHELL_Z"
 # restore vendor max first (undo any leftover cap), watchdog off
 adb_safe_shell "su -c 'touch $WD_STOP; for c in cpu0 cpu6; do cat /sys/devices/system/cpu/\$c/cpufreq/cpuinfo_max_freq > /sys/devices/system/cpu/\$c/cpufreq/scaling_max_freq; done'" < /dev/null
 
-# COLD gate (match systems baseline: cpu<37 ddr<37 shell<34)
+# cold gate, same as the baseline: cpu<37 ddr<37 shell<34
 echo "[$(date +%H:%M:%S)] cooling to cpu<37/ddr<37/shell<34 ..."
 T0=$(date +%s)
 while true; do
@@ -51,13 +43,13 @@ while true; do
   sleep 10
 done
 
-# start the NEW watchdog (writes its own tier log) + full sensor sampling (matches baseline)
+# start the watchdog (writes its own tier log) and sensor sampling
 adb_safe_shell "su -c 'rm -f $WD_STOP; nohup sh /data/local/tmp/preempt_throttle_watchdog_v2.sh /data/local/tmp/cpu_wd_vanilla.log $WD_STOP >/dev/null 2>&1 &'" < /dev/null
 adb_safe_shell "su -c 'nohup sh /data/local/tmp/endurkv/scripts/sample_sensors.sh --out $OUT/sensors.csv --hz 5 >/dev/null 2>&1 &'" < /dev/null
 sleep 2
 
 echo "[$(date +%H:%M:%S)] vanilla Bonsai + PREEMPTIVE watchdog (4096 decode) -- nohup on-device (tunnel-resilient)"
-# Write a device-side runner so the bench is DETACHED and survives a tunnel blip.
+# device-side runner so the bench runs detached and survives a tunnel drop
 BENCH_SH=/tmp/wdvan_bench.sh
 cat > "$BENCH_SH" <<EOF
 #!/system/bin/sh
@@ -83,4 +75,4 @@ adb pull "$OUT/gen.err"       "$OUT_HOST/gen.err"       < /dev/null >/dev/null 2
 adb pull /data/local/tmp/cpu_wd_vanilla.log "$OUT_HOST/cpu_wd_vanilla.log" < /dev/null >/dev/null 2>&1
 touch /tmp/wd_vanilla_DONE
 echo "[$(date +%H:%M:%S)] WD-VANILLA DONE -> $OUT_HOST"
-echo "--- watchdog tier transitions ---"; grep -iE 'PERF=|PREEMPTIVE|BATTERY|SKIN' "$OUT_HOST/cpu_wd_vanilla.log" 2>/dev/null | tail -15
+echo "watchdog tier transitions"; grep -iE 'PERF=|PREEMPTIVE|BATTERY|SKIN' "$OUT_HOST/cpu_wd_vanilla.log" 2>/dev/null | tail -15

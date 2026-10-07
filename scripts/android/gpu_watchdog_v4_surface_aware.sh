@@ -1,17 +1,9 @@
 #!/system/bin/sh
-# GPU watchdog v4 — SURFACE-AWARE PREDICTIVE, COOPERATES WITH THE QUALCOMM THERMAL ENGINE.
-#
-# Vendor mechanism (verified on-device + Qualcomm docs): the Adreno 840 is driven by the
-# msm-adreno-tz governor; a separate Thermal-Engine PID reads SKIN + BATTERY thermistors
-# and caps the GPU clock via cooling_device35 (18 states) down the authorized freq table.
-# Skin/battery throttling begins ~40C skin / ~37C battery; under sustained heat the cap
-# steps LOW down the table (826 -> 726 -> ...). Our clustering independently found the same
-# trigger (shell~41C, battery~36.3C, ~30s hysteresis) for sustained LLM decode.
-#
-# v4 anticipates the Thermal Engine: it acts on the SAME skin/battery signals but a step
-# EARLIER, and holds an authorized INTERMEDIATE rung (>=826) so the Thermal Engine never
-# needs to deep-throttle. All clocks are legal freq_table entries. gpu_tmu (real GPU-junction
-# TMU sensor) is the backstop. Reduce-only; releases when skin+battery cool.
+# GPU watchdog v4, surface-aware. The vendor Thermal Engine caps the Adreno 840
+# clock from the skin and battery thermistors (from about 40 C skin, 37 C battery).
+# This acts on the same signals a little earlier and holds an intermediate
+# freq_table rung (>= 826 MHz), so the vendor cap does not need to go deeper.
+# The gpuss zones are a backstop. Reduce-only, releases when skin and battery cool.
 #
 # Args: $1 log  $2 stop sentinel
 LOG=${1:-/data/local/tmp/gpu_wd.log}
@@ -20,15 +12,12 @@ MAXCLK=/sys/kernel/gpu/gpu_max_clock
 GZONES="36 37 38 39 40 41 42 43 44 45 46"    # gpuss subsystem zones (GPU-junction backstop; gpu_tmu absent post-reboot)
 SZONES="55 56 57"                            # shell_front/frame/back (post-reboot zone IDs)
 BATZ=93
-# authorized Adreno 840 freq_table (subset, MHz) — predictive floor 826, never dives lower
+# Adreno 840 freq_table subset (MHz), floor 826
 TIERS="1200 1050 967 902 826"; NTIER=4
-# act BEFORE the Thermal Engine (~40C skin / ~37C battery): trigger ~1C earlier
-# PARAMETERIZED 2026-08-08: trip points come from the environment so the same
-# controller can be run at two settings without forking this file. Defaults are the
-# original v4 values, so any previous invocation behaves identically.
-#   LOW  (aggressive, acts earlier): SHELL_HI=38500 BAT_HI=35000 SHELL_LO=36500 BAT_LO=34000
-#   HIGH (conservative, acts later): SHELL_HI=40500 BAT_HI=37000 SHELL_LO=38500 BAT_LO=36000
-# The original 39500/36000 sits between them, so LOW and HIGH bracket the shipped setting.
+# Trip points (milli-C), about 1 C before the Thermal Engine. Override from the
+# environment, for example:
+#   LOW:  SHELL_HI=38500 BAT_HI=35000 SHELL_LO=36500 BAT_LO=34000
+#   HIGH: SHELL_HI=40500 BAT_HI=37000 SHELL_LO=38500 BAT_LO=36000
 SHELL_HI=${SHELL_HI:-39500}; BAT_HI=${BAT_HI:-36000}   # enter pre-region -> step down one rung
 SHELL_LO=${SHELL_LO:-37500}; BAT_LO=${BAT_LO:-35000}   # both cooled -> release up one rung
 GPU_CAP=90000                                # safety net on max gpuss zone; surface predictor acts first

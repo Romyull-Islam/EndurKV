@@ -1,12 +1,6 @@
 #!/system/bin/sh
-# phone_sweep_cooled.sh — Paper-grade sweep with cool-down + replicates.
-#
-# Standard practice for mobile LLM benchmarks:
-#   1. Cool phone to skin ≤ 38°C OR max 5 min wait before each run
-#   2. Run eviction_bench with full instrumentation (eviction_bench + sample_sensors)
-#   3. Record starting temps + cool-down duration alongside the run meta
-#   4. Repeat each (policy, K, prompt) cell N_REPLICATES times for variance
-#   5. Order: policies cycle per prompt to spread thermal bias
+# phone_sweep_cooled.sh: sweep with a cool-down before each run and N_REPLICATES reps.
+# Each run waits for skin <= 38 C (max 5 min) and records its start temps and cool-down time.
 #
 # Usage on phone:
 #   sh scripts/phone_sweep_cooled.sh --model models/X.gguf
@@ -70,17 +64,14 @@ total=$((n_p * n_k * n_pr * N_REPLICATES))
 echo "[sweep] total runs: $total (policies=$n_p × K=$n_k × prompts=$n_pr × replicates=$N_REPLICATES)"
 
 run_count=0
-# Outer: replicate index (so each rep cycles through all combos before next rep)
-# This spreads any thermal bias evenly across policies.
+# Each rep covers every cell before the next starts, to spread thermal bias across policies.
 REP=0
 while [ "$REP" -lt "$N_REPLICATES" ]; do
     REP=$((REP + 1))
-    # Inner: prompt → policy → K
-    # Per replicate, cycle policies in different order to reduce sequence bias
+    # Loop prompt, then policy, then K. Even reps reverse the policy order.
     if [ $((REP % 2)) -eq 1 ]; then
         ORDER="$POLICIES"
     else
-        # Reverse for even replicates
         ORDER=$(echo $POLICIES | awk '{for(i=NF;i>=1;i--) printf "%s ", $i}')
     fi
 

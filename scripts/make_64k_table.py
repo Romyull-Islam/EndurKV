@@ -1,34 +1,8 @@
 #!/usr/bin/env python3
-# ============================================================================
-# make_64k_table.py -- the complete 64K comparison.  (2026-08-07)
-#
-# ONE TABLE, EVERY COLUMN, because the 64K story cannot be read from any single
-# number. It needs quality (PPL) next to speed (prefill/decode/wall/tok-s) next to
-# memory (peak RSS, peak KV) next to what was actually kept (cells, evicted), and it
-# needs the COMPACTION MODE named in the row -- otherwise two rows with identical
-# keep-sets and very different memory look like the same experiment.
-#
-# WHY THE ARMS ARE SPLIT THE WAY THEY ARE. muKV's speedup comes from two separable
-# mechanisms and the paper had been quoting their product as one number:
-#   eviction alone  (--no-defrag)      : survivors are marked free but NOT moved, so
-#                                        attention still scans to the highest occupied
-#                                        index and decode stays O(N). Worth ~1.03x.
-#   eviction + compaction              : survivors made contiguous -> decode O(K).
-# The "none" rows are what isolate that, and they belong in the table rather than in a
-# footnote, because "muKV is 2x" is only true of the compacted arm.
-#
-# ROUNDTRIP vs INPLACE select the same cells; they differ only in HOW the survivors are
-# made contiguous (a second context at 2x peak memory, versus a chunked slide inside the
-# tensors prefill already allocated). The check below verifies the KEEP-SET is identical
-# -- that part is exact -- and then that PPL agrees to within floating-point
-# reassociation. It does NOT demand bit-equality: compaction changes how many KV tiles
-# the flash-attention kernel walks, so the reduction is summed in a different order, and
-# ~0.05% is the expected consequence. An earlier version of this script asserted
-# bit-equality and reported "compaction is not lossless" on provably identical keep-sets.
-#
-# PPL IS ON A DISJOINT SLICE. An earlier version evaluated on text that overlapped the
-# 57K prompt, which measures recall, not prediction, and gave vanilla a PPL of 1.03.
-# ============================================================================
+# Builds the 64K comparison table: PPL, timing, memory and kept cells per arm, with
+# the compaction mode in each row. Eviction alone ("none") leaves survivors in place,
+# so decode stays O(N). Compaction makes them contiguous and decode O(K).
+# Usage: make_64k_table.py [RUN_DIR]   (default /tmp/rtx64k_matrix)
 import json, os, re, sys
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "/tmp/rtx64k_matrix"
@@ -50,15 +24,8 @@ ARMS = [
 
 
 def kv_allocs(d):
-    """Total KV buffer actually ALLOCATED, from the backend's own log.
-
-    This is the only honest memory number for the compaction comparison. peak_kv_mb
-    in meta.json is the cache's nominal capacity (n_ctx cells) and is therefore
-    identical for every arm -- it cannot see that the round-trip has TWO caches
-    resident at once. peak_rss_kb only sees the host side, and on a discrete GPU the
-    cache lives in VRAM. llama.cpp logs one "KV buffer size" line per allocated
-    cache, so counting them is what distinguishes 1x from 2x.
-    """
+    """Count and total MiB of allocated KV buffers, from the "KV buffer size" log lines.
+    peak_kv_mb is nominal and cannot see the second cache of round-trip compaction."""
     e = os.path.join(d, "err")
     if not os.path.exists(e):
         return 0, 0.0
@@ -111,7 +78,7 @@ for tag, lab, cmode in ARMS:
 
 van = next((r for r in rows if r["tag"] == "vanilla"), None)
 
-# ---------------- plain text (for reading) ----------------
+# plain text (for reading)
 hdr = ("%-22s %-11s %9s %8s %8s %8s %8s %7s %7s %8s %9s %13s %8s" %
        ("arm", "compaction", "PPL", "prefill", "decode", "wall", "tok/s",
         "dec x", "wall x", "cells", "evicted", "KV alloc", "peakRSS"))
@@ -126,16 +93,9 @@ for r in rows:
              r["prefill"], r["decode"], r["wall"], r["tps"], dx, wx,
              r["cells"], r["evicted"], r["kv_mb"] / max(1, r["kv_n"]), r["kv_n"], r["rss"]))
 
-# Quality-neutrality check, in two parts, because they are different claims.
-#
-# 1. The KEEP-SET must be identical across compaction modes at the same K. This is
-#    exact and is the claim that matters: compaction changes where survivors LIVE,
-#    never which cells survive. cells + evicted_prefill prove it directly.
-# 2. PPL is then expected to agree to within floating-point reassociation, NOT to the
-#    last bit. Compaction changes the number of KV tiles the flash-attention kernel
-#    walks, so the reduction is summed in a different order. An earlier version of this
-#    script demanded bit-equality and flagged a 0.05% spread as "compaction is not
-#    lossless", which was wrong -- the keep-sets were provably identical.
+# Compaction modes at the same K must keep exactly the same cells. PPL should then
+# agree up to floating-point reassociation, not bit for bit, because compaction
+# changes how many KV tiles flash attention sums over.
 print()
 for K in ("k1024", "k8192", "kfree"):
     fam = [r for r in rows if K in r["tag"]]
@@ -153,7 +113,7 @@ for K in ("k1024", "k8192", "kfree"):
             "  ".join("%s=%.4f" % (r["cmode"], r["ppl"]) for r in fam_p), hi - lo, 100 * rel,
             "= FP reassociation, as expected" if rel < 2e-3 else "<-- TOO LARGE, investigate"))
 
-# ---------------- LaTeX ----------------
+# LaTeX
 tex = []
 tex.append("% auto-generated by scripts/make_64k_table.py -- do not hand-edit")
 tex.append(r"\begin{table*}[tb]")

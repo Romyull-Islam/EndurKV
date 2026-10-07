@@ -1,19 +1,8 @@
 #!/usr/bin/env python3
-"""
-host_kv_growth_plot.py — generate the foundational KV-growth thermal figure.
+"""KV-growth thermal figure: DDR temperature over time per cond_* run, aligned with the
+per-step KV cell count from steps.csv. Writes kv_growth_temperature.png.
 
-Reads each kvgrow condition (cond_{A,B,C,D}_*) directory and aligns:
-  - sensors.csv: time-series of DDR temp, CPU temp, skin temp, battery temp
-  - steps.csv:   per-decode-step KV cell count and tok/s
-
-Produces:
-  - kv_growth_temperature.png — DDR temp vs time, one line per condition,
-    with KV cache size as a secondary annotation.
-
-Usage:
-  python host_kv_growth_plot.py <kvgrow_dir>
-
-Where <kvgrow_dir> is the host-side directory holding cond_*/sensors.csv etc.
+Usage: python host_kv_growth_plot.py <kvgrow_dir>   (holds cond_*/sensors.csv etc.)
 """
 import sys, os, json, csv, glob
 import argparse
@@ -23,11 +12,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# ---------------------------------------------------------------------------
-# sensors.csv schema (from sample_sensors.sh):
-#   t_wall_us, then a bunch of thermal_zone* / battery / freq / pid columns
-# We robustly find: t (time), ddr (NSP HMX or "ddr"-named zone), cpu, skin, batt
-# ---------------------------------------------------------------------------
+# sensors.csv comes from sample_sensors.sh: time columns, then thermal zone,
+# battery, freq and pid columns.
 def load_sensors(path):
     """Return list of dicts with t_s, ddr_c, cpu_c, skin_c, batt_c (best effort)."""
     rows = []
@@ -43,17 +29,14 @@ def load_sensors(path):
             return None
         # sample_sensors.sh v3 columns: wall_clock_s, monotonic_s, then many *_temp_mc
         t_col   = find("monotonic_s") or find("wall_clock_s") or find("t_wall_us") or cols[0]
-        # DDR temp: `ddr_temp_mc` (millicelsius)
         ddr_col = find("ddr_temp_mc") or find("ddr") or find("nsphmx-2")
-        # CPU big cluster: cpullc-0-0_temp_mc is fine
         cpu_col = find("cpullc-0-0") or find("cpullc") or find("cpu0") or find("cpu-0-0-0")
-        # "Skin" proxy: shell_front_temp_mc (phone skin), fallback to bat_phone_temp_dc
+        # skin proxy: shell_front
         skin_col = find("shell_front") or find("shell_frame") or find("skin")
         batt_col = find("bat_phone_temp") or find("battery_temp_mc") or find("batt")
         t0 = None
         for r in rd:
             try:
-                # monotonic_s is already seconds (float)
                 tv = float(r[t_col])
             except Exception:
                 continue
@@ -65,10 +48,10 @@ def load_sensors(path):
                 except Exception: return None
             rows.append({
                 "t_s":   t - t0,
-                # most temp columns are millicelsius → /1000
+                # millicelsius to C
                 "ddr_c": g(ddr_col,  1/1000.0) if ddr_col else None,
                 "cpu_c": g(cpu_col,  1/1000.0) if cpu_col else None,
-                # shell_front_temp_mc is millicelsius; bat_phone_temp_dc is deci-celsius
+                # *_mc columns are millicelsius, others deci-celsius
                 "skin_c":(g(skin_col, 1/1000.0) if skin_col and "_mc" in skin_col else
                           g(skin_col, 0.1)      if skin_col else None),
             })
@@ -113,7 +96,7 @@ def main():
     labels  = {"A": "vanilla (KV grows)", "B": "v1 K=2048", "C": "v1 K=1024", "D": "v1 K=256"}
 
     for d in cond_dirs:
-        cond = d.name.split("_")[1]  # cond_A_vanilla_K0 → A
+        cond = d.name.split("_")[1]  # cond_A_vanilla_K0 gives A
         s_path = d / "sensors.csv"
         st_path = d / "steps.csv"
         if not s_path.exists():
@@ -135,8 +118,7 @@ def main():
 
         # Overlay KV cells if steps available
         if steps:
-            # steps wall_us is from t_start (eviction_bench), need to align with sensors.
-            # Use the first step's wall_us as origin offset.
+            # Steps use the eviction_bench clock, so time is taken from the first step.
             t0_step = steps[0]["wall_us"]
             xs = [(s["wall_us"] - t0_step)/1e6 for s in steps]
             ys = [s["n_kv"] for s in steps]

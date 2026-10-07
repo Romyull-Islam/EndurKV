@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build_llama_android_vulkan.sh — cross-compile llama.cpp for Android with Vulkan GPU.
+# build_llama_android_vulkan.sh - cross-compile llama.cpp for Android with Vulkan GPU.
 # Output in: $LLAMA_DIR/build-android-vulkan/
 # Standard llama.cpp practice for Adreno GPUs (Snapdragon 8 Elite Gen 5).
 set -euo pipefail
@@ -23,7 +23,7 @@ mkdir -p "$LLAMA_BUILD"
 cd "$LLAMA_BUILD"
 
 VK_SYSROOT="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-# glslc lives in NDK's shader-tools — put it on PATH so FindVulkan can find it
+# glslc lives in NDK's shader-tools - put it on PATH so FindVulkan can find it
 export PATH="$ANDROID_NDK/shader-tools/linux-x86_64:$PATH"
 
 cmake "$LLAMA_DIR" \

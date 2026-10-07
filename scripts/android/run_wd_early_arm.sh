@@ -1,12 +1,7 @@
 #!/bin/bash
-# ============================================================================
-# run_wd_early_arm.sh -- 4th soak arm: the EARLY ladder (2026-08-27).
-# Two validated ladder anchors exist (matching the GPU soak's wd-early /
-# wd-vendor pair): vendor-anchored (battery 47.0+, skin 50.0+) glides only in
-# the cliff run-up; EARLY (battery 35.0+, skin 39.5+) glides during workloads
-# that never near the cliff, so BOTH sensors demonstrably act. Same staircase,
-# same code, only the anchor shifted via env (BAT_L0/SKIN_L0).
-# ============================================================================
+# CPU soak arm: muKV with the watchdog's early ladder (BAT_L0=35 C, SKIN_L0=39.5 C via env).
+# The vendor-anchored ladder (battery 47 C, skin 50 C) only acts near the kernel throttle
+# point, the early one also acts on cooler workloads. Same watchdog code, only the anchor differs.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 LOG(){ echo "[$(date +%H:%M:%S)] $*"; }

@@ -1,39 +1,9 @@
 #!/bin/bash
-# ============================================================================
-# run_gpu_bimodality.sh -- what makes an IDENTICAL phone-GPU run land at 30 or 39 tok/s?
-# (2026-08-14)
-#
-# THE OBSERVATION. In the n=3 energy campaign (/tmp/ea_n3) nine cells ran the same binary
-# from the same cool gate, and throughput came out bimodal:
-#     fast  n=6   38.5 tok/s   GPU junction 89.6 C   88.6% busy   1.19e6 busy-us per wall-s
-#     slow  n=3   30.1 tok/s   GPU junction 80.8 C   82.0% busy   0.89e6 busy-us per wall-s
-# No overlap in junction temperature. The busy-time ratio (1.33x) tracks the throughput
-# ratio (1.28x), so the slow cells are not running the same work at a lower clock -- the
-# GPU is IDLE more, i.e. starved of work. A clock cap would hold busy% flat while
-# throughput fell; this shows the opposite.
-#
-# WHY IT MATTERS MORE THAN THE ENERGY RESULT IT CONTAMINATES. A 30% swing from an
-# identical command line contaminates EVERY phone-GPU throughput number in the paper --
-# muKV's 1.23x on Llama-1B and 2.81x on Phi-3 are n=3 and n=3, drawn from this same
-# distribution. It also retroactively explains the campaign-to-campaign contradiction
-# where throughput appeared to RISE with smaller K in one sweep and FALL in another:
-# neither was measuring K.
-#
-# WHAT THIS ADDS THAT NO PREVIOUS CAMPAIGN HAD. sample_sensors.sh logs GPU temperature and
-# GPU busy-time but never GPU CLOCK, which is why the mode switch has been invisible. A
-# second sampler here records, at 2 Hz:
-#     gpuclk            current GPU frequency
-#     thermal_pwrlevel  the kgsl thermal mitigation level (0 = unmitigated)
-#     max_pwrlevel      the cap in force
-# If slow cells show an elevated thermal_pwrlevel or a lower gpuclk, it is throttling.
-# If clock is identical and only busy-time differs, the GPU is being starved and the fault
-# is on the dispatch side, not thermal.
-#
-# DESIGN: 8 IDENTICAL cells, frozen muKV config at k-pct 10 (the operating point the
-# tier sweep just identified as optimal on both energy and retrieval). Nothing varies
-# between cells, deliberately -- the whole question is what varies when nothing is varied.
-# Full cool gate before each so every cell starts from the same thermal state.
-# ============================================================================
+# run_gpu_bimodality.sh: 8 identical phone-GPU cells (muKV, k-pct 10) to find why the
+# same run lands at about 30 or 39 tok/s. A second sampler logs kgsl gpuclk,
+# thermal_pwrlevel and max_pwrlevel at 2 Hz, which sample_sensors.sh does not record.
+# A higher thermal_pwrlevel or lower gpuclk in slow cells means throttling. The same clock
+# with less busy time means the GPU is starved of work. Full cool gate before each cell.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 BIN=/data/local/tmp/ukv_n3
@@ -48,7 +18,7 @@ cleanup(){ adb_safe_shell "su -c 'pkill -f sample_sensors; pkill -f gpuclk_sampl
 trap cleanup EXIT INT TERM
 adb_safe_shell "su -c 'echo 0 > /sys/class/oplus_chg/battery/mmi_charging_enable'" < /dev/null
 
-# the sampler this campaign exists for
+# GPU clock sampler (2 Hz)
 adb_safe_shell "su -c 'cat > /data/local/tmp/gpuclk_sampler.sh <<SH
 #!/system/bin/sh
 echo t_s,gpuclk,thermal_pwrlevel,max_pwrlevel > \\\$1

@@ -1,32 +1,16 @@
 #!/bin/bash
-# phone_ppl_eval_wave2.sh — proper teacher-forced PPL evaluation.
-#
-# Methodology (matches `llama-perplexity` / standard NLP):
-#   1. Prefill the LongBench prompt under the eviction policy.
-#   2. Apply post-prefill eviction (now KV holds K_nominal positions/head).
-#   3. Teacher-force a held-out reference text (~1024 tokens of WikiText-2).
-#      For each ref token, take the RAW logits (no rep-penalty, no temperature,
-#      no sampling) and compute -log P(ref_token | prefix_so_far).
-#   4. Mean NLL → PPL = exp(mean_nll).
-#
-# This gives a number that's *directly* comparable across policies because:
-#   - The reference text is identical for every (model, policy, prompt) cell.
-#   - No sampling RNG ⇒ no variance from RNG.
-#   - Raw logits ⇒ no temperature/rep-penalty distortion.
-#   - Vanilla and policy use the same eval loop ⇒ vanilla PPL is well-defined.
-#
-# Compare policy_PPL / vanilla_PPL per (model, prompt) cell — the right ratio
-# to report in the paper.
+# phone_ppl_eval_wave2.sh: teacher-forced PPL per policy on the phone (CPU build).
+# Prefill, apply the policy's post-prefill eviction, then teacher-force a held-out WikiText-2
+# text from raw logits (no sampling, temperature or penalties). PPL = exp(mean NLL).
+# Compare policy PPL / vanilla PPL per (model, prompt) cell.
 
 set -e
 export PATH=/home/mislam22/tools/platform-tools:$PATH
 
 POLICIES="vanilla v1 tova"
 K_BUDGETS="1024"
-# Intrinsic PPL on WikiText-2 — no LongBench prefix.
-# We pass a tiny seed-prompt as --prompt (eviction_bench needs *some* prefill
-# to set up the cb_eval callback path) and the long WT2 slice as --eval-text.
-# The seed-prompt is small enough that it doesn't bias the PPL number meaningfully.
+# eviction_bench needs some prefill to set up the cb_eval path, so a tiny seed prompt
+# goes in --prompt and the long WikiText-2 slice in --eval-text.
 PROMPT_DIR=prompts
 PROMPT_IDS="wiki_seed_001"
 EVAL_TEXT=corpora/wiki_ref_4k.txt
@@ -39,7 +23,7 @@ MODELS=(
     "models/Phi-3-mini-128k-instruct-Q4_K_M.gguf|Phi-3-128k|0|512|64|10240"
 )
 
-# Use CPU-only stack — GPU has output-degeneration bug on this Adreno
+# CPU-only build, since the GPU path degenerates output on this Adreno
 BIN_DIR=${BIN_DIR:-bin_cpu}
 
 OUT_BASE_PHONE="/data/local/tmp/endurkv/logs/ppl_$(date +%s)"
@@ -68,7 +52,7 @@ run_count=0
 for MODEL_ENTRY in "${MODELS[@]}"; do
     IFS='|' read -r MODEL MODEL_TAG NGL NBATCH UB CTX <<< "$MODEL_ENTRY"
     echo "" | tee -a "$PROG_LOG"
-    echo "===== $MODEL_TAG  ngl=$NGL =====" | tee -a "$PROG_LOG"
+    echo "$MODEL_TAG  ngl=$NGL" | tee -a "$PROG_LOG"
 
     for r in $(seq 1 $N_REPLICATES); do
     for PROMPT_ID in $PROMPT_IDS; do

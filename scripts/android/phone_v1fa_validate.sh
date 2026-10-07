@@ -1,11 +1,6 @@
 #!/bin/bash
-# phone_v1fa_validate.sh — quick quality sanity check for v1_fa.
-#
-# Runs v1 and v1_fa with IDENTICAL seed/K/prompt on Llama-3.2-1B; outputs both
-# generations side-by-side. Use to verify v1_fa is producing coherent text and
-# is in the same quality ballpark as v1.
-#
-# Each run is short (--max-tokens 32) so the whole thing takes ~10 min.
+# Quick quality check for v1_fa: runs v1 and v1_fa on Llama-3.2-1B with the same
+# seed, K and prompt, 32 tokens each, and prints both generations side by side.
 
 set -e
 export PATH=/home/mislam22/tools/platform-tools:$PATH
@@ -43,15 +38,15 @@ run_one v1_fa
 
 adb pull -q $PHONE_OUT $HOST_OUT/ 2>&1 | tail -1
 echo ""
-echo "=== v1 generation ==="
+echo "v1 generation"
 cat $HOST_OUT/$(basename $PHONE_OUT)/v1/gen.txt 2>/dev/null
 echo ""
 echo ""
-echo "=== v1_fa generation ==="
+echo "v1_fa generation"
 cat $HOST_OUT/$(basename $PHONE_OUT)/v1_fa/gen.txt 2>/dev/null
 echo ""
 echo ""
-echo "=== Quality side-by-side ==="
+echo "Quality side-by-side"
 printf "%-12s %-15s %-15s %-15s %-15s\n" "policy" "decode_tps" "perplexity" "mean_nll" "evicted_prefill"
 for p in v1 v1_fa; do
     META=$HOST_OUT/$(basename $PHONE_OUT)/$p/meta.json

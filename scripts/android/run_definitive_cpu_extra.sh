@@ -1,31 +1,16 @@
 #!/bin/bash
-# ============================================================================
-# DEFINITIVE same-condition CPU table (HotMobile) -- full columns per policy:
-#   PPL | prefill | decode_tps | wall | energy | live_cells | peak temps
-#
-# SAME CONDITION FOR ALL (fixes the SoC energy confound):
-#   - Charge to >=90% ONCE at the start, then charging stays OFF for the ENTIRE
-#     run (never toggled -> no battery-recharge USB spikes). Cool between cells by
-#     IDLE-WAIT (charging off). Every cell starts cool (<=50 C big-core) at a
-#     similar, monotonically-slowly-declining SoC.
-#   - Energy = integral of TOTAL system power = USB rail (V*I) + battery-discharge
-#     power (I>0 * V). Split-robust: correct whether the load is served by USB,
-#     battery, or both.
-#   - Platform: big cores capped 1632 for ALL cells equally. Baselines native (no
-#     watchdog); muKV + surface-aware watchdog v2 (muKV-only; dormant when cool).
-#
-# Per policy: (1) GEN pass -> prefill_ms, decode_tps, wall, live_cells, energy, temps
-#             (2) PPL pass -> teacher-forced perplexity on disjoint wiki_eval_1k.txt
-# WikiText 9737-token prompt + 4096 decode, ctx 16384, Llama-3.2-1B Q4_K_M, 6 thr,
-# k-nominal 1024, bin_cpu_sol2 (canonical SnapKV). Canonical SnapKV = --policy snapkv
-# --obs-window 64 --n-sink 0. muKV = state-swap mass-full.
-# ============================================================================
+# Same-condition CPU table, extra baseline rows (StreamingLLM, H2O, TOVA, strict TOVA, Ada-KV).
+# Columns: PPL, prefill, decode tok/s, wall, energy, live cells, peak temps.
+# Charge to 90% once, then charging stays off for the whole run, so every cell starts at a
+# similar SoC with no recharge spikes. Energy = USB rail power + battery discharge power.
+# Big cores capped at 1632 MHz for every cell. Per policy: a GEN pass (WikiText 9737-token
+# prompt, 4096 decode, ctx 16384) and a teacher-forced PPL pass on a disjoint eval text.
 set -u; export ANDROID_ADB_SERVER_PORT=5151
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 OUT_HOST=/tmp/def_cpu; mkdir -p "$OUT_HOST"
 TS=$(date +%Y%m%d_%H%M%S); OUT=/data/local/tmp/endurkv/logs/defcpu_$TS
 adb_safe_shell "mkdir -p $OUT" < /dev/null
-SCR=/tmp/claude-1001/-home-mislam22-EndurKV-workspace/1d283ef2-8bcb-4a99-8b56-fd8d8af9f80d/scratchpad
+SCR="${SCR:-$(cd "$(dirname "$0")/../.." && pwd)/eval_corpora}"
 adb push "$SCR/wikitext_16k_p12k_d4k.txt" "$OUT/prompt.txt" < /dev/null >/dev/null 2>&1
 adb push "$SCR/wiki_eval_disjoint.txt" "$OUT/eval.txt" < /dev/null >/dev/null 2>&1   # DISJOINT continuation (generalization PPL, not recall)
 adb push /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/preempt_throttle_watchdog_v2.sh \
@@ -34,7 +19,7 @@ MODEL=/data/local/tmp/endurkv/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 CB=/data/local/tmp/endurkv/bin_cpu_sol2
 WD_STOP=/data/local/tmp/cpu_wd.stop
 
-# --- one-time: charge to >=90%, then charging OFF for the whole run ---
+# one-time: charge to >=90%, then charging OFF for the whole run
 echo "[$(date +%H:%M:%S)] pre-charge to >=90% (same SoC start for all)"
 adb_safe_shell "su -c 'echo 1 > /sys/class/oplus_chg/battery/mmi_charging_enable'" < /dev/null
 CT0=$(date +%s)
@@ -47,11 +32,8 @@ while true; do
 done
 adb_safe_shell "su -c 'echo 0 > /sys/class/oplus_chg/battery/mmi_charging_enable'" < /dev/null  # OFF for whole run
 
-# HARDENED platform cap (2026-07-17): a one-shot echo is NOT enough -- the vendor perf
-# daemon can boost past it under load, and leftover watchdogs fight it. So: kill ALL
-# stray processes incl. any throttle watchdog, then run a CAP-HOLDER sidecar that
-# re-asserts 1632000 every 5 s for the whole cell (applied to EVERY cell equally --
-# platform condition, not a policy tool). Verified by read-back before the bench starts.
+# A one-shot cap write is not enough, the vendor perf daemon can boost past it. Kill stray
+# processes and watchdogs, then run a sidecar that rewrites 1632000 every 5 s, and read it back.
 CAPHOLD_STOP=/data/local/tmp/caphold.stop
 platform_cap(){ adb_safe_shell "su -c 'pkill -9 -f eviction_bench 2>/dev/null; pkill -9 -f sample_sensors 2>/dev/null; pkill -9 -f preempt_throttle_watchdog 2>/dev/null; touch $WD_STOP; rm -f $CAPHOLD_STOP; nohup sh -c \"while [ ! -f $CAPHOLD_STOP ]; do for c in cpu6 cpu7; do echo 1632000 > /sys/devices/system/cpu/\\\$c/cpufreq/scaling_max_freq 2>/dev/null; done; sleep 5; done\" >/dev/null 2>&1 &'" < /dev/null
   # pre-flight: read back until the cap sticks (<=1632000) or 30s
@@ -65,20 +47,18 @@ platform_cap(){ adb_safe_shell "su -c 'pkill -9 -f eviction_bench 2>/dev/null; p
 stop_caphold(){ adb_safe_shell "su -c 'touch $CAPHOLD_STOP'" < /dev/null; }
 start_wd(){ adb_safe_shell "su -c 'rm -f $WD_STOP; nohup sh /data/local/tmp/preempt_throttle_watchdog_v2.sh /data/local/tmp/cpu_wd_$1.log $WD_STOP >/dev/null 2>&1 &'" < /dev/null; }
 stop_wd(){ adb_safe_shell "su -c 'touch $WD_STOP'" < /dev/null; }
-# resolve thermal zones by NAME once (they re-enumerate across reboots)
+# Resolve thermal zones by name, the numbers change across reboots.
 ZMAP=$(adb_safe_shell "su -c 'for z in /sys/class/thermal/thermal_zone*; do printf \"%s:%s \" \$(basename \$z|sed s/thermal_zone//) \$(cat \$z/type 2>/dev/null); done'" < /dev/null|tr -d '\r')
 z_by_name(){ echo "$ZMAP" | tr ' ' '\n' | grep -E ":$1\$" | head -1 | cut -d: -f1; }
 DDR_Z=$(z_by_name ddr); SHELL_Z=$(z_by_name shell_front)
 CPU_ZS=$(echo "$ZMAP" | tr ' ' '\n' | grep -E ':(cpu-[0-9]|cpullc-[0-9])' | cut -d: -f1 | tr '\n' ' ')  # exclude cpu-hw-trip (fixed 95C trip points)
 echo "  [zones] cpu=($CPU_ZS) ddr=$DDR_Z shell=$SHELL_Z"
-# STRICT idle cool-gate (charging stays OFF): CPU<36 AND DDR<36 AND shell<34 for a genuinely
-# cold thermal start. Timeout 600s (cooling from ~58C DDR takes several minutes).
+# Idle cool gate with charging off: CPU < 37, DDR < 37 and shell < 34 C. The 1800 s timeout
+# is long because cooling back from about 70 C takes about 25 min.
 coolidle(){ local T0=$(date +%s)
   while true; do
     read cpu ddr sh <<<"$(adb_safe_shell "su -c 'm=0; for z in $CPU_ZS; do t=\$(cat /sys/class/thermal/thermal_zone\$z/temp 2>/dev/null); [ \$t -gt \$m ]&&m=\$t; done; d=\$(cat /sys/class/thermal/thermal_zone${DDR_Z}/temp 2>/dev/null); s=\$(cat /sys/class/thermal/thermal_zone${SHELL_Z}/temp 2>/dev/null); echo \$((m/1000)) \$((d/1000)) \$((s/1000))'" < /dev/null|tr -d '\r')"
     cpu=${cpu:-99}; ddr=${ddr:-99}; sh=${sh:-99}
-    # TRUE cold start (24C room dissipates heat-soak in ~26min): CPU<37/DDR<37/shell<34.
-    # Long timeout because a bench heats to ~70C and cooling back to <37 takes ~25min.
     if [ "$cpu" -lt 37 ] && [ "$ddr" -lt 37 ] && [ "$sh" -lt 34 ]; then echo "  [cold cpu=$cpu ddr=$ddr shell=$sh]"; return; fi
     [ $(($(date +%s)-T0)) -gt 1800 ] && { echo "  [cool timeout cpu=$cpu ddr=$ddr shell=$sh]"; return; }
     sleep 10
@@ -107,9 +87,7 @@ run(){ local CELL=$1 WD=$2; shift 2; local PD=$OUT/$CELL
   echo "  [done $CELL] gen=$(grep -oE 'decode_tps=[0-9.]+' "$OUT_HOST/$CELL/gen.err" 2>/dev/null|head -1) ppl=$(grep -oiE 'ppl[= ][0-9.]+|perplexity[= :]+[0-9.]+' "$OUT_HOST/$CELL/ppl.err" 2>/dev/null|head -1)"
 }
 MU="--policy v1_fa2 --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70"
-# muKV-mass-full FIRST (the GO/NO-GO checkpoint), then baselines + swap alt.
-# MISSING BASELINES for the complete table (canonical setups, no muKV tricks, no watchdog).
-# Same cold-gate + instrumentation + into the SAME /tmp/def_cpu dir -> unified table.
+# Baselines in their canonical setups, no watchdog. Same gate and output dir as the main table.
 run streamingllm 0 --policy streamingllm --n-sink 4             # canonical: 4 attention sinks + recent (the paper's design)
 run h2o          0 --policy h2o --n-sink 0 --obs-window 64      # H2O canonical: heavy+recent 50/50, NO sinks
 run tova         0 --policy tova                                # TOVA-layer (paper's preferred per-layer variant)

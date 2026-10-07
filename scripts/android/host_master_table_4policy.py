@@ -1,15 +1,7 @@
 #!/usr/bin/env python3
-"""Build the complete 4-policy master table once H2O finishes.
-
-Combines data from:
-  - cpu_sweep_*           : F1, KV behaviour, latency, memory, CPU/DDR thermal for vanilla/v1/TOVA
-  - h2o_sweep_*           : same for H2O
-  - ppl_*                 : WT2 PPL (Wave-2 short-seed, since those numbers were sensible)
-  - sweep3M_*             : GPU sweep thermals (since GPU was actually exercised there)
-
-Outputs:
-  - figures/master_tables/table_4policy.csv      machine-readable
-  - figures/master_tables/TABLE_4POLICY.md       markdown for slide
+"""4-policy master table (vanilla, v1, TOVA, H2O) from cpu_sweep_*, h2o_sweep_*,
+ppl_* (Wave-2 short-seed WT2 PPL) and sweep3M_* (GPU thermals).
+Writes figures/master_tables/table_4policy.csv and TABLE_4POLICY.md.
 """
 import json, re, csv, statistics, string
 from pathlib import Path
@@ -24,7 +16,7 @@ KV_BYTES = {"Llama-1B": 2*16*8*64*2,
 POLICY_ORDER = ["vanilla", "v1", "tova", "h2o"]
 MODEL_ORDER  = ["Llama-1B", "Gemma-2-2B", "Phi-3-128k"]
 
-# --- F1 scoring helpers ---
+# F1 scoring helpers
 def normalize(s):
     s = s.lower(); s = re.sub(r'\b(a|an|the)\b', ' ', s)
     s = ''.join(c for c in s if c not in string.punctuation)
@@ -39,7 +31,7 @@ truth = {}
 for line in open('/home/mislam22/EndurKV_workspace/prompts/prompts_pub_longbench.jsonl'):
     r = json.loads(line); truth[r['prompt_id']] = r.get('ground_truth', [])
 
-# --- Thermal helpers ---
+# Thermal helpers
 def max_zone(fields, name_pred):
     keys = [k for k in fields if k.endswith('_temp_mc') and name_pred(k) and 'hw-trip' not in k]
     if not keys: return []
@@ -140,7 +132,7 @@ for model in MODEL_ORDER:
             f"{avg([r['cpu_peak'] for r in c]):.1f}°C" if avg([r['cpu_peak'] for r in c]) else "—",
             f"{avg([r['ddr_peak'] for r in c]):.1f}°C" if avg([r['ddr_peak'] for r in c]) else "—",
         ])
-        # WT2 PPL goes in column 4 — only the short-seed Wave-2 numbers
+        # WT2 PPL goes in column 4 - only the short-seed Wave-2 numbers
         if p:
             rows[-1].insert(4, f"{avg([r.get('f1',0) for r in p]):.2f}" if False else
                           f"{statistics.mean([(__import__('json').loads(re.sub(r'\\bnan\\b','null',re.sub(r'\\b-?inf\\b','null',mf.read_text(errors='replace'))))).get('perplexity', 0) or 0 for mf in Path('/home/mislam22/EndurKV_workspace/phone-logs/ppl_1780287362/').rglob('meta.json') if SHORT.get(json.loads(re.sub(r'\\bnan\\b','null',re.sub(r'\\b-?inf\\b','null',mf.read_text(errors='replace')))).get('model','?').split('/')[-1].replace('.gguf','')) == model and json.loads(re.sub(r'\\bnan\\b','null',re.sub(r'\\b-?inf\\b','null',mf.read_text(errors='replace')))).get('policy') == pol]):.2f}" if any(True for _ in []) else "—")
@@ -158,7 +150,7 @@ for mf in Path('/home/mislam22/EndurKV_workspace/phone-logs/ppl_1780287362/').rg
     if model != "?" and ppl is not None:
         ppl_lookup.setdefault((model, pol), []).append(ppl)
 
-# Fix the PPL column properly (re-render rows)
+# Re-render rows with the PPL lookup
 out_csv = "/home/mislam22/EndurKV_workspace/EndurKV/figures/master_tables/table_4policy.csv"
 out_md  = "/home/mislam22/EndurKV_workspace/EndurKV/figures/master_tables/TABLE_4POLICY.md"
 Path(out_csv).parent.mkdir(parents=True, exist_ok=True)
@@ -220,7 +212,7 @@ with open(out_md, 'w') as f:
 print(f"Wrote {out_csv}")
 print(f"Wrote {out_md}")
 print()
-print("=== Preview ===")
+print("Preview")
 print("| " + " | ".join(header) + " |")
 for r in rows:
     print("| " + " | ".join(str(x) for x in r) + " |")

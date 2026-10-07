@@ -1,17 +1,7 @@
 #!/system/bin/sh
-# phone_wave10_ksweep.sh — Wave-10 K-sweep.
-#
-# Wave-9 ran with K_nominal=512 all 10 iters; the adaptive K ladder was never
-# exercised. This wave runs 3 cells at FIXED K values to map the K → (PPL,
-# thermal, throughput) Pareto frontier directly.
-#
-# Cells (in cool→hot order to give each cell a fair start):
-#   1. K=1024  (larger cache, more bandwidth, expected hotter + better PPL)
-#   2. K=512   (Wave-9 baseline, repeated for control)
-#   3. K=384   (smaller, expected cooler + worse PPL)
-#   4. K=256   (much smaller, expected coolest + much worse PPL)
-#
-# Inherits full Wave-9 stack: Q8 K cache + preempt-throttle watchdog + mem-gate.
+# phone_wave10_ksweep.sh: Phi-3 long-decode stress at fixed K (1024, 384, 256) to map K
+# against PPL, temperature and throughput. Each cell cools first. Uses the same stack as
+# wave9: Q8 K cache, preempt-throttle watchdog and the free-memory gate.
 
 set -u
 
@@ -133,14 +123,14 @@ run_kcell() {
     echo "[$(date)] === DONE K=$KVAL: iters=$ITER ===" >> "$PROG"
 }
 
-# Start watchdog ONCE for the whole sweep (will keep running during all cells)
+# One watchdog for the whole sweep
 echo "[$(date)] starting preempt-throttle watchdog (root) for entire sweep" >> "$PROG"
 su -c "sh $WORKDIR/scripts/preempt_throttle_watchdog.sh $WATCHDOG_LOG $WATCHDOG_STOP $DDR_ZONE" < /dev/null > /dev/null 2>&1 &
 
 echo "[$(date)] pinning DVFS" >> "$PROG"
 su -c sh /data/local/tmp/endurkv/scripts/pin_dvfs.sh pin 2>> "$PROG"
 
-# Run the 3 cells (K=512 baseline already done in Wave-9, skip it to save time)
+# K=512 is the wave9 run, so it is not repeated here
 run_kcell 1024
 run_kcell 384
 run_kcell 256

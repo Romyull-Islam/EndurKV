@@ -1,31 +1,9 @@
 #!/bin/bash
-# ============================================================================
-# run_niah_published_budgets.sh -- Ada-KV, TOVA and H2O on the needle grid at
-# the budgets their own papers specify. (2026-09-20)
-#
-# The grid ran every policy at k_nominal=1024. For muKV that is its design
-# budget and for SnapKV it is the published per-head budget, so those rows are
-# right. For three baselines it is not:
-#
-#     Ada-KV  published 2048        ran at 1024
-#     TOVA    published 2048        ran at 1024
-#     H2O     published 20% of N    ran at 1024
-#
-# (StreamingLLM, published 4+2000, is corrected separately by
-# run_niah_sllm2004.sh.) Reporting a baseline below its own budget and then
-# scoring it on retrieval is precisely the error this paper criticises, and the
-# CPU table already gives all three their published budgets, so the needle
-# table contradicted it.
-#
-# H2O's budget is a fraction of the prompt, so it differs per model and per
-# stimulus: /tmp/h2o_budgets.txt carries "<model> <stim> <n_prompt> <k>" rows
-# computed from each stimulus's own measured prompt length (624 to 1447).
-#
-# Same stimuli, ctx, protocol and build (bin_cpu_v87) as the other rows. New tags
-# (adakv2048, tova2048, h2opub) so the 1024 cells are kept. Resumable: a cell
-# whose meta.json exists is skipped. The cool gate is deliberately dropped; see
-# the note in cell(). No timing may be read from these cells.
-# ============================================================================
+# run_niah_published_budgets.sh: Ada-KV, TOVA and H2O on the needle grid at their
+# published budgets (Ada-KV 2048, TOVA 2048, H2O 20% of the prompt) instead of 1024.
+# H2O budgets come from /tmp/h2o_budgets.txt, rows "<model> <stim> <n_prompt> <k>".
+# Same stimuli, ctx and build (bin_cpu_v87) as the 1024 rows, new tags so those are kept.
+# Resumable (cells with meta.json are skipped). No cool gate, so no timing from these cells.
 set -u
 for _p in ${ADB_PORTS:-5161 5152 5037 5151}; do
   (exec 3<>/dev/tcp/127.0.0.1/$_p) 2>/dev/null || continue
@@ -56,17 +34,9 @@ declare -A MODELS=(
 cell(){ local MT=$1 TAG=$2 STIM=$3 KB=$4; shift 4; local id="${MT}__${TAG}__${STIM%.txt}"; local PD=$OUT/$id
   [ -f "$OUT_HOST/$id/meta.json" ] && { echo "  [$id] cached"; return; }
   adb_safe_shell "mkdir -p $PD" < /dev/null
-  # NO COOL GATE HERE, deliberately. This table reports two things, retrieval hits
-  # and live cells, and both are invariant to temperature: decoding is greedy with a
-  # fixed seed on a fixed build, so the token sequence is identical whatever clock
-  # the chip runs at, and the surviving cell count is set by the policy, not the
-  # thermal state. The paper says so itself ("A quality axis only ... We read nothing
-  # about speed or energy from this table"). The gate cost 160 to 714 s per cell in
-  # the StreamingLLM re-run, which over 168 cells is about 8 hours of waiting for a
-  # number that cannot move. The sensors are still logged, but no timing from these
-  # cells may be reported; use the gated campaigns for that.
-  # A guard rail replaces it: if DDR is genuinely hot, wait, so a 7-hour unattended
-  # CPU soak cannot cook the phone.
+  # No cool gate: greedy decoding with a fixed seed gives the same tokens at any clock,
+  # and retrieval hits and live cells do not depend on temperature. Only wait if DDR
+  # is above 52 C, so a long unattended run cannot overheat the phone.
   local hot=0
   while [ $hot -lt 40 ]; do
     T=$(adb_safe_shell "su -c 'cat /sys/class/thermal/thermal_zone47/temp'" < /dev/null 2>/dev/null | tr -dc '0-9')
@@ -75,7 +45,7 @@ cell(){ local MT=$1 TAG=$2 STIM=$3 KB=$4; shift 4; local id="${MT}__${TAG}__${ST
     echo "  [$id] DDR $((T/1000))C > 52C, waiting"; sleep 60; hot=$((hot+1))
   done
   adb_safe_shell "su -c 'echo 0 > /sys/class/oplus_chg/battery/mmi_charging_enable'" < /dev/null >/dev/null 2>&1
-  # no watchdog: muKV-only by design, as for every other baseline row
+  # no watchdog, it is used for muKV only
   adb_safe_shell "su -c 'nohup sh /data/local/tmp/endurkv/scripts/sample_sensors.sh --out $PD/sensors.csv --hz 5 >/dev/null 2>&1 &'" < /dev/null
   adb_safe_shell "LD_LIBRARY_PATH=$CB timeout ${TMO:-3600} $CB/eviction_bench --prompt $OUT/$STIM --prompt-id $id \
     --eval-mode gen --max-tokens 64 --ignore-eos --ctx-size $CTX --model ${MODELS[$MT]} --seed 42 \

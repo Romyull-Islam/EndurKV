@@ -1,25 +1,16 @@
 #!/system/bin/sh
-# phone_run_longbench_sweep.sh — Master on-phone runner.
-#
-# Loops over (policy × K_nominal × LongBench prompt) and runs eviction_bench
-# with thermal/memory/latency capture. Per the deployment plan, deploys our
-# v1 first, then vanilla, then TOVA, then PyramidKV.
+# phone_run_longbench_sweep.sh: on-phone sweep over policy x K_nominal x LongBench prompt,
+# recording latency, memory and thermals per run.
 #
 # Run on phone, from /data/local/tmp/endurkv/:
 #   sh scripts/phone_run_longbench_sweep.sh --model models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 #
-# Outputs (per run) in logs/sweep_<timestamp>/<policy>/<K>/<prompt_id>/:
-#   steps.csv      per-decode-step latency, n_kv cells, RSS
-#   meta.json      run summary (prefill ms, decode tok/s, peak RSS, peak KV)
-#   gen.txt        generated text
-#   sensors.csv    10 Hz thermal+battery sampling
-#
-# Default: 1 model × 4 policies × 2 K budgets × 25 prompts = 200 runs.
-# Estimated time: ~3-6 hours on Snapdragon (varies by ctx length + cooldowns).
+# Output per run in logs/sweep_<ts>/<model>/<policy>/K<K>/<prompt_id>/: steps.csv,
+# meta.json, gen.txt and sensors.csv (10 Hz).
 
 set -e
 
-# ---- defaults / args ----
+# defaults / args
 MODEL=""
 POLICIES="v1 vanilla tova pyramid"
 K_BUDGETS="512 1024"

@@ -1,43 +1,8 @@
 #!/usr/bin/env python3
-"""
-score_niah.py — Host-side, post-hoc judge for Wave-11 Needle-in-a-Haystack runs.
+"""Score NIAH generations in phone-logs/wave11_*/<model>/<policy>/niah/<stim>/gen.txt.
 
-Reads on-device generations from
-    phone-logs/wave11_*/{model}/{policy}/niah/{stim_id}/gen.txt
-matches them against the canonical needle
-    "The best thing to do in San Francisco is eat a sandwich at Dolores Park on a sunny day."
-and emits:
-  - figures/master_tables/TABLE_WAVE11_NIAH.md
-  - figures/eval_plots/niah_heatmap_<model>_<policy>.png  (4 ctx x 8 depth pass/fail grid)
-  - figures/eval_plots/niah_accuracy_summary.png         (bar chart, all cells)
-
-Judges
-------
-1. Rule-based: substring "sandwich at Dolores Park" (case-insensitive) in gen.txt.
-2. Optional GPT-4 judge: if OPENAI_API_KEY is set AND the `openai` package is
-   importable, ask GPT-4 whether the assistant's answer correctly identifies the
-   needle. Otherwise the GPT-4 column is left blank.
-
-NIAH grid (per cell)
---------------------
-4 context lengths {2048, 4096, 6144, 8192}  x  8 depth percentiles
-{0, 12, 25, 37, 50, 62, 75, 87}  =  32 trials.
-
-Stimulus file naming (matches eval_pipeline/data/niah/MANIFEST.txt):
-    niah_c<ctx>_d<dd>.txt
-Stimulus id in phone-logs is taken to be the basename without extension, e.g.
-    phone-logs/wave11_*/<model>/<policy>/niah/niah_c2048_d12/gen.txt
-
-Usage
------
-    python3 eval_pipeline/score_niah.py \
-        [--phone-logs /home/mislam22/EndurKV_workspace/phone-logs] \
-        [--stim-dir eval_pipeline/data/niah] \
-        [--repo-root /home/mislam22/EndurKV_workspace/EndurKV] \
-        [--no-gpt4]
-
-Stdlib only, plus matplotlib, plus optional openai.
-"""
+Judge: "sandwich at Dolores Park" substring, plus GPT-4 when OPENAI_API_KEY is set.
+Usage: score_niah.py [--phone-logs DIR] [--stim-dir DIR] [--repo-root DIR] [--no-gpt4]"""
 
 from __future__ import annotations
 
@@ -51,7 +16,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# matplotlib is mandatory for plots; import lazily so --help still works.
+# matplotlib is needed for plots. Import it guarded so --help still works.
 try:
     import matplotlib
     matplotlib.use("Agg")
@@ -77,15 +42,11 @@ CTX_LENGTHS = [2048, 4096, 6144, 8192]
 DEPTHS = [0, 12, 25, 37, 50, 62, 75, 87]
 
 STIM_NAME_RE = re.compile(r"^niah_c(?P<ctx>\d+)_d(?P<depth>\d+)$")
-# Wave-11 launcher uses iter00..iter07 (or iter0000..) for NIAH trial dirs and
-# the stimulus mapping is by ordinal (s -> stimulus_index). We use this to
-# project iter<NN> back onto the canonical (ctx, depth) grid if possible.
+# The launcher names NIAH trial dirs iter<NN>, mapped to stimuli by ordinal.
 ITER_NAME_RE = re.compile(r"^iter(?P<idx>\d+)$")
 
 
-# ---------------------------------------------------------------------------
 # Discovery
-# ---------------------------------------------------------------------------
 
 def find_gen_files(phone_logs_root: Path) -> List[Path]:
     """Find every wave11_*/<model>/<policy>/niah/<stim>/gen.txt."""
@@ -95,23 +56,8 @@ def find_gen_files(phone_logs_root: Path) -> List[Path]:
 
 def parse_gen_path(gen_path: Path, phone_logs_root: Path
                    ) -> Optional[Tuple[str, str, str, str, int, int]]:
-    """
-    Extract (wave_dir, model, policy, stim_id, ctx, depth) from a gen.txt path.
-
-    Two on-disk conventions are accepted:
-
-      (A) Canonical (built from MANIFEST.txt, full 4x8 NIAH grid):
-            wave11_<run>/<model>/<policy>/niah/niah_c<CTX>_d<DD>/gen.txt
-      (B) Launcher ordinal layout (phone_wave11_eval.sh, Tier-1 8-stimuli):
-            wave11_<run>/<model>/<policy>/niah/iter<NN>/gen.txt
-          Here the trial-dir is iter00..iter07 and the stimulus index NN maps
-          back to (ctx, depth) by reading the canonical MANIFEST in ordinal
-          order. We can't infer (ctx, depth) from the path alone for (B), so
-          we encode them as -1 sentinels and rely on caller-side ordinal
-          remapping (the iter<NN>'s index is preserved as `ctx`).
-
-    Returns None if the path is malformed.
-    """
+    """Return (wave_dir, model, policy, stim_id, ctx, depth) for a gen.txt path, or None.
+    For iter<NN> trial dirs, ctx holds the ordinal NN and depth is -1."""
     try:
         rel = gen_path.relative_to(phone_logs_root)
     except ValueError:
@@ -128,17 +74,13 @@ def parse_gen_path(gen_path: Path, phone_logs_root: Path
 
     it = ITER_NAME_RE.match(stim_id)
     if it:
-        # Launcher layout: stim_id is iter<NN>; encode ordinal as the ctx slot
-        # (depth = -1 sentinel) so heatmap renderers can detect it and bucket
-        # by ordinal instead of plotting on the (ctx, depth) grid.
+        # Ordinal goes in the ctx slot with depth -1 so renderers bucket by ordinal.
         idx = int(it.group("idx"))
         return (wave_dir, model, policy, stim_id, idx, -1)
     return None
 
 
-# ---------------------------------------------------------------------------
 # Judges
-# ---------------------------------------------------------------------------
 
 _NEGATORS = (
     " not ", " no ", "n't ", " never ", " wrong", " incorrect",
@@ -148,22 +90,13 @@ _NEGATORS = (
 
 
 def rule_based_judge(gen_text: str) -> bool:
-    """Substring match on the distinctive part of the needle, with a
-    negation-window guard.
-
-    A bare `'sandwich at dolores park' in gen_text.lower()` incorrectly marks
-    answers like "There is no sandwich at Dolores Park" or "I do not recommend
-    a sandwich at Dolores Park" as CORRECT. To guard against that we require:
-      (1) both 'sandwich' AND 'dolores park' (and the joining substring) appear,
-      (2) no negator token appears within ~120 chars (≈ a 10-token window at
-          ~4 chars/token of typical English BPE) BEFORE the match,
-      (3) no leading negator in the same sentence as the match.
-    """
+    """Needle substring match that fails if a negator appears in the same sentence within
+    ~120 chars before it (e.g. "There is no sandwich at Dolores Park")."""
     t = gen_text.lower()
     idx = t.find(NEEDLE_KEY)
     if idx < 0:
         return False
-    # Require both content words (defensive; idx>=0 already implies it).
+    # Both content words must appear (already implied by idx >= 0).
     if "sandwich" not in t or "dolores park" not in t:
         return False
 
@@ -187,16 +120,8 @@ def rule_based_judge(gen_text: str) -> bool:
 
 def gpt4_judge(gen_text: str, question: str = "What is the best thing to do in San Francisco?",
                model: str = "gpt-4o") -> Optional[bool]:
-    """
-    Ask a strong judge whether the assistant's answer correctly identifies
-    the needle. Returns True/False (canonical YES/NO) or None on transport
-    failure or ambiguous output.
-
-    Parser is strict: only an exact 'YES' or 'NO' (after .strip().upper()
-    and trimming trailing punctuation) is accepted. Anything else returns
-    None so the caller can count it separately rather than silently grading
-    a malformed response as positive.
-    """
+    """Ask GPT-4 whether the answer identifies the needle. Returns True/False, or None on
+    error or any reply other than an exact YES or NO."""
     if not HAS_OPENAI:
         return None
     api_key = os.environ.get("OPENAI_API_KEY")
@@ -245,9 +170,7 @@ def gpt4_judge(gen_text: str, question: str = "What is the best thing to do in S
         return None
 
 
-# ---------------------------------------------------------------------------
 # Scoring
-# ---------------------------------------------------------------------------
 
 def score_all(gen_files: List[Path],
               phone_logs_root: Path,
@@ -263,9 +186,8 @@ def score_all(gen_files: List[Path],
             continue
         wave_dir, model, policy, stim_id, ctx, depth = parsed
 
-        # Sanity-check the stimulus exists; we don't actually need its body
-        # for the rule-based judge (the needle is fixed) but it's a useful
-        # integrity guard against orphan generations.
+        # The stimulus body is not needed (the needle is fixed), but checking it exists
+        # catches orphan generations.
         stim_path = stim_dir / f"{stim_id}.txt"
         stim_present = stim_path.is_file()
 
@@ -295,18 +217,11 @@ def score_all(gen_files: List[Path],
     return results
 
 
-# ---------------------------------------------------------------------------
 # Aggregation
-# ---------------------------------------------------------------------------
 
 def aggregate(results: List[Dict]):
-    """Returns (per_cell, per_ctx, per_depth, grid).
-
-    per_cell[(model, policy)]  -> {"correct": n, "total": n, "acc": f}
-    per_ctx[(model, policy, ctx)]   -> same
-    per_depth[(model, policy, depth)] -> same
-    grid[(model, policy)] -> dict[(ctx, depth)] -> bool/None (None = missing)
-    """
+    """Return (per_cell, per_ctx, per_depth, grid). The first three map to {correct, total, acc}.
+    grid[(model, policy)][(ctx, depth)] is the pass/fail bool."""
     per_cell: Dict[Tuple[str, str], Dict] = defaultdict(
         lambda: {"correct": 0, "total": 0})
     per_ctx: Dict[Tuple[str, str, int], Dict] = defaultdict(
@@ -320,12 +235,8 @@ def aggregate(results: List[Dict]):
         ok = r["rule_correct"]
         per_cell[key]["correct"] += int(ok)
         per_cell[key]["total"] += 1
-        # Only populate the per-ctx / per-depth / grid breakdowns when the
-        # trial has true (ctx, depth) coordinates (Convention A). For the
-        # launcher's ordinal layout (Convention B, depth==-1), the per-cell
-        # accuracy is still meaningful but the 4x8 grid is not — leave those
-        # tables empty for that (model, policy) so we don't fabricate a
-        # heatmap with everything on a single fake row.
+        # Per-ctx, per-depth and grid tables only for trials with real (ctx, depth).
+        # Ordinal iter<NN> trials (depth -1) count toward per-cell accuracy only.
         if r["depth"] >= 0:
             per_ctx[(*key, r["ctx"])]["correct"] += int(ok)
             per_ctx[(*key, r["ctx"])]["total"] += 1
@@ -341,9 +252,7 @@ def aggregate(results: List[Dict]):
     return finalize(per_cell), finalize(per_ctx), finalize(per_depth), grid
 
 
-# ---------------------------------------------------------------------------
 # Reporting
-# ---------------------------------------------------------------------------
 
 def write_markdown_table(out_path: Path,
                          results: List[Dict],
@@ -366,7 +275,7 @@ def write_markdown_table(out_path: Path,
                  f"{len(CTX_LENGTHS)*len(DEPTHS)} per (model, policy)).")
     lines.append("")
 
-    # -- per-(model, policy) summary
+    # per-(model, policy) summary
     lines.append("## Per-(model, policy) accuracy")
     lines.append("")
     header = "| model | policy | correct | total | accuracy |"
@@ -393,7 +302,7 @@ def write_markdown_table(out_path: Path,
         lines.append(row)
     lines.append("")
 
-    # -- per-context accuracy
+    # per-context accuracy
     lines.append("## Accuracy by context length")
     lines.append("")
     ctx_header = "| model | policy | " + " | ".join(f"{c}" for c in CTX_LENGTHS) + " |"
@@ -409,7 +318,7 @@ def write_markdown_table(out_path: Path,
         lines.append(f"| {model} | {policy} | " + " | ".join(cells) + " |")
     lines.append("")
 
-    # -- per-depth accuracy
+    # per-depth accuracy
     lines.append("## Accuracy by depth percentile")
     lines.append("")
     depth_header = "| model | policy | " + " | ".join(f"{d}%" for d in DEPTHS) + " |"
@@ -425,7 +334,7 @@ def write_markdown_table(out_path: Path,
         lines.append(f"| {model} | {policy} | " + " | ".join(cells) + " |")
     lines.append("")
 
-    # -- per-(model, policy) text heatmap
+    # per-(model, policy) text heatmap
     lines.append("## Pass/fail heatmaps (rows = ctx, cols = depth %)")
     lines.append("")
     lines.append("Legend: `O` = correct, `.` = wrong, `?` = missing.")
@@ -517,9 +426,7 @@ def plot_summary_bar(per_cell: Dict[Tuple[str, str], Dict], out_path: Path) -> N
     plt.close(fig)
 
 
-# ---------------------------------------------------------------------------
 # Main
-# ---------------------------------------------------------------------------
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,

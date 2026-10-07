@@ -1,21 +1,8 @@
 #!/usr/bin/env python3
-# ============================================================================
-# phone_cell_report.py -- one-line summary of a phone cell, including ENERGY.
-# (2026-08-08)
-#
-# ENERGY IS INTEGRATED FROM THE USB RAIL, not from a battery gauge. With USB online the
-# battery's current_now reads 0 on this device, so a gauge-based estimate reads zero
-# while the SoC is clearly drawing power. sample_sensors.sh logs usb_voltage_uv and
-# usb_current_ua, and this integrates
-#     E = SUM( V * I * dt )   over the samples spanning the run
-# with dt taken from monotonic_s. Each dt is CAPPED AT 5 s: if the sampler stalls (adb
-# hiccup, scheduler starvation) the gap would otherwise be multiplied by the instantaneous
-# power and invent joules that were never drawn.
-#
-# |current| because the sign convention flips with charge direction; charging is disabled
-# during the cell, but the cool-down before it is not, and a stray sample of the opposite
-# sign would otherwise subtract energy.
-# ============================================================================
+# One-line summary of a phone cell, including energy.
+# Energy integrates the USB rail, E = sum(V * I * dt) over sensors.csv, because the
+# battery current reads 0 while USB is online. dt is capped at 5 s so a stalled
+# sampler does not invent energy. |I| is used since its sign flips with charge direction.
 import csv, json, math, os, re, sys
 
 d = sys.argv[1]

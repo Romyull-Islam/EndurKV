@@ -1,25 +1,7 @@
 #!/usr/bin/env python3
-"""PLOT 5: Memory pressure vs cache size + temperature (3-way relationship).
-
-For every phone-log run cell that has both sensors.csv AND stress.csv,
-compute:
-  - peak_kv_cells          := stress.csv['peak_kv_cells'].max()
-  - peak_rss_gb            := sensors.csv['peak_rss_kb'].max() / 1024 / 1024
-                              (RSS taken from stress.csv['peak_rss_kb'])
-  - swap_mb                := (vmstat_pswpout.max() - vmstat_pswpout.min())
-                              * 4 KB / 1024
-  - peak_DDR_C             := sensors.csv['ddr_temp_mc'].max() / 1000
-
-Render a single bubble-scatter:
-  x-axis : peak KV cells (log)
-  y-axis : peak DDR temperature (degrees Celsius)
-  bubble area : peak RSS (GB)
-  bubble color: swap_MB (darker = more swap)
-  label  : policy name (per-cell directory name)
-
-Output:
-  /home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/
-      05_memory_pressure_3way.png
+"""Bubble scatter of peak KV cells (log x) vs peak DDR temperature, area = peak RSS and
+color = swap MB, for every phone-logs cell with both sensors.csv and stress.csv.
+Writes figures/relationship_plots/05_memory_pressure_3way.png.
 """
 from __future__ import annotations
 
@@ -46,11 +28,8 @@ PAGE_KB = 4.0  # one memory page = 4 KB on this device
 
 
 def collect_cells() -> pd.DataFrame:
-    """Scan phone-logs/* for cells that contain BOTH sensors.csv and stress.csv.
-
-    Returns one row per cell with the four metrics required by the plot,
-    plus a policy label and the wave/run group it belongs to.
-    """
+    """One row of plot metrics per phone-logs cell that has both sensors.csv and
+    stress.csv."""
     rows: list[dict] = []
     for stress_csv in PHONE_LOGS.rglob("stress.csv"):
         cell_dir = stress_csv.parent
@@ -68,13 +47,13 @@ def collect_cells() -> pd.DataFrame:
         if "peak_kv_cells" not in stress.columns:
             continue
 
-        # --- peak KV cells (size of the cache, in KV positions) -----------
+        # cache size in KV positions
         peak_kv_cells = float(np.nan_to_num(stress["peak_kv_cells"].max(),
                                             nan=0.0))
         if peak_kv_cells <= 0:
             continue  # no useful cache-size signal
 
-        # --- peak RSS in GB -----------------------------------------------
+        # peak RSS in GB
         if "peak_rss_kb" in stress.columns:
             peak_rss_kb = float(np.nan_to_num(stress["peak_rss_kb"].max(),
                                               nan=0.0))
@@ -82,17 +61,17 @@ def collect_cells() -> pd.DataFrame:
             peak_rss_kb = 0.0
         peak_rss_gb = peak_rss_kb / KB / KB
 
-        # --- swap_MB = (delta vmstat_pswpout pages) * 4 KB / 1024 ---------
+        # swap_MB = (delta vmstat_pswpout pages) * 4 KB / 1024
         swap_mb = 0.0
         if "vmstat_pswpout" in sensors.columns:
             ps = pd.to_numeric(sensors["vmstat_pswpout"], errors="coerce")
             ps = ps.dropna()
             if len(ps) >= 2:
-                # vmstat_pswpout is a monotonic counter; delta = max - min
+                # vmstat_pswpout is a monotonic counter
                 delta_pages = float(ps.max() - ps.min())
                 swap_mb = max(0.0, delta_pages) * PAGE_KB / KB
 
-        # --- peak DDR temperature (degrees C) -----------------------------
+        # peak DDR temperature (degrees C)
         peak_ddr_c = np.nan
         if "ddr_temp_mc" in sensors.columns:
             ddr = pd.to_numeric(sensors["ddr_temp_mc"], errors="coerce")
@@ -101,11 +80,9 @@ def collect_cells() -> pd.DataFrame:
                 peak_ddr_c = float(ddr.max()) / 1000.0
 
         if np.isnan(peak_ddr_c):
-            continue  # DDR temperature is the y-axis; cell unusable without it
+            continue  # DDR temperature is the y-axis
 
-        # The policy label is the leaf cell directory name (e.g. v1_K512).
-        # Disambiguate identical labels coming from different wave runs by
-        # prepending the wave directory's parent group.
+        # Policy label is the cell directory name (e.g. v1_K512)
         policy = cell_dir.name
         wave = cell_dir.parent.name
         rows.append(
@@ -125,10 +102,8 @@ def collect_cells() -> pd.DataFrame:
 
 
 def dedupe_cells(df: pd.DataFrame) -> pd.DataFrame:
-    """Keep one row per (policy, peak_kv_cells, peak_ddr_c) signature so that
-    the scatter is not overwhelmed by repeated runs of the same configuration.
-    When duplicates exist, keep the run with the highest peak_rss_gb (the
-    most stressful instance of that policy)."""
+    """One row per (policy, peak_kv_cells), keeping the run with the highest
+    peak RSS."""
     if df.empty:
         return df
     df = df.sort_values("peak_rss_gb", ascending=False).drop_duplicates(
@@ -141,7 +116,7 @@ def render(df: pd.DataFrame, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     if df.empty:
-        # Render an explanatory empty figure so callers always have a file.
+        # Write an explanatory empty figure so callers always get a file.
         fig, ax = plt.subplots(figsize=(11, 7), dpi=130)
         ax.text(0.5, 0.5,
                 "No (sensors.csv, stress.csv) cells with usable\n"
@@ -155,21 +130,17 @@ def render(df: pd.DataFrame, out_path: Path) -> None:
 
     fig, ax = plt.subplots(figsize=(12.5, 7.5), dpi=140)
 
-    # Bubble size proportional to RSS GB. Use a min floor so even small
-    # caches stay visible. The scale factor was tuned so a ~5 GB RSS gives a
-    # marker area around 1800 pt^2.
+    # Bubble area grows with RSS, with a floor so small caches stay visible.
     rss = df["peak_rss_gb"].to_numpy()
     sizes = 80 + 350 * rss  # area in pt^2
 
     swap = df["swap_mb"].to_numpy()
-    # Color = swap_MB. Dark = more swap. Use log normalisation when range is
-    # wide; fall back to linear if everything is zero / near zero.
+    # Log color scale when swap spans a wide range, else linear.
     swap_for_color = np.where(swap > 0, swap, 0.0)
     if swap_for_color.max() <= 0:
         norm = Normalize(vmin=0, vmax=1)
     elif swap_for_color.max() / max(swap_for_color[swap_for_color > 0].min(),
                                     1e-3) > 50:
-        # wide dynamic range — use log
         norm = LogNorm(vmin=max(swap_for_color[swap_for_color > 0].min(), 0.5),
                        vmax=max(swap_for_color.max(), 1.0))
         # ensure zeros plot on the lightest end
@@ -231,14 +202,12 @@ def render(df: pd.DataFrame, out_path: Path) -> None:
                    markeredgecolor="#b22222", markeredgewidth=1.0,
                    label=f"peak RSS = {v:.2f} GB")
         )
-    # Place the bubble-size legend outside the data region (lower-right
-    # corner inside the axes) so it does not collide with the large bubbles
-    # that cluster near the upper-left of the plot.
+    # Lower right, away from the large bubbles in the upper left
     ax.legend(handles=size_handles, loc="lower right", fontsize=9,
               title="Bubble area = peak RSS (GB)", title_fontsize=9.5,
               framealpha=0.95, labelspacing=1.6, borderpad=1.0)
 
-    # Give the y-axis a bit of headroom so the topmost label is not clipped.
+    # Headroom so the top label is not clipped
     y_min, y_max = ax.get_ylim()
     ax.set_ylim(y_min - 1.0, y_max + 2.5)
 
@@ -263,7 +232,7 @@ def main() -> int:
     if not df.empty:
         df = dedupe_cells(df)
         print(f"[dedupe]  {len(df)} unique (policy, peak_kv_cells) rows")
-        # Print the table that backs the plot for the headline / log trail.
+        # Print the table behind the plot
         cols = ["wave", "policy", "peak_kv_cells", "peak_rss_gb",
                 "swap_mb", "peak_ddr_c"]
         with pd.option_context("display.max_rows", 200,

@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
-"""Slide figures from the unified all-models dataset (1008 rows, 7 models, 5 datasets).
-
-Output:
-  win_rate_per_model.png      — per-model win counts
-  win_rate_per_dataset.png    — per-dataset win counts
-  median_delta_tova_grid.png  — 7×6 heatmap of median Δ TOVA per (model, policy)
-  pareto_cache_vs_kl_all.png  — Pareto plot across all 168 cells
+"""Slide figures from unified_all_models_results.csv into figures/architecture_fig/:
+win_rate_per_model.png, win_rate_per_dataset.png, median_delta_tova_grid.png
+(median delta vs TOVA per model and policy) and pareto_cache_vs_kl_all.png.
 """
 from pathlib import Path
 import matplotlib.pyplot as plt
@@ -52,9 +48,7 @@ DATASET_PRETTY = {
 NAVY = "#1a3661"
 policies = ["v1_linear","v6_logistic","v1_sigmoid","pyramidkv","tova","adakv"]
 
-# ===========================================================================
 # Figure 1: Win-rate per MODEL (7 models)
-# ===========================================================================
 models = sorted(df.model.unique())
 win_counts = {m: {p:0 for p in policies} for m in models}
 for m in models:
@@ -96,9 +90,7 @@ plt.savefig(OUT / "win_rate_per_model.pdf", bbox_inches='tight', facecolor='whit
 print("saved win_rate_per_model.png")
 plt.close()
 
-# ===========================================================================
 # Figure 2: Win-rate per DATASET (5 datasets)
-# ===========================================================================
 datasets = ["short","long","longbench","niah","reasoning"]
 win_counts_ds = {d: {p:0 for p in policies} for d in datasets}
 for d_ in datasets:
@@ -137,9 +129,7 @@ plt.savefig(OUT / "win_rate_per_dataset.pdf", bbox_inches='tight', facecolor='wh
 print("saved win_rate_per_dataset.png")
 plt.close()
 
-# ===========================================================================
 # Figure 3: Median Δ TOVA heatmap (model × policy)
-# ===========================================================================
 mat = np.zeros((len(models), len(policies)))
 for i, m in enumerate(models):
     for j, p in enumerate(policies):
@@ -168,9 +158,7 @@ plt.savefig(OUT / "median_delta_tova_grid.pdf", bbox_inches='tight', facecolor='
 print("saved median_delta_tova_grid.png")
 plt.close()
 
-# ===========================================================================
 # Figure 4: Pareto plot across ALL data
-# ===========================================================================
 fig, ax = plt.subplots(figsize=(10, 7))
 for p in policies:
     sub = df[df.policy==p]

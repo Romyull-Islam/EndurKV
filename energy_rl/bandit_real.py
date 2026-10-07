@@ -1,15 +1,7 @@
 #!/usr/bin/env python3
-"""Offline contextual bandit fitted on REAL cells (no simulator).
-
-Each logged request is one (context, arm, reward) sample:
-  context = battery tier (healthy / mid / low), which sets the reward weights;
-  arm     = the plan that ran (GPU clock cap with K=1024; or CPU cache K);
-  reward  = w_q * q  -  w_t * T / T_ref  -  w_e * E / E_ref, from the METERED E and T of that cell.
-The bandit's value table is the per-(context, arm) mean reward; its policy is the greedy arm.
-Uncertainty from n = 3 to 7 cells per arm is shown by bootstrap: the probability each arm is
-best under resampling of the real cells. Request shape is held fixed per table (GPU: 9737-token
-prompt, 4096 output; CPU: 9737 prompt, 1024 output) because a bandit cannot compare arms across
-different requests.
+"""Offline contextual bandit on measured phone cells. Context = battery tier, arm = plan
+(GPU clock cap or CPU cache K), reward = w_q*q - w_t*T/T_ref - w_e*E/E_ref. Policy is the
+greedy arm, and a bootstrap gives the probability that each arm is best.
 """
 import sys, os, glob, json, random, statistics as st
 sys.path.insert(0, "/home/mislam22/EndurKV_workspace/EndurKV/scripts")

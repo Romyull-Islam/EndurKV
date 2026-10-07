@@ -1,28 +1,9 @@
 #!/bin/bash
-# ============================================================================
-# run_niah_snapkv_paper.sh -- NIAH SnapKV at its OWN published NIAH setting
-#                             (2026-08-02)
-#
-# WHY. The 392-cell NIAH sweep ran SnapKV at window 64 / kernel 5. That was not a
-# choice: run_niah_tableC.sh passed --obs-window 64, but on the v87 build the flag
-# was INERT (window/kernel were hardcoded at the FasterDecoding default 64/5 and
-# --obs-window was never forwarded to policy_snapkv). The rows are therefore valid
-# canonical-repo-default SnapKV -- but only by coincidence, since the passed value
-# happened to equal the hardcoded one.
-#
-# SnapKV's paper retunes per benchmark and uses window 16 / kernel 5 for NIAH.
-# Our paper must not label three different configurations "SnapKV" across three
-# tables, so the rule is: give the baseline its OWN published setting for the
-# benchmark being run (NIAH 16/5, LongBench 32/7), and fall back to the repo
-# default only where the baseline publishes none (WikiText). This re-runs the
-# NIAH SnapKV block at 16/5 on the v88 build, where the flags actually take
-# effect and meta.json records obs_window/snapkv_kernel so the configuration is
-# auditable from the artifact rather than inferred from this script.
-#
-# Only the SnapKV block is re-run: 4 models x 14 stimuli = 56 cells. Every other
-# policy in Table C is untouched and stays on its existing cells -- same build
-# family, same ctx, same protocol, same cool gate.
-# ============================================================================
+# NIAH with SnapKV at its own published NIAH setting (window 16, kernel 5), on
+# the v88 build where --obs-window and --snapkv-kernel take effect and are
+# recorded in meta.json. Each benchmark uses SnapKV's published setting for it
+# (NIAH 16/5, LongBench 32/7) and the repo default only where none is published.
+# 4 models x 14 stimuli, cool-gated, same protocol as the other NIAH cells.
 set -u
 for _p in ${ADB_PORTS:-5152 5037 5151}; do
   (exec 3<>/dev/tcp/127.0.0.1/$_p) 2>/dev/null || continue
@@ -54,7 +35,7 @@ cell(){ local MT=$1 STIM=$2; local id="${MT}__snapkv_paper__${STIM%.txt}"; local
   CG=$(adb_safe_shell "su -c '. /data/local/tmp/endurkv/scripts/cool_gate.sh; cool_ddr36'" < /dev/null)
   echo "$CG" | tail -1
   case "$CG" in *"cool ddr="*) : ;; *) echo "[SKIP-HOT] $id"; return ;; esac
-  # no watchdog: it is muKV-only by design
+  # No watchdog, it is muKV-only.
   adb_safe_shell "su -c 'nohup sh /data/local/tmp/endurkv/scripts/sample_sensors.sh --out $PD/sensors.csv --hz 5 >/dev/null 2>&1 &'" < /dev/null
   adb_safe_shell "LD_LIBRARY_PATH=$CB timeout ${TMO:-3600} $CB/eviction_bench --prompt $OUT/$STIM --prompt-id $id \
     --eval-mode gen --max-tokens 64 --ignore-eos --ctx-size $CTX --model ${MODELS[$MT]} --seed 42 \

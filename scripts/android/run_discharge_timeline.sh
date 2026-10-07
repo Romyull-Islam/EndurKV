@@ -1,23 +1,10 @@
 #!/bin/bash
-# ============================================================================
-# run_discharge_timeline.sh -- the energy-aware scheduler on a REAL discharge (2026-09-04)
-#
-# No forced battery state. Charging is switched off and the phone is discharged by a session of
-# back-to-back requests through the scheduler (ukv_sched.sh v2.1), which reads the real battery
-# level each time, picks its plan for the tier it finds (healthy above 50%, mid 21 to 50%, low
-# 20% or below), applies the output cap when the caller left the length open (it does here),
-# meters the request, learns its table and lets the two loops move the lever. The run stops at
-# 12% and charging is switched back on.
-#
-# Every request logs: time, SoC, tier, lever and bias, plan, GPU clocks, output cap, measured
-# energy and time, predicted energy and time, temperatures at start. That is the timeline figure:
-# the plan and the energy per request stepping down as the real battery crosses 50% and 20%.
-#
-# Protocol: CPU caps pinned as in the proofs; a LIGHT cool gate between requests (DDR <= 42 C,
-# battery <= 36 C) so the drain keeps moving while requests still start from a similar thermal
-# state; --ignore-eos so each request decodes exactly its cap (the long-answer case, where the
-# data lever shows). The table is reset to its seed and the bias file removed at the start.
-# ============================================================================
+# run_discharge_timeline.sh: energy-aware scheduler on a real discharge, charging off.
+# Back-to-back requests through ukv_sched.sh, which reads the real battery level each time,
+# until SoC reaches STOP_SOC (12%). Each request appends one row to timeline.csv (SoC, tier,
+# lever, plan, clocks, predicted and measured energy and time, temperatures).
+# Protocol: CPU caps pinned, a light cool gate (DDR <= 42 C, battery <= 36 C) so the drain
+# keeps moving, --ignore-eos. The table is reset to its seed and the bias file removed first.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 P=/data/local/tmp/endurkv/corpora/prompt_12k.txt

@@ -1,25 +1,10 @@
 #!/bin/bash
-# ============================================================================
-# run_gemma_gpu_diag.sh -- why gemma-2-2b does not run on the Adreno. (2026-09-20)
-#
-# The 6382-token gemma GPU cell died with
-#     vk::DeviceLostError: vk::Queue::submit: ErrorDeviceLost
-# inside llama_decode, AFTER the graph reserved cleanly (948 nodes, 2 splits,
-# 63 MiB compute buffer). So it is not an allocation or context-size failure.
-# The paper currently claims gemma is CPU-only because its context is 8192,
-# which this shows is the wrong reason. Three cells settle what the right one is:
-#
-#   D1 tiny prompt, ctx 4096, 16 tokens. Still lost  -> gemma's graph breaks the
-#      driver, independent of length. Survives -> length or ctx is involved.
-#   D2 the real 6382-token prompt at ctx 8192, 16 tokens. Separates "long prompt"
-#      from "16384 ctx".
-#   D3 Llama-1B on the same build, same GPU, right after. Proves the device is
-#      healthy and D1/D2 are about gemma, not about a wedged GPU.
-#
-# Cheap by design: 16 generated tokens each, no cool gate, since a crash or a
-# clean load does not depend on temperature. Runs GPU-only, so it must not
-# overlap the needle campaign.
-# ============================================================================
+# Diagnose why gemma-2-2b fails on the Adreno GPU (vk::DeviceLostError in llama_decode
+# after the graph reserved cleanly). Three 16-token cells, no cool gate:
+#   gemma_tiny_ctx4096   tiny prompt: if it still fails, length is not the cause
+#   gemma_6382_ctx8192   the real 6382-token prompt at ctx 8192
+#   llama_control        Llama-1B on the same build, to show the GPU itself is healthy
+# GPU only, so do not overlap it with another GPU campaign.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 LOG(){ echo "[$(date +%F' '%H:%M:%S)] $*"; }
@@ -29,7 +14,7 @@ DEV=/data/local/tmp/gemmadiag
 OUT=/tmp/gemma_gpu_diag; mkdir -p $OUT
 adb_safe_shell "mkdir -p $DEV" < /dev/null >/dev/null 2>&1
 
-# a short prompt: first 40 lines of the 7k corpus, a few hundred tokens
+# Short prompt: first 1200 bytes of the 7k corpus, a few hundred tokens.
 adb_safe_shell "head -c 1200 /data/local/tmp/endurkv/corpora/prompt_7k.txt > $DEV/tiny.txt; wc -c $DEV/tiny.txt" < /dev/null
 
 # $1=tag $2=model $3=prompt $4=ctx $5=maxtok

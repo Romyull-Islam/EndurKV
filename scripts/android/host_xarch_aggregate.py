@@ -1,24 +1,7 @@
-"""Cross-arch results aggregator + comparison plotter.
+"""Cross-architecture aggregator: simulates unsimulated study_phone_* dirs, then writes
+pareto CSVs, a KL-vs-K grid and v1's margin over TOVA per model to logs/_xarch/.
 
-After `run_xarch_chain.ps1` finishes (or in between models), this script:
-  1. Auto-discovers all `study_phone_<modelname>_short` and `_longctx` dirs.
-  2. For each that hasn't been simulated yet (no `pareto_summary.csv`), runs
-     `host_simulate_eviction_policies_v2.py` (layer-avg) and optionally
-     `host_simulate_eviction_perhead.py` (per-head, if ATNH captures present).
-  3. Builds a unified comparison CSV across all models.
-  4. Generates a grid figure: rows = study type (short / longctx / reasoning),
-     columns = model, lines = top-5 policies on KL-vs-actual-K Pareto.
-
-Outputs to `logs/_xarch/`:
-  - all_models_pareto.csv
-  - all_models_pareto_grid.png
-  - per_model_ranking.csv       (each model's policy ranking at matched K)
-  - cross_model_v1_margin.csv   (v1's margin over TOVA per model — the headline number)
-
-Usage:
-  python host_xarch_aggregate.py [--no-sim]   # skip simulation, just aggregate
-  python host_xarch_aggregate.py --rerun-sim  # force re-run sim
-"""
+Usage: python host_xarch_aggregate.py [--no-sim | --rerun-sim]"""
 from __future__ import annotations
 import argparse
 import os
@@ -75,7 +58,7 @@ def discover_studies(rerun_sim: bool = False) -> list[dict]:
         bins = list(d.glob("*.attn.bin"))
         if not bins:
             continue
-        # Look ahead — is the first file ATNH (per-head) or ATTN (layer-avg)?
+        # ATNH magic means per-head captures, ATTN means layer-averaged
         with open(bins[0], "rb") as f:
             magic = f.read(4)
         is_perhead = (magic == b"ATNH")
@@ -164,13 +147,12 @@ def main() -> int:
     all_df.to_csv(out_dir / "all_models_pareto.csv", index=False)
     print(f"\nwrote {out_dir / 'all_models_pareto.csv'} ({len(all_df)} rows)")
 
-    # v1's margin over TOVA per model+study_type — the headline cross-arch finding
+    # v1 margin over TOVA per (model, study_type), TOVA taken at the nearest actual K
     headline_rows = []
-    # Match v1's actual avg_K to TOVA's nearest available K
     v1_name = "endurkv_tova_spread"  # v1 in layer-avg sim
     perhead_v1_name = "perhead_v1"
     for (model, study_type), g in all_df.groupby(["model", "study_type"]):
-        # Pick the v1 row at smallest K_nominal
+        # v1 rows from either simulator
         v1_candidates = g[g["policy"].isin([v1_name, perhead_v1_name])]
         if v1_candidates.empty:
             continue
@@ -200,7 +182,7 @@ def main() -> int:
     if headline_rows:
         hd = pd.DataFrame(headline_rows)
         hd.to_csv(out_dir / "cross_model_v1_margin.csv", index=False)
-        print(f"\n--- Headline: v1 vs TOVA per model x study_type ---")
+        print(f"Headline: v1 vs TOVA per model x study_type")
         print(hd.to_string(index=False))
 
     # Plot grid

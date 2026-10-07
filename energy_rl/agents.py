@@ -1,16 +1,7 @@
 """Contextual bandit vs tabular Q-learning on the fitted phone simulator.
 
-THE OBJECTIVE BALANCES ENERGY AND PERFORMANCE. Minimising energy alone picks a
-degenerate arm (crawl slowly forever), so utility carries both terms and the
-weight moves with remaining charge:
-
-    u = a(b) * perf_norm + (1 - a(b)) * energy_norm - throttle_penalty
-    a(b) = battery fraction
-
-At a full battery the agent is paid for throughput; near empty it is paid for
-frugality. The balance point is therefore not a constant -- it is what the agent
-has to discover per battery bucket.
-"""
+Utility weighs quality, throughput and energy per token, with weights set by battery level and
+charging, minus a throttle penalty. Energy alone would reward the slowest arm."""
 import random, math
 import sim
 

@@ -1,41 +1,7 @@
 #!/usr/bin/env python3
-"""
-PLOT 16: Eviction's thermal payoff -- before/after eviction thermal differential.
-
-Hold the workload constant (Phi-3-mini long-decode, Wave-4 scenario) and ask:
-how much hotter does the chip run when we let the KV cache grow vs when we
-clamp it with an eviction policy?
-
-Data layout (everything is logged at ~30 Hz via the sensors probe, with
-per-iter stress.csv summaries and meta.json from llama-cli):
-
-  vanilla (no eviction):
-    phone-logs/wave4_longdecode_1780750084/vanilla/
-        sensors.csv  -- DDR/CPU thermal stream
-        stress.csv   -- iter timing + peak_kv_cells
-        iter*/meta.json
-  v1 K=512 (aggressive spread-gate eviction):
-    phone-logs/wave4_longdecode_1780750084/v1_K512/
-        same files
-  v1_fa2_stack K=512 (FA2 + stacked inflight eviction, Wave-9):
-    phone-logs/wave9_v1fa2_stack_1780796320/v1_fa2_stack/
-  h2o K=512 (sink + recency, Wave-11 Phi-3 ppl run):
-    phone-logs/wave11_eval_1780862534/Phi-3-mini-128k/h2o/ppl/
-
-For each arm we compute peak DDR, mean DDR over the decode segment (drop the
-last ~5 s of each iter as cooldown), peak CPU, and steady-state KV cells from
-meta.json. We then express vanilla as the eviction-off baseline and the other
-three arms as the eviction-on alternatives. The differential against vanilla
-goes in the title.
-
-2-panel figure:
-  Left:  bar chart -- peak DDR for {vanilla, v1, v1_fa2_stack, h2o}
-  Right: bar chart -- peak CPU for the same arms
-  Each bar annotated with the policy mechanism string.
-
-Output:
-  figures/relationship_plots/16_eviction_thermal_diff.png
-  figures/relationship_plots/16_eviction_thermal_diff.schema.json (PLOT_SCHEMA)
+"""Plot 16: peak DDR and peak CPU temperature with and without eviction, Phi-3 long decode.
+Arms: vanilla, v1 K=512, v1_fa2_stack K=512 and h2o K=512 from the Wave-4/9/11 phone logs.
+Output: figures/relationship_plots/16_eviction_thermal_diff.png (+ .schema.json)
 """
 from __future__ import annotations
 
@@ -51,9 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
-# ---------------------------------------------------------------------------
 # Arm spec
-# ---------------------------------------------------------------------------
 ARMS = [
     {
         "key": "vanilla",
@@ -99,15 +63,12 @@ OUT_PNG = Path(
 )
 OUT_SCHEMA = OUT_PNG.with_suffix(".schema.json")
 
-# Trim the last `COOLDOWN_S` seconds of each iter window because llama-cli has
-# finished and the chip is bleeding heat into the heatsink (would underestimate
-# the load-time mean).
+# Drop the last COOLDOWN_S seconds of each iter, when the run has finished and the
+# chip is already cooling, so the load-time mean is not underestimated.
 COOLDOWN_S = 5.0
 
 
-# ---------------------------------------------------------------------------
 # Sensor loading
-# ---------------------------------------------------------------------------
 def load_sensors(csv_path: Path) -> pd.DataFrame:
     df = pd.read_csv(csv_path, low_memory=False)
     df["wall_clock_s"] = pd.to_numeric(df["wall_clock_s"], errors="coerce")
@@ -128,12 +89,8 @@ def load_stress(csv_path: Path) -> pd.DataFrame:
 
 
 def iter_windows(sensors: pd.DataFrame, stress: pd.DataFrame):
-    """Yield (iter_idx, t_start_unix, t_end_unix) tuples for each iter row.
-
-    stress.t_elapsed_s is anchored at the start of the run; we add it to the
-    first sensors wall_clock_s to project into unix seconds. The iter ends at
-    the next iter's start, or the last sensor sample for the final iter.
-    """
+    """Yield (iter_idx, t_start_unix, t_end_unix) per iter: first sensor wall_clock_s plus
+    stress t_elapsed_s. An iter ends at the next start, or at the last sensor sample."""
     if sensors.empty or stress.empty:
         return
     t_origin = float(sensors["wall_clock_s"].iloc[0])
@@ -195,9 +152,7 @@ def load_kv_summary(arm: dict):
     }
 
 
-# ---------------------------------------------------------------------------
 # Aggregate
-# ---------------------------------------------------------------------------
 def aggregate():
     arm_rows = []
     per_iter_all = {}
@@ -234,15 +189,13 @@ def aggregate():
     return pd.DataFrame(arm_rows), per_iter_all
 
 
-# ---------------------------------------------------------------------------
 # Plot
-# ---------------------------------------------------------------------------
 def plot(df: pd.DataFrame, deltas: dict):
     # Preserve ARMS ordering.
     order = [a["key"] for a in ARMS]
     df = df.set_index("arm").reindex([k for k in order if k in df["arm"].tolist()
                                       if False] + order).dropna(how="all")
-    # The reindex trick above gets fussy; just sort by ARMS order directly.
+    # Sort by ARMS order.
     df = df.copy()
     df["__order__"] = df.index.map({k: i for i, k in enumerate(order)})
     df = df.sort_values("__order__").drop(columns="__order__")
@@ -258,7 +211,7 @@ def plot(df: pd.DataFrame, deltas: dict):
     )
     fig.suptitle(title, fontsize=14, fontweight="bold")
 
-    # ---------- Left: peak DDR -----------------------------------------
+    # Left: peak DDR
     ax = axes[0]
     bars = ax.bar(
         x, df["ddr_peak_max_c"], color=df["color"],
@@ -287,7 +240,7 @@ def plot(df: pd.DataFrame, deltas: dict):
         ax.text(n - 0.4, v + 0.2, f"vanilla = {v:.1f}°C",
                 fontsize=8, color="#d7301f", ha="right")
 
-    # ---------- Right: peak CPU ----------------------------------------
+    # Right: peak CPU
     ax = axes[1]
     bars = ax.bar(
         x, df["cpu_peak_max_c"], color=df["color"],
@@ -332,9 +285,7 @@ def plot(df: pd.DataFrame, deltas: dict):
     print(f"wrote {OUT_PNG}")
 
 
-# ---------------------------------------------------------------------------
 # Driver
-# ---------------------------------------------------------------------------
 def compute_deltas(df: pd.DataFrame):
     """v1 (Wave-4 K=512) is the named eviction arm for the title delta."""
     if "vanilla" not in df["arm"].tolist() or "v1" not in df["arm"].tolist():

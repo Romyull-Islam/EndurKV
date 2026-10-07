@@ -1,27 +1,7 @@
 #!/usr/bin/env python3
-"""
-Phase C — build the measurement workload from real benchmarks.
-
-Three tiers, all common across recent KV-cache management papers:
-
-  Tier 1 — LongBench (Bai et al., ACL 2024, the gold-standard long-context
-           bench used by KVSwap, KIVI, CAKE, SnapKV).
-           8 tasks × 6 prompts = 48 prompts:
-             qasper, multifieldqa_en, triviaqa, samsum,
-             hotpotqa, gov_report, trec, lcc
-
-  Tier 2 — HELM-style summarization (used by H2O):
-           xsum, cnn_dailymail × 8 = 16 prompts
-
-  Tier 3 — lm-eval-harness style multiple-choice (used by H2O):
-           piqa, openbookqa × 8 = 16 prompts
-
-Total target: 80 prompts. If any HF dataset 401s / breaks under
-`datasets` 4.x (which now rejects script-based datasets), that
-tier is logged as 'skipped' and the rest still write.
-
-Output: data/prompts.jsonl  one row per prompt with
-    {prompt_id, task, prompt_text, expected_max_tokens, _meta}
+"""Build data/prompts.jsonl from LongBench (8 tasks x 6 prompts), HELM-style summarization
+(xsum, cnn_dailymail) and multiple choice (piqa, openbookqa), 80 prompts in total.
+A tier whose dataset fails to load is logged as skipped and the rest are still written.
 """
 from __future__ import annotations
 
@@ -52,9 +32,7 @@ CONTEXT_CHAR_LIMIT  = 2000
 EXPECTED_MAX_TOKENS = 64
 
 
-# --------------------------------------------------------------------------- #
-# helpers                                                                     #
-# --------------------------------------------------------------------------- #
+# helpers
 def truncate_context(text: str, limit: int) -> str:
     text = (text or "").strip()
     if len(text) <= limit:
@@ -67,9 +45,7 @@ def truncate_context(text: str, limit: int) -> str:
     return cut.rstrip() + " ..."
 
 
-# --------------------------------------------------------------------------- #
-# tier 1 — LongBench (one zip with all task jsonl files)                      #
-# --------------------------------------------------------------------------- #
+# tier 1: LongBench (one zip with all task jsonl files)
 _LONGBENCH_REPO = "zai-org/LongBench"
 _LONGBENCH_EXTRACTED: Path | None = None
 
@@ -125,9 +101,7 @@ def load_longbench(name: str, n: int, template: str, ctx_field: str = "context",
     return rows
 
 
-# --------------------------------------------------------------------------- #
-# tier 2 — HF parquet-backed datasets                                         #
-# --------------------------------------------------------------------------- #
+# tier 2: HF parquet-backed datasets
 def _try_load_dataset(repo: str, config: str | None, split: str):
     """Return list[dict] or raise."""
     from datasets import load_dataset
@@ -157,8 +131,8 @@ def load_hf_simple(name: str, repo: str, config: str | None, split: str,
 
 
 def load_piqa(name: str, n: int) -> list[dict]:
-    """PIQA — physical reasoning, multi-choice. Low-entropy answer."""
-    # Try in order: lighteval mirror (parquet, modern), then ybisk official.
+    """PIQA: physical reasoning, multiple choice, low-entropy answer."""
+    # Try the lighteval parquet mirror first, then the ybisk original.
     last_err = None
     for repo, config in [("lighteval/piqa", None), ("ybisk/piqa", "plain_text"), ("piqa", None)]:
         try:
@@ -193,7 +167,7 @@ def load_piqa(name: str, n: int) -> list[dict]:
 
 
 def load_openbookqa(name: str, n: int) -> list[dict]:
-    """OpenBookQA — knowledge-based 4-way multiple choice."""
+    """OpenBookQA: knowledge-based 4-way multiple choice."""
     last_err = None
     for repo, config in [("lighteval/openbookqa", None),
                          ("allenai/openbookqa", "main"),
@@ -232,9 +206,7 @@ def load_openbookqa(name: str, n: int) -> list[dict]:
     return rows
 
 
-# --------------------------------------------------------------------------- #
-# task spec                                                                   #
-# --------------------------------------------------------------------------- #
+# task spec
 LONGBENCH_TASKS = [
     ("qasper",          6, "context", "input",
      "You are given a scientific article. Answer the question based on it.\n\nArticle:\n{context}\n\nQuestion: {input}\nAnswer:"),
@@ -263,9 +235,7 @@ HELM_TASKS = [
 ]
 
 
-# --------------------------------------------------------------------------- #
-# main                                                                        #
-# --------------------------------------------------------------------------- #
+# main
 def main() -> int:
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -273,7 +243,7 @@ def main() -> int:
     failures: list[tuple[str, str]] = []
 
     # Tier 1
-    print("=" * 60); print("TIER 1 — LongBench"); print("=" * 60)
+    print("TIER 1 — LongBench");
     for name, n, ctx_f, in_f, tmpl in LONGBENCH_TASKS:
         try:
             print(f"[{name}] loading...", flush=True)
@@ -286,7 +256,7 @@ def main() -> int:
             traceback.print_exc(limit=2)
 
     # Tier 2
-    print(); print("=" * 60); print("TIER 2 — HELM (summarization)"); print("=" * 60)
+    print(); print("TIER 2 — HELM (summarization)");
     for (name, repo, cfg, split, ctx_f, tmpl, n) in HELM_TASKS:
         try:
             print(f"[{name}] loading from {repo}...", flush=True)
@@ -298,7 +268,7 @@ def main() -> int:
             print(f"[{name}] FAILED: {e}")
 
     # Tier 3
-    print(); print("=" * 60); print("TIER 3 — lm-eval-harness style (multi-choice)"); print("=" * 60)
+    print(); print("TIER 3 — lm-eval-harness style (multi-choice)");
     for fn, name, n in [(load_piqa, "piqa", 8), (load_openbookqa, "openbookqa", 8)]:
         try:
             print(f"[{name}] loading...", flush=True)
@@ -335,9 +305,7 @@ def main() -> int:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
     print()
-    print("=" * 60)
     print(f"wrote {len(out_rows)} prompts to {OUT_PATH}")
-    print("=" * 60)
     print("by task:")
     for t in sorted(by_task_count):
         print(f"  {t:<22}  {by_task_count[t]:>3} prompts")

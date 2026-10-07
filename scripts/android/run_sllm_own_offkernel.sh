@@ -1,72 +1,11 @@
 #!/bin/bash
-# ============================================================================
-# run_streamingllm_faithful.sh -- StreamingLLM at its REAL strength, head to head.
-# (2026-08-14)
-#
-# WHY THIS RUN EXISTS. The paper claims "muKV is the ONLY policy in this set that is
-# FASTER than not evicting at all on a phone", and fig_retention_vs_speedup is built on
-# "StreamingLLM keeps 8.0% of cells and runs at 0.23x while muKV keeps 7.4% and runs at
-# 1.23x -- same retention, 5.3x apart". Both rest on a StreamingLLM arm we handicapped.
-#
-# THE HANDICAP, VERIFIED AT SOURCE. StreamingLLM's official implementation
-# (mit-han-lab/streaming-llm, streaming_llm/kv_cache.py) evicts by PHYSICALLY
-# CONCATENATING the survivors:
-#     torch.cat([self.k_slice(k, 0, self.start_size),
-#                self.k_slice(k, seq_len - self.recent_size, seq_len)],
-#               dim=self.k_seq_dim)
-# Its cache is dense and bounded by construction -- sinks plus recent window, no holes,
-# ever. Compaction is not something we generously grant StreamingLLM; it is INTRINSIC to
-# StreamingLLM and our harness removed it. The published phone cell ran FA-off AND
-# uncompacted (777 live cells, 5.55 tok/s, 0.19x), which is StreamingLLM crippled by a
-# sequence-level cell array it never uses in its own implementation.
-#
-# AND THE REALIZABILITY ARGUMENT DOES NOT EXCUSE IT. That argument is real for PER-HEAD
-# evictors (SnapKV, Ada-KV, H2O, TOVA), whose union across heads and layers genuinely
-# cannot free a cell on a shared array. StreamingLLM is SEQUENCE-LEVEL, exactly like
-# muKV: 4 sinks + one contiguous recent run, trivially compactable. Grouping it with the
-# per-head policies was our error, not a property of the device.
-#
-# ARMS. Llama-3.2-1B, phone GPU, ctx 16384, same 9737-token prompt + 4096 generated as
-# the published table, so the numbers drop straight into it.
-#   vanilla        full cache, the do-not-evict reference the claim is about
-#   mukv           frozen config + in-place compaction, K=1024
-#   sfown          StreamingLLM at ITS OWN DOCUMENTED BUDGET: FA-on + compacted,
-#                  start_size=4 + recent_size=2000 = K 2004
-#   sh             StreamingLLM as we published it: FA-off, uncompacted -- kept so the
-#                  size of our own handicap is measured rather than asserted
-#
-# WHERE K=2004 COMES FROM. examples/run_streaming_llama.py in mit-han-lab/streaming-llm:
-#     "--start_size",  type=int, default=4
-#     "--recent_size", type=int, default=2000
-# so the documented cache is 4 sinks + a 2000-token recent window = 2004 cells. An earlier
-# version of this script ran StreamingLLM at K=1024 -- roughly HALF its published budget --
-# which is the same class of error as the FA-off/uncompacted handicap it was written to
-# correct. Both arms are now run: its own budget answers "is StreamingLLM as published
-# faster than muKV", and the matched-K arm answers "at equal retention, which is faster".
-# A matched-K=1024 arm was written and then REMOVED (2026-08-14). Forcing our budget onto
-# a baseline is the same defect as the FA-off handicap -- it deletes the policy being
-# compared. The only setting StreamingLLM is entitled to is its own. The consequence is
-# that fig_retention_vs_speedup loses its "same retention, 5.3x apart" annotation: at
-# K=2004 StreamingLLM retains ~15% against muKV's 7.4%, so the two are no longer
-# coincidentally equal. That annotation should go. The figure's real claim -- that
-# retention does not predict speed across the scatter -- needs no matched pair to stand.
-#
-# PINNED, AND THAT IS NOT OPTIONAL. Unpinned, this phone's GPU decode is bimodal --
-# 28.20 to 39.21 tok/s from an unchanged command line, a 39% spread that makes any ratio
-# below 1.39x unclaimable. taskset f0 + nice -20 collapses that to 3% (SD 4.79 -> 0.48),
-# at the cost of measuring in the slower mode. That is the conservative direction for
-# muKV, which is the right place to argue from.
-#
-# COMPACTION MODE FOR StreamingLLM: in-place. Verified equivalent to the round-trip on
-# StreamingLLM at THIS context (audit R5: 0.010-0.096%). Do NOT reuse this at 64K, where
-# in-place is currently broken for StreamingLLM (PPL 13.474 vs 10.432 round-trip) -- an
-# open bug in our compaction, not in StreamingLLM.
-#
-# sllm_handicap's OUTPUT IS NUMERICALLY INVALID by construction: FA-off attaches the
-# attention capture, and on this Adreno the resulting graph split corrupts the
-# computation (root-caused 2026-08-14). Its TIMING is still the honest cost of the path
-# we published, which is the only thing it is here to provide. No PPL cell is run for it.
-# ============================================================================
+# StreamingLLM at its own documented budget vs vanilla, Llama-3.2-1B on the
+# phone GPU, ctx 16384, 4096 generated tokens, 3 interleaved reps.
+# StreamingLLM runs FA-on and compacted with start_size=4 + recent_size=2000
+# (K=2004), the defaults in mit-han-lab/streaming-llm, whose cache is dense.
+# Runs are pinned (taskset f0, nice -20) because unpinned GPU decode on this
+# phone is bimodal. In-place compaction matches the round-trip at this context
+# but not at 64K, so do not reuse this setup at 64K.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 BIN=/data/local/tmp/ukv_n3
@@ -77,8 +16,7 @@ DEV=/data/local/tmp/endurkv/logs/sllmown_$(date +%Y%m%d_%H%M%S)
 HOST=/tmp/sllm_own_offkernel; mkdir -p $HOST
 PIN="taskset f0 nice -n -20"
 MU="--policy v1_fa2 --fa-on-evict --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70 --compact-inplace --k-nominal 1024"
-# per-head arms, flags copied verbatim from run_phone_gpu_complete.sh (the campaign
-# that produced the published n=1 rows), so these are repeats, not a new protocol
+# Per-head arms use the same flags as run_phone_gpu_complete.sh.
 SNAP="--policy snapkv --obs-window 64 --snapkv-kernel 5 --n-sink 0 --k-nominal 1024"
 ADA="--policy adakv --n-sink 0 --obs-window 32 --k-nominal 1024"
 H2O="--policy h2o --n-sink 0 --obs-window 64 --k-nominal 1024"
@@ -111,9 +49,9 @@ cell(){ # tag mode flags...
   echo "[$(date +%H:%M:%S)] cooling for $TAG ..."; settle || { echo "  [SKIP-HOT] $TAG"; return; }
   adb_safe_shell "su -c 'rm -f /data/local/tmp/sl_$TAG.csv; nohup sh /data/local/tmp/sample_sensors.sh --out /data/local/tmp/sl_$TAG.csv --hz 2 >/dev/null 2>&1 &'" < /dev/null
   echo "[$(date +%H:%M:%S)] running $TAG ..."
-  # Launch detached on the phone and poll. Every adb call stays short, so a
-  # dropped tunnel can neither kill a 20-minute run nor trip the helper's
-  # timeout, whose remedy (adb kill-server) is fatal through a tunnel.
+  # Launch detached and poll with short adb calls, so a dropped tunnel cannot
+  # kill the run or trip the helper's timeout (its adb kill-server is fatal
+  # through a tunnel).
   adb_safe_shell "su -c 'rm -f $DEV/$TAG.json; cd $BIN && LD_LIBRARY_PATH=$BIN nohup $PIN ./eviction_bench --model $M --prompt $P \
     --prompt-id $TAG $EX --ctx-size 16384 --seed 42 --threads 4 --n-gpu-layers 99 --greedy \
     --cache-type-k f16 --cache-type-v f16 $* --n-batch 512 --n-ubatch 64 \

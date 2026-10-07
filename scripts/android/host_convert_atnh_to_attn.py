@@ -1,19 +1,7 @@
-"""Convert v2 ATNH (per-head) .attn.bin files into v1 ATTN (head-averaged) format.
+"""Convert v2 ATNH (per-head) .attn.bin files to the v1 ATTN format by averaging over heads,
+for per-head captures with no v1 capture. Sidecar files are hard-linked into the output.
 
-Mathematically lossless reduction:
-    ATTN[step, layer, pos] = mean over heads of ATNH[step, layer, head, pos]
-
-Used to derive layer-avg simulation cells from per-head captures when the
-corresponding v1 capture doesn't exist (e.g., 8B long-ctx was only captured
-with the v2 probe). Output files are byte-compatible with the original v1
-attention_probe so the layer-avg simulator consumes them unchanged.
-
-Sidecar files (.run.json, .sensors.csv, .entropy.csv) are hard-linked into
-the output dir so the layer-avg simulator sees a complete capture dir.
-
-Usage:
-    python host_convert_atnh_to_attn.py --src logs/_combined_8b_longctx_perhead_52 \
-                                        --dst logs/_derived_8b_longctx_layeravg
+Usage: python host_convert_atnh_to_attn.py --src logs/<perhead_dir> --dst logs/<layeravg_dir>
 """
 from __future__ import annotations
 import argparse
@@ -34,13 +22,11 @@ def convert_one(src_path: Path, dst_path: Path) -> tuple[int, int, int]:
             raise ValueError(f"not ATNH: {src_path} (magic={magic!r})")
         n_steps, n_layers, n_head = struct.unpack("<III", f.read(12))
 
-        # We can't know n_kv per (step, layer) until we read the per-block
-        # n_kv prefix. Stream: read each block, write the averaged block.
+        # n_kv is only known from each block prefix, so convert block by block.
         with open(dst_path, "wb") as g:
             g.write(b"ATTN")
-            # v1 layout (matches attention_probe.cpp + load_attn_full):
-            # magic(4) + n_steps(u32) + n_layers(u32) + n_head(u32) + per-step
-            # per-layer (n_kv(u32) + n_kv floats). v1 stores n_head=1.
+            # v1 layout (attention_probe.cpp): magic, n_steps, n_layers, n_head=1 (u32),
+            # then per step and layer n_kv (u32) and n_kv floats.
             g.write(struct.pack("<III", n_steps, n_layers, 1))
             for _s in range(n_steps):
                 for _l in range(n_layers):
@@ -83,7 +69,7 @@ def main() -> int:
             print(f"  [{i:3d}/{len(attn_files)}] {src_f.name}: FAILED ({e})",
                   file=sys.stderr)
             continue
-        # Hard-link sidecars so the layer-avg sim has full context.
+        # Hard-link sidecars so the layer-avg sim sees a complete capture.
         stem = src_f.name[:-len(".attn.bin")]
         for ext in (".run.json", ".sensors.csv", ".entropy.csv", ".probe.stderr"):
             sc_src = src / f"{stem}{ext}"
@@ -92,7 +78,7 @@ def main() -> int:
                 try:
                     os.link(sc_src, sc_dst)
                 except OSError:
-                    # Cross-device or perm issue — copy instead
+                    # Cross-device or perm issue - copy instead
                     sc_dst.write_bytes(sc_src.read_bytes())
     print(f"[convert] done. Output: {dst}")
     return 0

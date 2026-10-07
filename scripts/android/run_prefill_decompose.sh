@@ -1,27 +1,10 @@
 #!/bin/bash
-# ============================================================================
-# run_prefill_decompose.sh -- WHY is muKV's prefill slower than vanilla? (2026-08-28)
-#
-# The question. On Llama-1B/GPU muKV's prefill is +2% over vanilla (134 vs 131 s):
-# effectively free, and the behaviour previously observed. On Llama-1B/CPU it is
-# +13.7% (207+-11 vs 182+-7, n=3) and on Phi-3 +24%. Nothing in the prefill loop
-# reads the compaction flag (want_defrag is computed at line 3368; the prefill
-# timer closes at 2486), so the earlier diagnostic's 452/585/647 spread across
-# three muKV arms was thermal/position noise, not mechanism.
-#
-# The decomposition. Three arms isolate the two candidate costs, because they
-# differ by exactly one property each:
-#     vanilla        no scoring, no eviction        -> baseline
-#     streamingllm   NO scoring, but DOES evict     -> vanilla..sllm = eviction bookkeeping
-#     muKV           scoring AND evicts             -> sllm..muKV    = side-node scoring
-# If sllm ~ muKV, the toll is eviction bookkeeping and the side node is free (which
-# is what Phi-3/CPU hinted: vanilla 381, sllm 472, muKV 471). If sllm ~ vanilla,
-# the toll is the side node and the fix belongs in the scoring path.
-#
-# Protocol. n=3, rotated (each arm visits each slot once), cool-gated, 6 threads,
-# same 9.7K prompt as Table 1, and only 64 decode tokens because this measures
-# PREFILL -- decode is a formality here and keeps each cell to ~4 min.
-# ============================================================================
+# Splits muKV's CPU prefill overhead (Llama-1B, 6 threads) into eviction bookkeeping
+# and side-node scoring:
+#     vanilla       no scoring, no eviction
+#     streamingllm  evicts without scoring   : vanilla to sllm = eviction bookkeeping
+#     muKV          scores and evicts        : sllm to muKV    = side-node scoring
+# n=3 with rotated order, 9.7K prompt, 64 decode tokens since only prefill is measured.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 LOG(){ echo "[$(date +%H:%M:%S)] $*"; }
@@ -30,7 +13,7 @@ CB=/data/local/tmp/endurkv/bin_cpu_kd
 M=/data/local/tmp/endurkv/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 DEV=/data/local/tmp/pfdec; HOST=/tmp/prefill_decompose
 mkdir -p $HOST; adb_safe_shell "mkdir -p $DEV/wt" < /dev/null >/dev/null 2>&1
-timeout 180 adb push /tmp/claude-1001/-home-mislam22-EndurKV-workspace/1d283ef2-8bcb-4a99-8b56-fd8d8af9f80d/scratchpad/wikitext_16k_p12k_d4k.txt "$DEV/wt/prompt.txt" < /dev/null >/dev/null 2>&1
+timeout 180 adb push "$(cd "$(dirname "$0")/../.." && pwd)/eval_corpora"/wikitext_16k_p12k_d4k.txt "$DEV/wt/prompt.txt" < /dev/null >/dev/null 2>&1
 MU="--policy v1_fa2 --fa-on-evict --compact-inplace --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70"
 flags(){ case "$1" in
   vanilla) echo "--policy vanilla --k-nominal 1024";;
@@ -61,12 +44,9 @@ try:
 except Exception: print('--')" 2>/dev/null)
   LOG "  [$TAG] prefill=${PF}s start_cpu=${SC}C"
 }
-# v2 (2026-08-28): NO per-cell cool gate. v1 gated between cells, which let the WALT
-# governor's load tracker decay, so prefill was set by a cell's POSITION in the repeat
-# (slot1 ~500 s, slot2 333 s, slot3 217 s) and the SAME policy moved 333 -> 517 s
-# between repeats: policy was invisible. Here the device is warmed once and the arms
-# run back-to-back in a sustained state -- the soak protocol, which held vanilla to
-# 4.97-5.02 tok/s across six generations.
+# No per-cell cool gate: cooling between cells lets the WALT governor's load tracker
+# decay, so prefill time tracks queue position rather than policy. The device is
+# warmed once and the arms run back-to-back in a steady state.
 LOG "=== prefill decomposition v2: warmed once, arms back-to-back, no inter-cell gate ==="
 LOG "warming to a steady governor state ..."
 adb_safe_shell "su -c '. /data/local/tmp/endurkv/scripts/cool_gate.sh; warm_up 40'" < /dev/null 2>/dev/null | tail -1

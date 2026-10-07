@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase B' — run attention_probe on a single demo prompt to collect entropy +
+# Phase B' - run attention_probe on a single demo prompt to collect entropy +
 # per-decode-step per-layer attention scores for proposal slides.
 # Run from the EndurKV root:  bash scripts/07_attention_demo.sh
 
@@ -17,7 +17,7 @@ PROMPT_ID=${PROMPT_ID:-attn_demo}
 
 # Build if missing
 if [ ! -x "$PROBE" ]; then
-    echo "=== building entropy_probe + attention_probe ==="
+    echo "building entropy_probe + attention_probe"
     cmake -S "$SRC" -B "$BUILD" \
         -DLLAMA_CPP_DIR="$ROOT/llama.cpp" \
         -DCMAKE_BUILD_TYPE=Release \
@@ -39,7 +39,7 @@ export CUDA_VISIBLE_DEVICES=0
 OUT_CSV=logs/attention/${PROMPT_ID}.csv
 OUT_BIN=logs/attention/${PROMPT_ID}.attn.bin
 
-echo "=== running attention_probe ==="
+echo "running attention_probe"
 echo "  prompt:     '$PROMPT_TEXT'"
 echo "  prompt_id:  $PROMPT_ID"
 echo "  max_tokens: $N_TOKENS"
@@ -57,11 +57,11 @@ echo
     --output-attn "$OUT_BIN" 2>&1 | tail -25
 
 echo
-echo "=== CSV head ==="
+echo "CSV head"
 head -n 8 "$OUT_CSV"
 
 echo
-echo "=== attention.bin header ==="
+echo "attention.bin header"
 python3 - "$OUT_BIN" <<'PY'
 import sys, struct
 path = sys.argv[1]

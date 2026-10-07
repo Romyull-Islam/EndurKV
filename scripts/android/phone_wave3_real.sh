@@ -1,35 +1,9 @@
 #!/system/bin/sh
-# phone_wave3_real.sh — REAL sustained-stress benchmark, runs ENTIRELY on phone.
-#
-# This script is pushed to /data/local/tmp/endurkv/ and launched detached via
-# phone_nohup. It survives ADB disconnects (writes meta+csv to disk).
-#
-# What it does:
-#   For each policy (vanilla, v1 K=2048, v1 K=512, v1_fa K=512):
-#     1. Strict cool-down to skin ≤ 32 °C (wait up to 10 min)
-#     2. Start sensor sampler at 5 Hz
-#     3. Loop iterations of (prefill 7700-token narrativeqa + decode 256 tokens)
-#        for DURATION_S seconds
-#     4. Stop sampler
-#     5. Write per-iteration row to stress.csv
-#
-# Each policy is a separate, independent run from a known cold state. This is
-# what makes the comparison clean.
-#
-# Output structure:
-#   $OUT_DIR/
-#     progress.log
-#     vanilla/
-#       sensors.csv  (5 Hz thermal trace)
-#       stress.csv   (per-iteration: iter, t, prefill_ms, decode_tps, peak_kv_mb, ...)
-#       iter*/meta.json, steps.csv
-#     v1_K2048/
-#       ...same structure...
-#     v1_K512/
-#       ...
-#     v1_fa_K512/
-#       ...
-#     DONE  (sentinel file written at very end)
+# phone_wave3_real.sh: sustained-stress benchmark that runs entirely on the phone.
+# Pushed to /data/local/tmp/endurkv/ and launched detached, so it survives adb drops.
+# Per policy (vanilla, v1 K=2048, v1 K=512, v1_fa K=512): cool to battery <= 33 C, then loop
+# a narrativeqa prefill plus 256-token decode for DURATION_S with sensors at 5 Hz.
+# Output: $OUT_DIR/progress.log, $OUT_DIR/<label>/ (sensors.csv, stress.csv, iter*/), DONE.
 
 set -u
 

@@ -1,48 +1,15 @@
 #!/bin/bash
-# ============================================================================
-# run_64k_native_budgets.sh -- each baseline at ITS OWN published budget rule.
-# (2026-08-07)
-#
-# CORRECTS A BROKEN EXPERIMENT. run_64k_nolimit.sh forced --k-nominal 65536 on every
-# policy to ask "what does it compress on its own?". That was wrong: for these methods
-# the BUDGET RULE *is* the policy, so overriding K did not reveal their behaviour, it
-# deleted it. Every baseline dutifully reported 100% retention -- an artifact of the
-# harness, not a property of SnapKV/H2O/TOVA/StreamingLLM. This script instead gives
-# each method the budget its own paper/repo specifies.
-#
-# WHERE EACH DEFAULT COMES FROM:
-#   SnapKV   max_capacity_prompt=2048, window=32, kernel=5, avgpool.
-#            From init_snapkv() in snapkv_utils.py (archived at
-#            benchmarks/snapkv_utils_reference.py) -- the integration path their
-#            harness actually runs. NOTE the SnapKVCluster CLASS default is different
-#            (window=64, max_capacity=320); the integration default is the operative
-#            one. ABSOLUTE, does not scale with prompt length.
-#   Ada-KV   same total budget as SnapKV (2048), allocated adaptively ACROSS heads
-#            instead of uniformly. ABSOLUTE.
-#   H2O      budget is a RATIO of sequence length: 20% total (10% heavy hitters +
-#            10% recent) is the paper's standard setting. This is the ONLY baseline
-#            here whose budget scales with context -- the distinction the no-limit
-#            run was trying and failing to expose.
-#   TOVA     fixed multi-state size; 2048 is a representative published operating
-#            point (their paper sweeps cache size). ABSOLUTE.
-#   StreamingLLM  start_size=4 sinks + a fixed recent window; 2048 total. ABSOLUTE
-#            and purely structural -- no attention scoring at all.
-#   muKV     reported twice: at NO limit (K=n_ctx, so only its mass gate acts) and at
-#            its frozen deployment budget K=1024, so the comparison shows both what it
-#            does unconstrained and what it does as configured.
-#
-# f16 EVERYWHERE: per-head evictors need FA-off to read attention weights and
-# llama.cpp requires flash-attention for a quantized V (SnapKV core-dumps at q8_0).
-# 512 generated tokens: FA-off decode at 64K is slow; tok/s is a rate so it is
-# unaffected, and wall-clock is comparable within this table only.
-# ============================================================================
+# 64K-context run (Llama-3.2-1B, RTX) with each baseline at its own published budget rule:
+#   SnapKV 2048 (window 32, kernel 5, avgpool, from init_snapkv() in snapkv_utils.py)
+#   Ada-KV 2048 total across heads, TOVA 2048, StreamingLLM 4 sinks + recent = 2048
+#   H2O 20% of the prompt (10% heavy + 10% recent), muKV at K=n_ctx and at K=1024.
+# f16 K/V everywhere: per-head evictors need FA-off, and quantized V needs FA in llama.cpp.
+# 512 generated tokens because FA-off decode at 64K is slow, wall time compares within this table only.
 set -u
 cd /home/mislam22/EndurKV_workspace
 B=EndurKV/entropy_probe/build-pc-cuda/eviction_bench
 P=EndurKV/benchmarks/ctx_sweep/llama1b_57344tok.txt
-# CHANGED 2026-08-13: was wiki_eval_disjoint_long.txt, which overlaps this 57344-token
-# prompt 70/119 (200-char windows). See run_64k_compaction_matrix.sh for the full note.
-# All 64K PPL measured before this date is void.
+# PPL eval text must not overlap the 57344-token prompt (wiki_eval_disjoint_long.txt does).
 E=EndurKV/benchmarks/ppl/wiki_eval_disjoint_64k.txt
 M=models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 MU="--policy v1_fa2 --fa-on-evict --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70"

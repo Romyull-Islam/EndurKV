@@ -1,4 +1,4 @@
-// entropy_probe — standalone program that runs greedy decoding through
+// entropy_probe - standalone program that runs greedy decoding through
 // llama.cpp's public C API and (when ENABLE_PROBE is defined) emits one CSV
 // row per decode step with entropy / top-k statistics.
 
@@ -89,13 +89,8 @@ std::string token_to_text(const llama_vocab * vocab, llama_token tok) {
     return big;
 }
 
-// CSV-quote in RFC 4180 style:
-//   - wrap in double quotes
-//   - escape an inner quote by doubling it (the "" form)
-//   - replace newline / CR with the literal two-char sequences "\n" / "\r"
-//     so each token stays on a single CSV line (purely cosmetic — the
-//     pandas reader and the std csv module would also accept embedded
-//     newlines inside quotes).
+// CSV-quote (RFC 4180): wrap in double quotes and double any inner quote. Newline and
+// CR become the literal two-char sequences "\n" and "\r" so each token stays on one line.
 std::string csv_escape(const std::string & s) {
     std::string out;
     out.reserve(s.size() + 2);

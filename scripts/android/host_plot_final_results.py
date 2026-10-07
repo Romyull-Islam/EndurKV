@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
-"""Final results figures for the slide deck:
-
-  1. win_rate_per_regime.png    — bar chart of per-cell wins (v1_linear: 112/120)
-  2. median_delta_tova.png      — horizontal grouped bars by regime × policy
-  3. pareto_cache_vs_kl.png     — scatter (cache×, median Δ TOVA) per system
+"""Final results figures for the slide deck: win_rate_per_regime.png (per-cell wins),
+median_delta_tova.png (by regime and policy) and pareto_cache_vs_kl.png (cache x vs
+median delta to TOVA).
 """
 from pathlib import Path
 import matplotlib.pyplot as plt
@@ -16,14 +14,14 @@ OUT.mkdir(parents=True, exist_ok=True)
 
 df = pd.read_csv("/home/mislam22/EndurKV_workspace/EndurKV/figures/llama_wide_results.csv")
 
-# Color scheme — consistent with design-space figure
+# Color scheme - consistent with design-space figure
 COLORS = {
-    "v1_linear":    "#2e7d32",  # green — ours
+    "v1_linear":    "#2e7d32",  # green - ours
     "v6_logistic":  "#66bb6a",  # light green
     "v1_sigmoid":   "#a5d6a7",  # paler green
-    "tova":         "#1976d2",  # blue — baseline
-    "pyramidkv":    "#7b1fa2",  # purple — strong prior
-    "adakv":        "#e65100",  # orange — weak prior
+    "tova":         "#1976d2",  # blue - baseline
+    "pyramidkv":    "#7b1fa2",  # purple - strong prior
+    "adakv":        "#e65100",  # orange - weak prior
 }
 PRETTY = {
     "v1_linear":    "EndurKV-Evict v1 (ours)",
@@ -41,9 +39,7 @@ REGIME_PRETTY = {
 }
 NAVY = "#1a3661"
 
-# ===========================================================================
 # Figure 1: Win-rate per regime
-# ===========================================================================
 regimes = ["llama1b_short","llama1b_long","llama8b_short","llama8b_long"]
 policies = ["v1_linear","v6_logistic","v1_sigmoid","pyramidkv","tova","adakv"]
 
@@ -87,9 +83,7 @@ plt.savefig(OUT / "win_rate_per_regime.pdf", bbox_inches='tight', facecolor='whi
 print(f"saved win_rate_per_regime.png")
 plt.close()
 
-# ===========================================================================
 # Figure 2: Median Δ TOVA per regime (horizontal grouped bars)
-# ===========================================================================
 fig, ax = plt.subplots(figsize=(12, 7))
 y_positions = []
 y_labels = []
@@ -137,9 +131,7 @@ plt.savefig(OUT / "median_delta_tova_per_regime.pdf", bbox_inches='tight', facec
 print(f"saved median_delta_tova_per_regime.png")
 plt.close()
 
-# ===========================================================================
-# Figure 3: Pareto plot — (cache×, median Δ TOVA) per policy
-# ===========================================================================
+# Figure 3: Pareto plot - (cache×, median Δ TOVA) per policy
 fig, ax = plt.subplots(figsize=(10, 7))
 for p in policies:
     sub = df[df.policy==p]

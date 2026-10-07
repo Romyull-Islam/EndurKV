@@ -1,9 +1,7 @@
 #!/bin/bash
-# Queued runner for the full novel-variant experiment:
-#   1. Wait for v2 hyperparameter sweep to finish (PID-based wait).
-#   2. Run cross-variant comparison (v1..v6 vs TOVA on 5 LongBench dirs).
-#   3. Write a final consolidated summary.
-#
+# Queued runner for the novel-variant experiment: wait for the v2 hyperparameter sweep
+# to exit, run the cross-variant comparison (v1..v6 vs TOVA on 5 LongBench dirs), then
+# print a consolidated summary.
 # Run with: nohup bash this_script.sh > queue.log 2>&1 &
 
 set -e
@@ -22,7 +20,7 @@ source .venv/bin/activate
 echo "[queue] [1/2] cross-variant comparison ..."
 python EndurKV/scripts/android/host_compare_all_variants.py
 
-# Re-run v2 with its BEST hyperparameters (from v2_sweep) and include in summary
+# Summary: best v2 sweep configs and the cross-variant ranking
 echo "[queue] [2/2] consolidated final report ..."
 python -c "
 import pandas as pd

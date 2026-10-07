@@ -1,16 +1,7 @@
 #!/usr/bin/env python3
-"""
-host_wave3_real_analyze.py — analyze Wave-3 REAL sustained-stress data.
-
-For each policy cell, produces:
-  - Time-series plot: DDR + CPU temperature over the full 25-min cell
-  - Per-iteration tok/s + prefill_ms trace (shows throttling)
-  - Aggregate: peak/mean/p95 DDR + CPU, throttle onset, time at >55°C, cumulative tokens
-
-Outputs:
-  <wave3_dir>/WAVE3_REAL_SUMMARY.md
-  <wave3_dir>/wave3_thermal_curves.png
-  <wave3_dir>/wave3_throughput_decay.png
+"""Analyze Wave-3 sustained-stress cells: DDR and CPU temperature curves, per-iter tok/s and
+prefill_ms, and peak/mean/p95 temperature, throttle onset and time above 55°C per policy.
+Writes WAVE3_REAL_SUMMARY.md, wave3_thermal_curves.png and wave3_throughput_decay.png.
 """
 import sys, csv, json
 from pathlib import Path
@@ -82,7 +73,7 @@ def pct(xs, p):
 def main():
     root = Path(sys.argv[1])
 
-    # ---------- Figure 1: thermal curves ----------
+    # Figure 1: thermal curves
     fig1, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
     ax_ddr, ax_cpu = axes
     for pol in POLICIES:
@@ -109,7 +100,7 @@ def main():
     fig1.savefig(out1, dpi=130)
     plt.close(fig1)
 
-    # ---------- Figure 2: throughput decay ----------
+    # Figure 2: throughput decay
     fig2, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
     ax_dec, ax_pre = axes
     for pol in POLICIES:
@@ -130,7 +121,7 @@ def main():
     fig2.savefig(out2, dpi=130)
     plt.close(fig2)
 
-    # ---------- Summary table ----------
+    # Summary table
     rows = []
     for pol in POLICIES:
         s = load_sensors(root / pol / "sensors.csv")

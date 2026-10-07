@@ -1,17 +1,7 @@
 #!/usr/bin/env python3
-"""
-Phase D — run attention_probe over every prompt in data/prompts.jsonl.
-
-Outputs:
-    logs/study/<prompt_id>.csv         entropy CSV
-    logs/study/<prompt_id>.attn.bin    attention sidecar
-    logs/study/<prompt_id>.stderr      probe log
-    logs/study_full.csv                concatenation + task column
-    logs/study_meta.json               run metadata
-
-Usage:
-    python3 scripts/10_run_study.py
-    N_TOKENS=128 SEED=7 python3 scripts/10_run_study.py
+"""Phase D: run attention_probe over every prompt in data/prompts.jsonl.
+Writes logs/study/<prompt_id>.{csv,attn.bin,stderr}, logs/study_full.csv, logs/study_meta.json.
+Usage: [N_TOKENS=128 SEED=7] python3 scripts/10_run_study.py
 """
 from __future__ import annotations
 
@@ -52,10 +42,8 @@ LOG_DIR  = ROOT / "logs" / LOG_SUB
 
 N_TOKENS     = int(os.environ.get("N_TOKENS", "64"))
 SEED         = int(os.environ.get("SEED", "42"))
-# Limit how many prompts run, useful for quick smoke tests on the 8B model:
-#   MAX_PER_TASK=2  -> take only the first 2 prompts of each task (preserves
-#                     per-task balance, recommended for the quick 8B run)
-#   MAX_PROMPTS=N   -> hard cap on the total number of prompts (overrides MAX_PER_TASK)
+# Smoke-test limits: MAX_PER_TASK keeps the first N prompts of each task,
+# MAX_PROMPTS caps the total and overrides MAX_PER_TASK.
 MAX_PER_TASK = int(os.environ.get("MAX_PER_TASK", "0"))   # 0 = unlimited
 MAX_PROMPTS  = int(os.environ.get("MAX_PROMPTS",  "0"))   # 0 = unlimited
 
@@ -175,7 +163,7 @@ def main() -> int:
     print()
     print(f"[study] runs ok={n_ok}  failed={n_fail}  elapsed={elapsed}s")
 
-    # ---- Concatenate per-prompt CSVs into logs/<sub>_full.csv ----
+    # Concatenate per-prompt CSVs into logs/<sub>_full.csv
     print("[study] concatenating per-prompt CSVs...")
     full_csv_name = "study_full.csv" if LOG_SUB == "study" else f"{LOG_SUB}_full.csv"
     full_csv = ROOT / "logs" / full_csv_name
@@ -187,10 +175,8 @@ def main() -> int:
     with open(full_csv, "w", newline="") as out_f:
         for csv_path in sorted(LOG_DIR.glob("*.csv")):
             with open(csv_path, newline="") as in_f:
-                # restkey="_extras" so that a row with extra fields (e.g. from
-                # a token_text whose CSV escaping produced more comma-separated
-                # tokens than expected) doesn't crash the writer; we just drop
-                # the extras.
+                # restkey collects extra fields from badly escaped token_text,
+                # which are then dropped instead of crashing the writer.
                 reader = csv.DictReader(in_f, restkey="_extras")
                 for row in reader:
                     row.pop("_extras", None)
@@ -209,7 +195,7 @@ def main() -> int:
         print(f"  warn: skipped {n_skipped} malformed rows during concat")
     print(f"  concatenated {n_files} files, {n_rows} rows -> {full_csv}")
 
-    # ---- Metadata ----
+    # Metadata
     print("[study] writing logs/study_meta.json...")
     llama_dir = ROOT / "llama.cpp"
     meta = {

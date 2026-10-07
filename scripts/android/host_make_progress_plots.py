@@ -1,19 +1,8 @@
 #!/usr/bin/env python3
-"""
-host_make_progress_plots.py — defense-quality research-progress plot panel.
+"""Progress plots from the 1B and 8B joined CSVs, written to logs/progress_figures/.
 
-Loads BOTH the 1B and 8B joined CSVs and emits seven plots into
-logs/progress_figures/:
-
-  01_rho_per_task_with_paper.png   — per-task rho overlaid with paper baseline
-  02_rho_1b_vs_8b_paired.png       — paired-bar cross-regime contrast
-  03_peak_temp_per_task.png        — peak active-zone temperature, 1B vs 8B
-  04_pswpout_endurance.png         — Δpswpout per prompt, log-scale, 1B vs 8B
-  05_latency_vs_temp.png           — per-step decode latency vs ambient temp
-  06_sustained_latency_drift.png   — latency trend across the full run
-  10_validation_panel.png          — one-page 4-subplot "phone validation" summary
-
-Uses workspace JOINED CSVs (not raw per-prompt files), so this is fast.
+Per-task rho vs the proposal baselines, 1B vs 8B rho, peak temperature,
+pswpout, latency vs temperature, latency drift, and a 4-panel summary.
 """
 from __future__ import annotations
 
@@ -34,8 +23,8 @@ PAPER_RHO = {
         "lcc":            -0.03,
         "trec":            0.19,
     },
-    # 8B long-ctx baseline (slides 22/23) — these are NOT exactly comparable to
-    # our 8B SHORT-ctx phone runs, but we show them as a reference.
+    # 8B long-ctx baseline (slides 22/23). Only a reference, since the phone
+    # 8B runs are short-ctx.
     "8B_long":  {
         "gov_report":     -0.47,
         "multi_news":     -0.47,
@@ -95,7 +84,7 @@ def main():
     print(f"[load] 1B: {len(d1)} steps, {d1.prompt_id.nunique()} prompts, {d1.task.nunique()} tasks")
     print(f"[load] 8B: {len(d8)} steps, {d8.prompt_id.nunique()} prompts, {d8.task.nunique()} tasks")
 
-    # ---- per-task rho table ------------------------------------------------
+    # per-task rho table
     def per_task_rho(df):
         rows = []
         for t, g in df.groupby("task"):
@@ -106,9 +95,7 @@ def main():
     r1 = per_task_rho(d1_attn)
     r8 = per_task_rho(d8_attn)
 
-    # ========================================================================
-    # 01 — per-task rho with paper baseline overlay
-    # ========================================================================
+    # 01 - per-task rho with paper baseline overlay
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
     for ax, (title, r, paper_key) in zip(axes,
             [("1B Q4_K_M short-ctx on OnePlus 15", r1, "1B_short"),
@@ -147,9 +134,7 @@ def main():
     plt.close(fig)
     print("  wrote 01_rho_per_task_with_paper.png")
 
-    # ========================================================================
-    # 02 — 1B vs 8B paired bars per task
-    # ========================================================================
+    # 02 - 1B vs 8B paired bars per task
     common_tasks = sorted(set(r1["task"]) & set(r8["task"]),
                           key=lambda t: r1[r1.task == t]["rho"].iloc[0])
     fig, ax = plt.subplots(figsize=(11, 0.45 * len(common_tasks) + 2.5))
@@ -185,9 +170,7 @@ def main():
     plt.close(fig)
     print("  wrote 02_rho_1b_vs_8b_paired.png")
 
-    # ========================================================================
-    # 03 — peak active-zone temperature per task, paired 1B/8B
-    # ========================================================================
+    # 03 - peak active-zone temperature per task, paired 1B/8B
     def peak_temp_per_prompt(d):
         zone_cols = [c for c in d.columns if c.endswith("_temp_mc") and not is_trip(c)]
         out = []
@@ -225,9 +208,7 @@ def main():
     plt.close(fig)
     print("  wrote 03_peak_temp_per_task.png")
 
-    # ========================================================================
-    # 04 — pswpout per prompt, log-scale, 1B vs 8B
-    # ========================================================================
+    # 04 - pswpout per prompt, log-scale, 1B vs 8B
     def pswpout_per_prompt(d):
         out = []
         for pid, g in d.groupby("prompt_id"):
@@ -263,9 +244,7 @@ def main():
     plt.close(fig)
     print("  wrote 04_pswpout_endurance.png")
 
-    # ========================================================================
-    # 05 — decode latency vs temperature (8B mostly)
-    # ========================================================================
+    # 05 - decode latency vs temperature (8B mostly)
     def latency_vs_temp(d, label):
         d = d.copy().sort_values(["prompt_id", "step_index"])
         d["dt_ms"] = d.groupby("prompt_id")["wall_clock_us"].diff() / 1000.0
@@ -307,9 +286,7 @@ def main():
     plt.close(fig)
     print("  wrote 05_latency_vs_temp.png")
 
-    # ========================================================================
-    # 06 — sustained-run latency drift (scatter over full run)
-    # ========================================================================
+    # 06 - sustained-run latency drift (scatter over full run)
     fig, axes = plt.subplots(2, 1, figsize=(14, 7), sharex=False)
     for ax, d, name, col in [(axes[0], d1, "1B Q4_K_M, 80 prompts, 4025 steps", "#4a90e2"),
                              (axes[1], d8, "8B Q4_K_M, 79 prompts, ~4000 steps", "#e07c3a")]:
@@ -336,9 +313,7 @@ def main():
     plt.close(fig)
     print("  wrote 06_sustained_latency_drift.png")
 
-    # ========================================================================
-    # 10 — one-page validation panel (paper-format)
-    # ========================================================================
+    # 10 - one-page validation panel (paper-format)
     fig = plt.figure(figsize=(15, 10))
     gs = fig.add_gridspec(2, 2, hspace=0.35, wspace=0.25)
 

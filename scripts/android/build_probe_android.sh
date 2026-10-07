@@ -1,22 +1,10 @@
 #!/usr/bin/env bash
-# build_probe_android.sh — cross-compile entropy_probe (and friends) for aarch64.
-#
-# Run from anywhere; resolves the workspace via $WORKSPACE or by walking up
-# from the script's location.  Produces:
-#   $WORKSPACE/EndurKV/entropy_probe/build-android/entropy_probe
-#   $WORKSPACE/EndurKV/entropy_probe/build-android/attention_probe
-#   $WORKSPACE/EndurKV/entropy_probe/build-android/prune_probe
-#
-# Prereqs:
-#   * Android NDK r27c at $WORKSPACE/toolchain/android-ndk-r27c/
-#     (override via $ANDROID_NDK if installed elsewhere)
-#   * llama.cpp Android build already done at
-#     $WORKSPACE/EndurKV/llama.cpp/build-android/ (see build_llama_android.sh)
-#   * cmake + ninja on PATH.
-#
-# Output binaries link against ../../llama.cpp/build-android/bin/lib*.so via
-# $ORIGIN-rooted rpath, so deployment is: copy the four .so files into the
-# same dir as the binary on /data/local/tmp/endurkv/bin/.
+# build_probe_android.sh: cross-compile entropy_probe, attention_probe and prune_probe for
+# aarch64 into $WORKSPACE/EndurKV/entropy_probe/build-android/. Runs from anywhere.
+# Needs Android NDK r27c ($ANDROID_NDK, default $WORKSPACE/toolchain/android-ndk-r27c),
+# a finished llama.cpp Android build (build_llama_android.sh), and cmake plus ninja.
+# The binaries load llama.cpp's lib*.so through an $ORIGIN rpath, so deploy those .so
+# files next to the binary in /data/local/tmp/endurkv/bin/.
 
 set -e
 

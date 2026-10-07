@@ -1,12 +1,5 @@
-"""Per-model KV cache architecture parameters.
-
-These are the fp16 KV cache footprints used by llama.cpp's default cache type
-(GGML_TYPE_F16). Quantized weights (Q4_K_M etc.) do NOT change KV cache size
-because the cache itself is fp16; only model weights are quantized.
-
-Source: model config.json / GGUF metadata. Verified by counting layers in the
-xarch ATNH captures (n_layers field matches).
-"""
+"""Per-model KV cache parameters for llama.cpp's default f16 cache. Weight quantization
+(Q4_K_M etc.) does not change KV size. Values come from config.json / GGUF metadata."""
 
 # Per-model fp16 KV-cache parameters.
 # Bytes-per-token = n_layers * n_head_kv * 2 (K and V) * head_dim * 2 (fp16 bytes)
@@ -57,10 +50,7 @@ MODEL_SPECS = {
 
 
 def kv_bytes_per_token(model_key: str, dtype_bytes: int = 2) -> int:
-    """Per-token KV cache footprint in bytes for a given model.
-
-    dtype_bytes = 2 for fp16 (llama.cpp default), 1 for int8, etc.
-    """
+    """Per-token KV cache bytes. dtype_bytes is 2 for fp16 (llama.cpp default), 1 for int8."""
     s = MODEL_SPECS[model_key]
     return s["n_layers"] * s["n_head_kv"] * 2 * s["head_dim"] * dtype_bytes
 
@@ -72,9 +62,7 @@ def kv_memory_mb(model_key: str, n_kv_positions: int, dtype_bytes: int = 2) -> f
 
 def kv_memory_per_head_mb(model_key: str, kept_per_head: float,
                            dtype_bytes: int = 2) -> float:
-    """Memory after per-head eviction (when policy keeps `kept_per_head`
-    positions per head per layer).
-    """
+    """KV memory in MB when a policy keeps `kept_per_head` positions per head per layer."""
     s = MODEL_SPECS[model_key]
     return (s["n_layers"] * s["n_head_kv"] * 2 * s["head_dim"]
             * dtype_bytes * kept_per_head) / (1024 * 1024)
@@ -83,7 +71,7 @@ def kv_memory_per_head_mb(model_key: str, kept_per_head: float,
 def infer_model_from_dir(dir_name: str) -> str:
     """Best-effort model-key inference from a logs/ dir name."""
     d = dir_name.lower()
-    # Order matters — check specific names before generic ones
+    # Order matters - check specific names before generic ones
     if "r1distill" in d or "r1-distill" in d:
         return "r1distill-llama-8b"
     if "1b" in d:
@@ -105,7 +93,6 @@ def infer_model_from_dir(dir_name: str) -> str:
 
 if __name__ == "__main__":
     print("Model key            | bytes/token | 4K cache | 8K cache | 13K cache")
-    print("-" * 72)
     for key in MODEL_SPECS:
         bpt = kv_bytes_per_token(key)
         print(f"{key:20} | {bpt:>11,} | {bpt*4096/1e6:>7.1f}M | "

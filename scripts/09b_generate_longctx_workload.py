@@ -1,28 +1,7 @@
 #!/usr/bin/env python3
-"""
-Phase C — long-context workload generator (extended).
-
-Companion to 09_generate_workload.py. The 09 file truncates contexts to ~2000
-chars (~500 tokens) so a 1B model can fit them. This file does the opposite:
-it pulls FULL-LENGTH (or close-to-full-length) prompts so we can verify the
-entropy ↔ attention-concentration relationship at the long-context regime.
-
-Tasks covered (13):
-    LongBench tier 1 (already covered in earlier runs):
-        narrativeqa, gov_report, qmsum, multi_news, hotpotqa, qasper
-    LongBench tier 2 (new — adds long-ctx coverage to short-ctx-only tasks):
-        triviaqa, samsum, multifieldqa_en, lcc, trec
-    HELM tier (full-length article summarization):
-        xsum, cnn_dailymail
-
-Excluded (and noted in any comparison table as "n/a — inherently short"):
-    piqa, openbookqa  — multi-choice tasks with ≤200-token prompts by design
-
-Per task: 4 prompts. For LongBench tasks, picked across [4K, 6K, 8K, 12K]
-length bins where available. For HELM, picked at natural length (typically
-1K-3K). Hard cap of ~12K tokens per prompt to avoid OOM with FA disabled.
-
-Output: data/prompts_longctx.jsonl (overwrites — same path as before).
+"""Long-context workload generator, the full-length counterpart of 09_generate_workload.py.
+Writes 4 prompts per LongBench task (4K/6K/8K/12K bins) and per HELM task (natural
+length), capped near 12K tokens to avoid OOM with FA off, to data/prompts_longctx.jsonl.
 """
 from __future__ import annotations
 
@@ -49,7 +28,7 @@ ROOT     = Path(__file__).resolve().parents[1]
 _OUT_OVERRIDE = os.environ.get("PROMPTS_OUT")
 OUT_PATH = Path(_OUT_OVERRIDE) if _OUT_OVERRIDE else (ROOT / "data" / "prompts_longctx.jsonl")
 
-# ----- per-task prompt templates ---------------------------------------------
+# per-task prompt templates
 LONGBENCH_TASKS = [
     # already covered tier
     ("narrativeqa",     "context", "input",
@@ -68,7 +47,7 @@ LONGBENCH_TASKS = [
     ("qasper",          "context", "input",
      "You are given a scientific article. Answer the question based on it.\n\n"
      "Article:\n{context}\n\nQuestion: {input}\nAnswer:"),
-    # new — long-context variants of tasks that were truncated in the standard run
+    # long-context variants of tasks truncated in the 09 workload
     ("triviaqa",        "context", "input",
      "Answer the question using the following passages.\n\n"
      "Passages:\n{context}\n\nQuestion: {input}\nAnswer:"),
@@ -83,8 +62,7 @@ LONGBENCH_TASKS = [
      "{context}\n\nClassify this question: {input}\nCategory:"),
 ]
 
-# HELM tier — full-length article summarisation. (We don't truncate; natural
-# length is typically 1K-3K tokens which already exceeds the 09 short workload.)
+# HELM tier: article summarization at natural length, not truncated
 HELM_TASKS = [
     # (task_name, repo, config, split, ctx_field, template, n_samples)
     ("xsum",          "EdinburghNLP/xsum",    None,    "validation", "document",
@@ -99,7 +77,7 @@ HARD_CHAR_CAP  = 4 * HARD_TOKEN_CAP           # ~52000 chars (~13K tokens)
 EXPECTED_MAX_TOKENS = 64
 
 
-# ----- LongBench loader (same data.zip cached by 09) ------------------------
+# LongBench loader (same data.zip cached by 09)
 _LONGBENCH_REPO = "zai-org/LongBench"
 _LB_EXTRACTED: Path | None = None
 
@@ -166,7 +144,7 @@ def _pick_lb_at_bins(items: list[dict], bins: list[int]) -> list[dict]:
     return chosen
 
 
-# ----- HELM loader (HF parquet) ---------------------------------------------
+# HELM loader (HF parquet)
 def _load_hf_simple(repo: str, config: str | None, split: str, ctx_field: str,
                     n: int) -> list[dict]:
     from datasets import load_dataset
@@ -178,7 +156,7 @@ def _load_hf_simple(repo: str, config: str | None, split: str, ctx_field: str,
     for i in range(min(n, len(ds))):
         item = ds[i]
         ctx = item.get(ctx_field, "") or ""
-        # HELM articles are usually < 8K tokens; cap to be safe.
+        # HELM articles are usually under 8K tokens. Cap anyway.
         if len(ctx) > HARD_CHAR_CAP:
             ctx = ctx[:HARD_CHAR_CAP]
         out.append({
@@ -191,13 +169,13 @@ def _load_hf_simple(repo: str, config: str | None, split: str, ctx_field: str,
     return out
 
 
-# ----- main ----------------------------------------------------------------
+# main
 def main() -> int:
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     rows = []
     failures = []
 
-    print("=" * 60); print("LONG-CONTEXT WORKLOAD"); print("=" * 60)
+    print("LONG-CONTEXT WORKLOAD");
 
     # LongBench
     for name, ctx_f, in_f, tmpl in LONGBENCH_TASKS:

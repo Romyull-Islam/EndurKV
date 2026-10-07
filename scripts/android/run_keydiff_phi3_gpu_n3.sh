@@ -1,21 +1,9 @@
 #!/bin/bash
-# ============================================================================
-# run_keydiff_phi3_gpu_n3.sh -- two more cooled rounds of KeyDiff on the Phi-3
-# GPU, each with its own full-cache control. (2026-09-24)
-#
-# WHY. Table 1's KeyDiff row on Phi-3 (0.27x, 1.36 tok/s, 54,108 cells evicted
-# by block re-scoring) is the only n=1 cell in the paper. Every other ratio is
-# the median over three cooled rounds, each against the full cache of its own
-# round. These two rounds bring the row to n=3 on the same footing.
-#
-# HOW. Same build (bin_vk_cur), model, prompt, flags, cooling gate, sampler and
-# 4096 generated tokens as run_phi3_gpu_complete.sh, whose cell() function is
-# reused unchanged: this file only defines the cell list. Tags carry the round
-# so the originals (vanilla, keydiff2048) are never overwritten, and a finished
-# cell is skipped, so the script can be re-run after a disconnect.
-# Order: control, then KeyDiff, in each round, so the pair shares one thermal
-# and battery state as closely as the gate allows.
-# ============================================================================
+# Rounds 2 and 3 of KeyDiff on the Phi-3 GPU, each paired with its own full-cache control,
+# so the row is a median over three cooled rounds like the others.
+# Reuses the setup and cell() from run_phi3_gpu_complete.sh. Tags carry the round so earlier
+# cells are not overwritten, and finished cells are skipped. Control runs first in each round
+# so the pair shares a thermal and battery state.
 set -u
 SRC=/home/mislam22/EndurKV_workspace/EndurKV/scripts/android/run_phi3_gpu_complete.sh
 # take everything from the original up to (not including) its cell list

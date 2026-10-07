@@ -1,38 +1,8 @@
 #!/usr/bin/env python3
-"""Figure 18: v1_FA^2-stack head-to-head vs all baselines.
-
-THE central paper figure showing v1_fa2_stack's positioning.  Three rows of
-two panels each (2x3 layout):
-
-  Row 1 (PPL)        - left:  Phi-3 PPL bars  (vanilla / h2o / v1_fa2_stack)
-                      right: family overview (vanilla / v1 / v1_fa / v1_fa2_stack)
-  Row 2 (Thermal)    - left:  peak DDR temperature per policy
-                      right: peak CPU temperature per policy
-  Row 3 (Endurance)  - left:  total swap MB per policy   (lower is better)
-                      right: mean decode throughput tps per policy
-
-Data sources (waves):
-  Wave-4  long-decode: vanilla / v1_K512 / v1_fa_K512  (sampling-NLL PPL)
-  Wave-9  v1_fa2_stack 10 iters                       (sampling-NLL PPL)
-  Wave-10 K-sweep:    K256 / K384 / K1024              (sampling-NLL PPL)
-  Wave-11 held-out eval (partial):
-            vanilla (7 chunks done), h2o (5 chunks done)   - heldout PPL
-            v1_fa2_stack: not yet run -> we fall back to Wave-9 sampling-NLL
-
-Annotations:
-  - Green checkmarks on v1_fa2_stack unique wins:
-        peak_ddr  ~  -8.8 degC vs Wave-4 vanilla
-        throttle  =  0 events
-        swap_MB   =  0
-  - Yellow caution on PPL row: "Wave-9 sampling-NLL = 2.17; Wave-11 chunk-pair
-    held-out PPL pending - bar will be replaced when v1_fa2_stack ppl cell
-    finishes."
-
-Outputs:
-  PNG:    /home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/
-            18_v1fa2_headtohead.png
-  SCHEMA: stdout JSON block prefixed "ART_SCHEMA"  (and copy at
-            18_v1fa2_headtohead.schema.json next to the PNG).
+"""Figure 18: v1_fa2_stack head-to-head against the baselines (3 rows x 2 panels).
+Rows: PPL, thermal (peak DDR and CPU), endurance (swap MB, decode tok/s). Waves 4, 9
+and 10 give sampling-NLL PPL, wave 11 held-out PPL. Writes 18_v1fa2_headtohead.png
+and .schema.json to figures/relationship_plots/ and prints an ART_SCHEMA block.
 """
 from __future__ import annotations
 
@@ -52,9 +22,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch
 
 
-# ---------------------------------------------------------------------------
 # Paths
-# ---------------------------------------------------------------------------
 WORKSPACE = Path("/home/mislam22/EndurKV_workspace")
 PHONE_LOGS = WORKSPACE / "phone-logs"
 FIG_DIR = WORKSPACE / "EndurKV" / "figures" / "relationship_plots"
@@ -71,9 +39,7 @@ KB = 1024.0
 PAGE_KB = 4.0  # one memory page = 4 KB on this device
 
 
-# ---------------------------------------------------------------------------
 # Per-cell record
-# ---------------------------------------------------------------------------
 @dataclass
 class Cell:
     wave: str
@@ -97,9 +63,7 @@ class Cell:
     src_dir: str
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 _BARE_NONFINITE = re.compile(
     r"(?<![\"A-Za-z0-9_])(-?Inf(?:inity)?|NaN|inf|-inf|nan)(?![\"A-Za-z0-9_])"
 )
@@ -127,15 +91,8 @@ def load_meta(iter_dir: Path) -> Optional[dict]:
 
 
 def read_sensors(sensors_csv: Path) -> dict:
-    """Return aggregated DDR / CPU / swap / throttle metrics from a sensors.csv.
-
-    All "_temp_mc" values are millideg C; we convert to deg C.
-    CPU peak is the max across all `cpu*_temp_mc` and `cpullc*_temp_mc` cols.
-    Swap MB total = (vmstat_pswpout delta) * 4 KB / 1024.
-    Throttle events: rough proxy = count of (peak_cpu_c >= 95 degC) samples;
-    this is the same convention used by the kvgrow scripts (no dedicated
-    throttle counter exists in sensors.csv).
-    """
+    """Aggregate DDR, CPU (deg C), swap (MB) and throttle metrics from a sensors.csv.
+    Throttle events are samples with CPU hot-spot >= 95 C, as in the kvgrow scripts."""
     out = {
         "peak_ddr_c": float("nan"),
         "mean_ddr_c": float("nan"),
@@ -185,14 +142,7 @@ def read_sensors(sensors_csv: Path) -> dict:
 def aggregate_cell(cell_dir: Path, wave: str,
                    policy_override: Optional[str] = None,
                    model: str = "Phi-3-mini-128k") -> Optional[Cell]:
-    """Aggregate one policy cell directory.
-
-    Layout we accept:
-      cell_dir/
-        sensors.csv
-        stress.csv
-        iter*/meta.json
-    """
+    """Aggregate one cell dir (sensors.csv, stress.csv, iter*/meta.json)."""
     sensors = cell_dir / "sensors.csv"
     stress = cell_dir / "stress.csv"
     if not stress.is_file():
@@ -257,12 +207,8 @@ def aggregate_cell(cell_dir: Path, wave: str,
 
     sens = read_sensors(sensors)
 
-    # Per-iter swap from stress (if present) - max across iters
     swap_max_iter = 0.0
-    # Wave-11 stress.csv has no swap col; we derive total swap from sensors above
-    # and the per-iter max from chunk durations using vmstat_pswpout granularity.
-    # We currently surface the run-total as both "total" and "max" because we
-    # don't reset vmstat between iters.
+    # vmstat is not reset between iters, so the run total doubles as the per-iter max.
     swap_max_iter = sens["swap_mb_total"]
 
     policy = policy_override or discovered_policy or "unknown"
@@ -290,9 +236,7 @@ def aggregate_cell(cell_dir: Path, wave: str,
     )
 
 
-# ---------------------------------------------------------------------------
 # Wave collectors
-# ---------------------------------------------------------------------------
 def collect_wave4(d: Path) -> list[Cell]:
     out: list[Cell] = []
     if not d.is_dir():
@@ -300,7 +244,7 @@ def collect_wave4(d: Path) -> list[Cell]:
     for sub in sorted(d.iterdir()):
         if not sub.is_dir():
             continue
-        # map dir names -> canonical policies
+        # map dir names to canonical policies
         name = sub.name
         if name == "vanilla":
             policy = "vanilla"
@@ -369,9 +313,7 @@ def collect_wave11(d: Optional[Path]) -> list[Cell]:
     return out
 
 
-# ---------------------------------------------------------------------------
 # Policy presentation
-# ---------------------------------------------------------------------------
 POLICY_ORDER = ["vanilla", "h2o", "v1", "v1_fa", "v1_fa2_stack"]
 POLICY_DISPLAY = {
     "vanilla":      "vanilla\n(no evict)",
@@ -391,16 +333,8 @@ POLICY_COLOR = {
 
 def pick_cell_for_policy(cells: list[Cell], policy: str,
                          prefer_wave: Optional[str] = None) -> Optional[Cell]:
-    """Pick a representative Phi-3 cell for the given canonical policy.
-
-    Preference order:
-      * if prefer_wave given, use cell from that wave when available
-      * Wave-11 (held-out) > Wave-9 > Wave-4 > Wave-10  for v1_fa2_stack
-        because we want held-out PPL where possible
-      * For h2o, only Wave-11 has it
-      * For vanilla, prefer Wave-11 (held-out), fall back to Wave-4
-      * For v1 / v1_fa, only Wave-4 has them
-    """
+    """Pick a representative Phi-3 cell for a policy.
+    Uses prefer_wave when given, else the per-policy wave order below."""
     cands = [c for c in cells if c.policy == policy and c.model == "Phi-3-mini-128k"]
     if not cands:
         return None
@@ -430,9 +364,7 @@ def _best_iter(cands: list[Cell]) -> Cell:
     return cands[0]
 
 
-# ---------------------------------------------------------------------------
 # Bar drawing helpers
-# ---------------------------------------------------------------------------
 CHECK = u"✓"   # check-mark
 WARN  = u"⚠"   # caution
 
@@ -507,9 +439,7 @@ def _annotate_caution(ax, bar, text, color="#a07b00"):
     )
 
 
-# ---------------------------------------------------------------------------
 # Main figure
-# ---------------------------------------------------------------------------
 def render(picks: dict[str, Optional[Cell]],
            v1fa2_ppl_source: str,
            v1fa2_ppl_value: Optional[float],
@@ -518,7 +448,7 @@ def render(picks: dict[str, Optional[Cell]],
     """Render the 2x3 head-to-head figure."""
     fig, axes = plt.subplots(3, 2, figsize=(14.5, 13.5), dpi=140)
 
-    # ---- helpers to gather per-row arrays -------------------------------
+    # helpers to gather per-row arrays
     def _val(p, attr):
         c = picks.get(p)
         if c is None:
@@ -526,9 +456,7 @@ def render(picks: dict[str, Optional[Cell]],
         v = getattr(c, attr, None)
         return float(v) if v is not None else float("nan")
 
-    # =====================================================================
     # ROW 1: PPL  (left = Phi-3 main bars, right = family overview)
-    # =====================================================================
     ax_ppl_main, ax_ppl_fam = axes[0]
 
     # Left: vanilla / h2o / v1_fa2_stack  (focus on baselines + ours)
@@ -552,8 +480,7 @@ def render(picks: dict[str, Optional[Cell]],
         ylabel="PPL  (mixed metric, see footnote)",
         lower_better=True,
     )
-    # Footnote about metric mixing  (vanilla/h2o = Wave-11 held-out;
-    # v1_fa2_stack = Wave-9 sampling-NLL until Wave-11 cell finishes).
+    # Footnote: which PPL metric each bar uses.
     notes = []
     for p, c in zip(pol_ppl, [picks.get(x) for x in pol_ppl]):
         if c is None:
@@ -603,9 +530,7 @@ def render(picks: dict[str, Optional[Cell]],
         lower_better=True,
     )
 
-    # =====================================================================
     # ROW 2: Thermal  (peak DDR | peak CPU)
-    # =====================================================================
     ax_ddr, ax_cpu = axes[1]
 
     pol_thermal = POLICY_ORDER  # all five
@@ -647,9 +572,7 @@ def render(picks: dict[str, Optional[Cell]],
     _annotate_win(ax_cpu, bars_cpu[idx_v1fa2],
                   f"{v1fa2_throttle} throttle events")
 
-    # =====================================================================
     # ROW 3: Endurance  (swap_MB | throughput tps)
-    # =====================================================================
     ax_swap, ax_tps = axes[2]
 
     pol_end = POLICY_ORDER
@@ -679,9 +602,7 @@ def render(picks: dict[str, Optional[Cell]],
         _annotate_win(ax_swap, bars_swap[idx_v1fa2],
                       f"{swap_vals[idx_v1fa2]:.1f} MB swap")
 
-    # =====================================================================
     # Title & legend
-    # =====================================================================
     fig.suptitle(
         "v1_FA$^2$-stack head-to-head: trades small PPL cost for large thermal/endurance gain",
         fontsize=15, fontweight="bold", y=0.995,
@@ -714,9 +635,7 @@ def render(picks: dict[str, Optional[Cell]],
     }
 
 
-# ---------------------------------------------------------------------------
 # Main
-# ---------------------------------------------------------------------------
 def main() -> int:
     cells: list[Cell] = []
     cells += collect_wave4(WAVE4_DIR)
@@ -766,7 +685,7 @@ def main() -> int:
         out_png=OUT_PNG,
     )
 
-    # ---- ART_SCHEMA ----------------------------------------------------
+    # ART_SCHEMA
     schema = {
         "kind": "ART_SCHEMA",
         "version": 1,

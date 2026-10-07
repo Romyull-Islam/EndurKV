@@ -1,31 +1,10 @@
 #!/bin/bash
-# ============================================================================
-# run_remaining_queue.sh -- everything still required after the Phi-3 GPU table.
-# (2026-08-25).  Runs STRICTLY AFTER /tmp/phi3_gpu_complete_DONE: one campaign
-# owns the phone at a time. Two concurrent campaigns once cooked a cell to 57 C
-# and invalidated it, so this waits rather than races.
-#
-# QUEUE, in the order the paper needs them:
-#
-#  A. COMPACTION F1 ABLATION (the question that has no data at all).
-#     Compaction is worth 1.10-2.37x tok/s at IDENTICAL cell count and its PPL
-#     moves 1.2% -- but no LongBench/NIAH cell has ever run with --no-defrag, so
-#     "same accuracy" is unproven on a task metric. 15 hotpotqa prompts x
-#     {compacted, not} = 30 cells. Quality-only: NO cool gate (nothing timed is
-#     quoted), matching how every other lb_native cell was produced.
-#
-#  B. StreamingLLM ON THE CURRENT CPU BUILD.
-#     Table 1's StreamingLLM row is the last one from bin_cpu_sol2; every other
-#     row is bin_cpu_kd. Absolute energy is not comparable across builds, so this
-#     one row is quoted from a different binary than the vanilla it is divided by.
-#     One cell removes the asterisk.
-#
-#  C. CPU GRADEABILITY SPOT-CHECK.
-#     Every definitive CPU cell wrote --out-gen /dev/null, so the CPU tables can
-#     never be <unk>-graded. The scripts are fixed going forward; this re-runs
-#     THREE representative cells (vanilla / muKV / H2O) with text kept, enough to
-#     show the CPU path is clean without re-running all fourteen.
-# ============================================================================
+# Phone queue that waits for /tmp/phi3_gpu_complete_DONE, because two campaigns
+# sharing the phone heat each other's cells.
+#  A. Compaction ablation on LongBench hotpotqa: 15 prompts, compacted vs not.
+#     Quality only, so no cool gate.
+#  B. StreamingLLM on bin_cpu_kd, the build used for the other Table 1 rows.
+#  C. vanilla, muKV and H2O CPU cells with generated text kept for grading.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 LOG(){ echo "[$(date +%H:%M:%S)] $*"; }
@@ -40,7 +19,7 @@ M1=/data/local/tmp/endurkv/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 DEV=/data/local/tmp/rq_$(date +%Y%m%d_%H%M%S)
 adb_safe_shell "mkdir -p $DEV" < /dev/null >/dev/null 2>&1
 
-# ---------- A. compaction F1 ablation on LongBench hotpotqa ------------------
+# A. compaction F1 ablation on LongBench hotpotqa
 MU="--policy v1_fa2 --fa-on-evict --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70"
 for ARM in compact nocompact; do
   case $ARM in compact) EX="--compact-inplace";; nocompact) EX="--no-defrag";; esac
@@ -69,10 +48,10 @@ done
 LOG "A complete"
 touch /tmp/lb_compaction_DONE
 
-# ---------- B + C. timed CPU cells (cool-gated, generations KEPT) ------------
+# B + C. timed CPU cells, cool-gated, generated text kept
 OUT=/tmp/def_cpu_v2; mkdir -p $OUT
 adb_safe_shell "mkdir -p $DEV/wt" < /dev/null >/dev/null 2>&1
-timeout 180 adb push /tmp/claude-1001/-home-mislam22-EndurKV-workspace/1d283ef2-8bcb-4a99-8b56-fd8d8af9f80d/scratchpad/wikitext_16k_p12k_d4k.txt "$DEV/wt/prompt.txt" < /dev/null >/dev/null 2>&1
+timeout 180 adb push "$(cd "$(dirname "$0")/../.." && pwd)/eval_corpora"/wikitext_16k_p12k_d4k.txt "$DEV/wt/prompt.txt" < /dev/null >/dev/null 2>&1
 
 wtcell(){
   local TAG=$1; shift
@@ -106,7 +85,7 @@ wtcell(){
   adb_safe_pull "$DEV/$TAG.err"  "$OUT/$TAG/err.txt"     >/dev/null 2>&1
   [ -s "$OUT/$TAG/gen.txt" ] && LOG "  [$TAG] ok" || LOG "  [$TAG] NO OUTPUT"
 }
-# B: the mixed-build row, now on bin_cpu_kd
+# B: StreamingLLM on bin_cpu_kd
 wtcell streamingllm --policy streamingllm --n-sink 4 --k-nominal 2000
 # C: gradeability spot-check
 wtcell vanilla_g --policy vanilla

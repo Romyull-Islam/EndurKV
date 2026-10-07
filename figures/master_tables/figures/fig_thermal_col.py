@@ -1,16 +1,8 @@
 #!/usr/bin/env python3
-"""Column-width thermal figure for the HotMobile paper. (2026-09-23)
-
-Job: show the thermal claim the title makes, in one column and two panels.
-  (a) battery temperature against elapsed time, with the vendor's 50 C throttle trigger.
-  (b) the prime clock, where that trigger lands: the full cache sawtooths at 883 MHz, muKV never
-      reaches the trigger, and the watchdog arm glides the clock down before the vendor does.
-Bonsai-8B on the phone CPU from a cold start, three arms, same build and prompt.
-
-The four-panel version (fig_bonsai_thermal.py, skin and DDR too) stays in the full paper; the two
-panels here are the ones that carry the claim, since skin and DDR only echo the battery trace.
-Data: the same runs, /tmp/nat_bonsai and /tmp/wd_vanilla, restored from tmp_archive after a reboot.
-"""
+"""Column-width thermal figure: (a) battery temperature with the vendor's 50 C throttle trigger,
+(b) prime-core clock. Bonsai-8B on the phone CPU from a cold start, full cache vs muKV, same build
+and prompt, no watchdog. Data in /tmp/nat_bonsai (restore from tmp_archive after a reboot).
+fig_bonsai_thermal.py is the four-panel version with skin and DDR."""
 import csv
 import json
 import os
@@ -23,8 +15,8 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RUNS = [("full cache", "/tmp/nat_bonsai/vanilla", "#888888"),
-        (r"$\mu$KV", "/tmp/nat_bonsai/mukv_faon", "#0072B2"),
-        ("full cache + watchdog", "/tmp/wd_vanilla", "#D55E00")]
+        (r"$\mu$KV", "/tmp/nat_bonsai/mukv_faon", "#0072B2")]
+# Only eviction arms. The watchdog arm (/tmp/wd_vanilla) is not plotted.
 INK, MUTED, GRID, AXIS, HOT = "#1a1a1a", "#6b6b6b", "#ececec", "#b8b8b8", "#c0392b"
 
 
@@ -68,8 +60,7 @@ for lbl, path, color in RUNS:
     lw = 1.2 if "mu" in lbl else 1.0
     m = d["t"] <= d["wall"]                       # the sampler outlives the run; plot only the run
     a.plot(d["t"][m], smooth(d["bat"], 7)[m], color=color, lw=lw, label=lbl)
-    # the sustained level, as in the full paper's four-panel version: the governor oscillates every
-    # sample, and the throttle shows as a sawtooth in the 13 s mean, whose dips approach 883 MHz
+    # The governor oscillates every sample, so plot a 27-sample (13 s) mean to show the sustained level.
     b.plot(d["t"][m], smooth(d["prime"], 27)[m], color=color, lw=lw)
 
 a.axhline(50, color=HOT, ls=(0, (2, 2)), lw=0.7)
@@ -84,9 +75,9 @@ b.set_ylabel("prime clock (MHz)")
 b.set_ylim(820, 1760)
 b.set_xlabel("elapsed time (min)")
 b.legend(handles=[plt.Line2D([], [], color=c, lw=1.2, label=l) for l, _, c in RUNS],
-         loc="upper right", ncol=3, fontsize=6.0, handlelength=1.2, columnspacing=1.0, borderaxespad=0.2)
+         loc="upper right", ncol=2, fontsize=6.0, handlelength=1.2, columnspacing=1.0, borderaxespad=0.2)
 
-# where each arm finishes: the point of the figure is that muKV ends before the trigger
+# mark where each arm finishes
 for lbl, _, color in RUNS:
     d = data[lbl]
     a.plot([d["wall"]], [np.interp(d["wall"], d["t"], smooth(d["bat"], 7))], marker="o", ms=3.2,

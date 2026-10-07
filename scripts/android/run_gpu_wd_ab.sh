@@ -1,13 +1,9 @@
 #!/bin/bash
-# GPU watchdog threshold A/B (2026-07-30).
-# WHY: the paper tabulates a GPU watchdog row but describes the CPU ladder, and the
-# row that exists was produced by v3 (which oscillates 1200<->1050). This measures
-# the SHIPPED v5 daemon at two ladders that differ ONLY in trigger temperature:
-#   v5LOW  battery 36.0/36.5/37.0/37.5/38.0  skin 39.5/40.0/40.5/41.0/41.5  (v4-era anchors)
-#   v5HIGH battery 47.0/48.0/48.5/49.0/49.5  skin 50.0/51.0/51.5/52.0/52.5  (CPU-mirror, shipped)
-# Same code, same tiers (1200/1050/967/902/826 MHz), same junction backstop, so any
-# difference is the threshold and nothing else. Each arm gets its own same-session
-# baseline; n=3; cool gate before every cell; USB-rail energy sampled throughout.
+# run_gpu_wd_ab.sh: GPU watchdog v5 at two ladders that differ only in trigger temperature:
+#   v5LOW  battery 36.0/36.5/37.0/37.5/38.0  skin 39.5/40.0/40.5/41.0/41.5
+#   v5HIGH battery 47.0/48.0/48.5/49.0/49.5  skin 50.0/51.0/51.5/52.0/52.5
+# Same tiers (1200/1050/967/902/826 MHz) and junction backstop. Each arm has its own
+# same-session baseline, n=3, cool gate before every cell, USB-rail energy throughout.
 set -u
 for _p in ${ADB_PORTS:-5152 5037 5151}; do
   (exec 3<>/dev/tcp/127.0.0.1/$_p) 2>/dev/null || continue
@@ -16,10 +12,8 @@ for _p in ${ADB_PORTS:-5152 5037 5151}; do
 done
 echo "[adb] port ${ANDROID_ADB_SERVER_PORT:-unset}"
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
-# 2026-07-30: the paper's GPU cells use a SPLIT binary/lib pair (see /tmp/gpu_rerun.sh):
-# binary from bin_vulkan_new (2026-07-25, knows --fa-on-evict/--ignore-eos), libs from
-# bin_vulkan. bin_vulkan's own binary is 2026-05-31 and rejects every current flag --
-# using it silently produced 12 empty cells. PLATFORMS.md still documents the stale path.
+# Binary from bin_vulkan_new (accepts --fa-on-evict and --ignore-eos), libs from bin_vulkan.
+# The older binary in bin_vulkan rejects current flags and produces empty cells.
 VK=/data/local/tmp/endurkv/bin_vulkan_new
 VKLIB=/data/local/tmp/endurkv/bin_vulkan
 M=/data/local/tmp/endurkv/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf

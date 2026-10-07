@@ -1,19 +1,7 @@
 #!/bin/bash
-# phone_full_sweep_cpu.sh — all-CPU re-run after diagnosing the GPU output-degeneration bug.
-#
-# What changed vs Wave-1:
-#   1. ngl=0 (CPU only) — stock llama-completion confirmed CPU output is correct.
-#   2. Uses chat-templated prompts (prompts_chat/<model>/<prompt>.txt) instead of raw text.
-#   3. --greedy decoding (deterministic, removes RNG noise).
-#   4. bin_cpu/ binary stack (no Vulkan registered → no GPU mis-scheduling).
-#
-# Grid:
-#   3 models × 3 policies × 3 prompts × 1 rep = 27 cells (greedy is deterministic).
-# Wall-time estimate:
-#   Llama-1B  : ~1-2 min/cell × 9 = ~15 min
-#   Gemma-2-2B: ~3-6 min/cell × 9 = ~45 min
-#   Phi-3-128k: ~6-10 min/cell × 9 = ~90 min
-#   Total     : ~2.5 hr
+# CPU-only phone sweep (bin_cpu, no Vulkan) because GPU output was degenerate.
+# Chat-templated prompts from prompts_chat/<model>/ and greedy decoding, so one
+# rep per cell. 3 models x 3 policies x 3 prompts = 27 cells, about 2.5 h.
 
 set -e
 export PATH=/home/mislam22/tools/platform-tools:$PATH
@@ -64,7 +52,7 @@ run_count=0
 for MODEL_ENTRY in "${MODELS[@]}"; do
     IFS='|' read -r MODEL MODEL_TAG NGL NBATCH UB CTX <<< "$MODEL_ENTRY"
     echo "" | tee -a "$PROG_LOG"
-    echo "===== $MODEL_TAG  ctx=$CTX =====" | tee -a "$PROG_LOG"
+    echo "$MODEL_TAG  ctx=$CTX" | tee -a "$PROG_LOG"
 
     for r in $(seq 1 $N_REPLICATES); do
     for PROMPT_ID in $PROMPT_IDS; do

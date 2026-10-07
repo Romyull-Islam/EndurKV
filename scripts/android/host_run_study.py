@@ -1,38 +1,8 @@
 #!/usr/bin/env python3
-"""
-host_run_study.py — host-side master orchestrator for the OnePlus 15 port.
-
-For each prompt in PROMPTS_PATH (a JSONL with prompt_id / task / prompt_text):
-  1. adb push the prompt text to /data/local/tmp/endurkv/prompts/<prompt_id>.txt
-  2. adb shell run_one_prompt.sh ... which itself
-       - starts the sensor sampler in background
-       - runs entropy_probe (or attention_probe) on the prompt
-       - stops the sampler
-       - writes the join metadata
-  3. adb pull the four outputs back to the host's logs/<sub>/ dir:
-       <prompt_id>.entropy.csv
-       <prompt_id>.sensors.csv
-       <prompt_id>.probe.stderr
-       <prompt_id>.run.json
-
-After all prompts: concatenate the entropy CSVs into logs/<sub>_full.csv
-(matching the host-side study_full.csv format), and join with sensors via
-host_join_sensors.py for the controller-training analyses.
-
-Env vars (all optional):
-  WORKSPACE              defaults to "../../.." from this file
-  MODEL_PATH             path on HOST to the GGUF; pushed to phone once
-  PROMPTS_PATH           path on HOST to prompts.jsonl
-  LOG_SUBDIR             default "study_phone_1b"
-  N_TOKENS               max new tokens per prompt (default 64)
-  SEED                   default 42
-  PROBE                  default "entropy_probe" (or "attention_probe")
-  MAX_PROMPTS            cap on number of prompts (0 = all)
-  MAX_PER_TASK           per-task cap (0 = all)
-  SENSORS_HZ             default 10
-  ADB                    path to adb (default: just "adb")
-  PHONE_ROOT             dir on phone (default /data/local/tmp/endurkv)
-"""
+"""Host-side driver for the phone study. Pushes the deploy dir and model, then for each prompt
+in --prompts (JSONL) runs run_one_prompt.sh on the phone and pulls its outputs to logs/<LOG_SUBDIR>/.
+Env vars: LOG_SUBDIR, N_TOKENS, SEED, PROBE (entropy_probe or attention_probe), MAX_PROMPTS,
+MAX_PER_TASK, SENSORS_HZ, ADB, PHONE_ROOT, WORKSPACE."""
 from __future__ import annotations
 
 import argparse
@@ -79,11 +49,8 @@ def ensure_phone_layout() -> None:
 
 
 def push_static_artifacts(deploy_dir: Path, model_path: Path) -> str:
-    """Push the binaries, .so files, scripts, and model only if missing.
-
-    Returns the on-phone path of the model.
-    """
-    # Probe + libs + llama-bench (idempotent, but skip if already-same-size).
+    """Push binaries and the model when sizes differ, scripts always. Returns the phone model path."""
+    # Binaries and libs, skipped when the remote size matches.
     for f in sorted((deploy_dir / "bin").iterdir()):
         remote = f"{PHONE_ROOT}/bin/{f.name}"
         local_size = f.stat().st_size
@@ -97,12 +64,11 @@ def push_static_artifacts(deploy_dir: Path, model_path: Path) -> str:
         print(f"[push] {f.name} ({local_size/1024/1024:.1f} MB)")
         adb("push", str(f), remote)
 
-    # Scripts (small, always push to keep them in sync).
+    # Scripts are small, always push them.
     for f in sorted((deploy_dir / "scripts").iterdir()):
         adb("push", str(f), f"{PHONE_ROOT}/scripts/{f.name}")
         adb_shell(f"chmod 755 {PHONE_ROOT}/scripts/{f.name}")
 
-    # Chmod the binaries so they execute.
     adb_shell(f"chmod 755 {PHONE_ROOT}/bin/*")
 
     # Model: only push if size differs.
@@ -172,8 +138,8 @@ def run_one(prompt: dict, remote_model: str, host_log_dir: Path) -> int:
     r = adb_shell(cmd, check=False, capture=True)
     elapsed = time.time() - t0
 
-    # 3) Pull the outputs. attention_probe also produces .attn.bin (ATNH per-head)
-    # and (since 2026-05-24 dual-format probe) .v1.attn.bin (ATTN head-averaged).
+    # 3) Pull the outputs. attention_probe also writes .attn.bin (per-head)
+    # and .v1.attn.bin (head-averaged).
     pull_exts = [".entropy.csv", ".sensors.csv", ".probe.stderr", ".run.json"]
     if PROBE_NAME == "attention_probe":
         pull_exts.append(".attn.bin")

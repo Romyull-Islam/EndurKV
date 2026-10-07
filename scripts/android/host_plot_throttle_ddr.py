@@ -1,26 +1,8 @@
 #!/usr/bin/env python3
-"""
-host_plot_throttle_ddr.py — DDR temperature at throttle events.
-
-Produces a single figure with three stacked subplots, each showing the LPDDR5X
-controller temperature over the lifetime of one decode cell. Vertical red
-dashed lines mark the moment(s) at which the per-iter throttle test
-(``cpu6_freq_hz`` drop >=10% OR ``decode_tps`` drop >=15%) fires.
-
-Cells:
-  Subplot 1: Wave-4 vanilla — throttle fires at iter 6 (DDR 62.9 C peak).
-  Subplot 2: Wave-8 v1_fa2_selective — throttle fires at iter 10 (DDR 72.9 C).
-  Subplot 3: Wave-9 v1_fa2_stack — NO throttle. Watchdog tier transitions are
-             overlayed for context.
-
-Empirical thresholds: 58 / 62 / 65 C horizontal guides on every subplot.
-
-Outputs:
-  figures/relationship_plots/23_throttle_event_ddr.png
-
-Run (defaults assume the standard workspace layout):
-  python scripts/android/host_plot_throttle_ddr.py
-"""
+"""Plot DDR temperature over three decode cells (wave4 vanilla, wave8 v1_fa2_selective,
+wave9 v1_fa2_stack with watchdog tiers), marking the per-iter throttle event.
+Writes figures/relationship_plots/23_throttle_event_ddr.png.
+Usage: python scripts/android/host_plot_throttle_ddr.py"""
 from __future__ import annotations
 
 import argparse
@@ -53,14 +35,9 @@ THRESH_COLORS = ["#2ca02c", "#ff9f1a", "#d62728"]
 THRESH_LABELS = ["58 C (tier 1 entry)", "62 C (tier 2 entry)", "65 C (alarm)"]
 
 
-# ----------------------------------------------------------------------------
 # Loaders
-# ----------------------------------------------------------------------------
 def load_sensors(path: Path) -> Tuple[List[float], List[Optional[float]], List[Optional[float]]]:
-    """Return (t_rel_s, ddr_c, cpu6_mhz) sampled at the sensor cadence.
-
-    ``t_rel_s`` is wall-clock seconds since the first sensor row of the cell.
-    """
+    """Return (t_rel_s, ddr_c, cpu6_mhz), with t_rel_s in seconds since the first sensor row."""
     t_abs: List[float] = []
     ddr: List[Optional[float]] = []
     cpu6: List[Optional[float]] = []
@@ -107,12 +84,8 @@ def load_stress(path: Path) -> List[dict]:
 
 
 def load_watchdog(path: Path) -> Tuple[float, List[Tuple[float, int, int]]]:
-    """Return (anchor_ts, [(unix_ts, tier, freq_khz), ...]).
-
-    The first watchdog line is ``watchdog start``; its unix timestamp is
-    returned as the anchor used to convert subsequent events to relative
-    seconds from cell start.
-    """
+    """Return (anchor_ts, [(unix_ts, tier, freq_khz), ...]). The anchor is the unix time
+    of the "watchdog start" line."""
     events: List[Tuple[float, int, int]] = []
     anchor: Optional[float] = None
     pat_start = re.compile(r"^\[(\d+)\]\s+watchdog start")
@@ -136,9 +109,7 @@ def load_watchdog(path: Path) -> Tuple[float, List[Tuple[float, int, int]]]:
     return anchor, events
 
 
-# ----------------------------------------------------------------------------
 # Throttle detector (paper-style)
-# ----------------------------------------------------------------------------
 def find_throttle_iter(stress: List[dict]) -> Optional[int]:
     """Return iter number whose decode_tps drops >=15% vs prev, else None."""
     prev_tps = None
@@ -175,9 +146,7 @@ def window_max(
     return best_d, t_d, best_c, t_c
 
 
-# ----------------------------------------------------------------------------
 # Plotters
-# ----------------------------------------------------------------------------
 def add_thresholds(ax) -> None:
     for c, color, label in zip(THRESH_C, THRESH_COLORS, THRESH_LABELS):
         ax.axhline(c, color=color, linestyle=":", linewidth=1.0, alpha=0.7, label=label)
@@ -251,9 +220,7 @@ def plot_no_throttle_cell(
     ax.set_ylim(30, 80)
 
 
-# ----------------------------------------------------------------------------
 # Main
-# ----------------------------------------------------------------------------
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--workspace", default=str(WORKSPACE))
@@ -268,7 +235,7 @@ def main() -> None:
     w9_dir = phone_logs / "wave9_v1fa2_stack_1780796320" / "v1_fa2_stack"
     w9_watchdog = phone_logs / "wave9_v1fa2_stack_1780796320" / "watchdog.log"
 
-    # ---- Wave-4 vanilla ----
+    # wave4 vanilla
     t4, ddr4, cpu64 = load_sensors(w4_dir / "sensors.csv")
     stress4 = load_stress(w4_dir / "stress.csv")
     iter4 = 6
@@ -279,10 +246,8 @@ def main() -> None:
         t4[-1] if t4 else t4_start + 500,
     )
     max_ddr4, t_max_ddr4, min_cpu64, _ = window_max(t4, ddr4, cpu64, t4_start, t4_end)
-    # The title uses the canonical per-iter avg-frequency callout (decode_tps
-    # ratio -> -15%, raw kHz callout 1382 -> 1171 MHz) from the analysis log;
-    # the in-window cpu6 min sample is reported in the SUMMARY line for
-    # transparency.
+    # The title uses the per-iter frequency from the analysis log. The in-window cpu6
+    # minimum goes in the SUMMARY line.
     title4 = (
         f"Wave-4 vanilla: throttle at DDR {max_ddr4:.1f} C "
         f"(iter {iter4}, freq 1382 -> 1171 MHz, -15%)"
@@ -292,7 +257,7 @@ def main() -> None:
         None,
     )
 
-    # ---- Wave-8 v1_fa2_selective ----
+    # wave8 v1_fa2_selective
     t8, ddr8, cpu68 = load_sensors(w8_dir / "sensors.csv")
     stress8 = load_stress(w8_dir / "stress.csv")
     iter8 = 10
@@ -311,10 +276,9 @@ def main() -> None:
         f"(iter {iter8}, freq 1497 -> 1355 MHz, -9.5%)"
     )
 
-    # ---- Wave-9 v1_fa2_stack (no throttle) ----
+    # wave9 v1_fa2_stack (no throttle)
     t9, ddr9, cpu69 = load_sensors(w9_dir / "sensors.csv")
-    # Anchor wave9 sensors at its first sample (absolute unix).
-    # Then translate watchdog events to the same axis.
+    # Anchor wave9 sensors at their first absolute timestamp and put watchdog events on that axis.
     with (w9_dir / "sensors.csv").open() as f:
         r = csv.reader(f); next(r)
         sensor_t0 = float(next(r)[0])
@@ -329,7 +293,7 @@ def main() -> None:
         f"(watchdog active, DDR held <= {max_ddr9:.1f} C)"
     )
 
-    # ---- Render ----
+    # Render
     fig, axes = plt.subplots(3, 1, figsize=(11, 11.5), sharex=False)
     plot_throttle_cell(
         axes[0], title4, t4, ddr4, throttle_t=t_max_ddr4, throttle_ddr=max_ddr4

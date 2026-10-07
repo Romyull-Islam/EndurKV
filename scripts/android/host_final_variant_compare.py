@@ -1,14 +1,7 @@
 #!/usr/bin/env python3
-"""Final streamlined cross-variant comparison.
-
-Runs every perhead variant (v1-v7) + TOVA on 1 prompt per long-context dir,
-at K ∈ {512, 1024} — the budgets that matter for mobile. Total ~70 sim calls,
-~10 min wall clock.
-
-Outputs:
-  EndurKV/figures/final_variant_results.csv  — per-(model, K, variant) results
-  EndurKV/figures/final_evaluation_tables.md — clean markdown tables for the paper
-"""
+"""Compare perhead variants v1..v7 and TOVA on 1 prompt per long-context dir at K in {512, 1024},
+about 70 simulator calls. Writes figures/final_variant_results.csv (per model, K, variant) and
+figures/final_evaluation_tables.md."""
 import sys, time
 from pathlib import Path
 import numpy as np
@@ -90,7 +83,7 @@ def main():
     cells_df.to_csv(out_dir / "final_variant_per_cell.csv", index=False)
     print(f"[final] wrote per-cell to final_variant_per_cell.csv")
 
-    # Overall ranking — mean across (model, K) of pct_vs_v1
+    # Overall ranking - mean across (model, K) of pct_vs_v1
     overall = (cells_df.groupby("variant")
                  .agg(mean_kl=("kl_mean","mean"),
                       mean_cache_ratio=("cache_ratio_vs_tova","mean"),
@@ -101,7 +94,7 @@ def main():
                       best_pct_vs_v1=("pct_vs_v1","min"))
                  .reset_index()
                  .sort_values("mean_pct_vs_v1"))
-    print("\n=== OVERALL RANKING (lower mean_pct_vs_v1 = better) ===")
+    print("OVERALL RANKING (lower mean_pct_vs_v1 = better)")
     print(overall.to_string(index=False))
     overall.to_csv(out_dir / "final_variant_ranking.csv", index=False)
     return 0

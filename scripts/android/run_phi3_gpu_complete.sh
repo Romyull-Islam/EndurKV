@@ -1,31 +1,10 @@
 #!/bin/bash
-# ============================================================================
-# run_phi3_gpu_complete.sh -- the COMPLETE Phi-3 phone-GPU policy table. (2026-08-25)
-#
-# WHY THIS EXISTS. The phone_gpu_16k Phi-3 rows are unpublishable: five baselines
-# (SnapKV, Ada-KV, H2O, TOVA, StreamingLLM) emitted 3.65-8.73 <unk> per 100 chars
-# because the FA-off kq_soft_max capture is numerically broken on Adreno when
-# head_dim is neither 64 nor 128 (Phi-3 = 96; Llama-1B = 64 and is unaffected).
-# Their tok/s numbers measured a computation that was producing garbage.
-#
-# WHAT CHANGED. bin_vk_cur (host build 2026-08-22, pushed 08-24) carries the
-# FA-off viability gate: on GPU with an unsupported head_dim it auto-promotes
-# SnapKV/Ada-KV to the in-graph side node (they score ONCE at end of prefill, so
-# this is plumbing, not a policy change) and REFUSES H2O/TOVA (they re-score every
-# decode step; under --fa-on-evict H2O evicts 0 cells and is vanilla wearing an
-# H2O label). Every cell records fa_off_gate in meta.json.
-#
-# H2O and TOVA ARE STILL ATTEMPTED so the refusal is recorded as evidence rather
-# than an absence. They exit 2 with no meta.json; the scorer reports them as
-# driver-refused and cites their CPU numbers instead.
-#
-# muKV USES --compact-inplace, NOT the round-trip. Round-trip needs a second
-# 6144 MiB cache and is OS-killed at 16K on this phone: phi3_mukv_dfg{,_r2,_r3}
-# in phone_gpu_16k are empty files whose logs stop mid-KV-allocation.
-#
-# GENERATIONS ARE KEPT (--out-gen), so every cell can be <unk>-graded. The old
-# CPU runs wrote /dev/null and are permanently unverifiable; that is fixed here.
-# ============================================================================
+# Phi-3 phone-GPU policy table (12K prompt + 4096 decode, ctx 16K, bin_vk_cur).
+# FA-off attention capture gives corrupt output on Adreno at Phi-3's head_dim 96, so the
+# build's FA-off gate moves SnapKV/Ada-KV to the in-graph side node (they score once after
+# prefill) and refuses H2O/TOVA, which re-score every step. H2O/TOVA still run so the refusal is logged.
+# muKV uses --compact-inplace: round-trip needs a second 6144 MiB cache and is OS-killed at 16K.
+# Generations are kept so every cell can be checked for <unk> output.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 LOG(){ echo "[$(date +%H:%M:%S)] $*"; }

@@ -16,7 +16,7 @@ if [ -f "$MODEL_PATH" ] && [ -s "$MODEL_PATH" ]; then
 fi
 
 echo "Downloading from $PRIMARY_URL ..."
-echo "  (~5 GB.  If this 401s, the bartowski mirror has gone gated; tell Claude.)"
+echo "  (~5 GB. If this returns 401, the bartowski mirror is gated. Switch to another source.)"
 wget --progress=bar:force -O "${MODEL_PATH}.tmp" "$PRIMARY_URL"
 mv "${MODEL_PATH}.tmp" "$MODEL_PATH"
 

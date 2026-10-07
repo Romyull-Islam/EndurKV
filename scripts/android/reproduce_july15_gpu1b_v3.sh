@@ -1,7 +1,7 @@
 #!/system/bin/sh
-# 2026-07-21: current-binary protocol replica of the 2026-07-15 Llama-1B
-# GPU μKV-mass + watchdog-v3 row. Captures raw inputs, logs, sensor trace,
-# watchdog actions, and hashes. It does NOT claim historical-binary identity.
+# Replays the protocol of the 2026-07-15 Llama-1B GPU μKV-mass + watchdog-v3 row with the
+# current binary, not the historical one. Saves inputs, logs, sensor trace, watchdog actions
+# and hashes.
 # Args: <output-dir> <source-prompt-path>
 
 OUT=${1:?output directory required}

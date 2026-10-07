@@ -1,48 +1,17 @@
 #!/bin/bash
-# ============================================================================
-# DEFINITIVE deployment-model CPU run  --  HotMobile thermal-aware KV paper
-# (finalized 2026-07-16, "restart with correct run")
-#
-# EXPERIMENTAL PLATFORM (applied to EVERY cell equally, NOT a muKV optimization):
-#   big cores cpu6/cpu7 statically capped at 1632 MHz -- the realistic *sustained*
-#   mobile-inference clock (the 3.4 GHz native boost is not thermally sustainable
-#   and would confound duration/energy). Same platform for baselines AND muKV.
-#
-# WATCHDOG MODEL (muKV-ONLY, per user):
-#   - Baselines (vanilla, SnapKV, AdaKV): platform cap only, NO watchdog. The
-#     phone's own thermal engine is free to throttle below 1632 under heat
-#     (kernel cliff -> ~883 MHz). This is their canonical/default setup, unmodified.
-#   - muKV: platform cap + surface-aware reduce-only watchdog v2
-#     (preempt_throttle_watchdog_v2.sh). Reads DDR/CPU/skin(shell_front)/battery,
-#     GLIDES the clock down (1632->1497->1382->1267) BEFORE the kernel cliff, and
-#     NEVER raises it. This is muKV's thermal actuator -- the only asymmetry.
-#
-# CANONICAL SnapKV (exact FasterDecoding/SnapKV defaults, verified from
-#   snapkv_utils.py -- NONE of muKV's tricks):
-#     --policy snapkv --k-nominal 1024 --obs-window 64 --n-sink 0
-#   window_size=64 (always kept), kernel_size=5, avgpool, per-head, top-(K-64)
-#   from the prefix. On llama.cpp's sequence-level engine the per-head union barely
-#   compacts (peak_kv stays near full) -- the on-device realizability point, as DATA.
-#
-# muKV (state-swap, CPU-optimal decode; NO fa-on-evict here -- that's the GPU path):
-#     --policy v1_fa2 --n-sink 4 --adaptive-anchor --adaptive-rmin 32
-#     --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70
-#
-# ALL cells: WikiText 9737-token prompt + 4096 decode, ctx 16384,
-#   Llama-3.2-1B-Instruct Q4_K_M, 6 threads, k-nominal 1024, bin_cpu_sol2
-#   (code-matched 07-16, canonical SnapKV). Cool-gate (charging off + wait
-#   big-core <=52 C) before every cell for equal thermal starts.
-#
-# CAPTURES per cell: peak_kv (realizability), prefill ms, decode tps, wall s,
-#   energy (sensors.csv), peak DDR/CPU/skin temps, watchdog tier log (muKV only).
-# ============================================================================
+# Deployment-model CPU run: Llama-3.2-1B Q4_K_M, WikiText prompt + 4096 decode, ctx 16384, K=1024.
+# Every cell has big cores (cpu6/7) capped at 1632 MHz, a sustainable clock, and a cool gate
+# (charging off, big cores <=52 C) for equal thermal starts.
+# Baselines (vanilla, SnapKV defaults, AdaKV) run without a watchdog. muKV adds the reduce-only
+# watchdog v2, which steps the clock down from 1632 MHz before the kernel throttles.
+# muKV uses state-swap here, fa-on-evict is the GPU path.
 set -u; export ANDROID_ADB_SERVER_PORT=5150
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 
 OUT_HOST=/tmp/deploy_cpu; mkdir -p "$OUT_HOST"
 TS=$(date +%Y%m%d_%H%M%S); OUT=/data/local/tmp/endurkv/logs/deploycpu_$TS
 adb_safe_shell "mkdir -p $OUT" < /dev/null
-SCR=/tmp/claude-1001/-home-mislam22-EndurKV-workspace/1d283ef2-8bcb-4a99-8b56-fd8d8af9f80d/scratchpad
+SCR="${SCR:-$(cd "$(dirname "$0")/../.." && pwd)/eval_corpora}"
 adb push "$SCR/wikitext_16k_p12k_d4k.txt" "$OUT/prompt.txt" < /dev/null >/dev/null 2>&1
 adb push /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/preempt_throttle_watchdog_v2.sh \
          /data/local/tmp/preempt_throttle_watchdog_v2.sh < /dev/null >/dev/null 2>&1
@@ -51,11 +20,11 @@ MODEL=/data/local/tmp/endurkv/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 CB=/data/local/tmp/endurkv/bin_cpu_sol2
 WD_STOP=/data/local/tmp/cpu_wd.stop
 
-# -- platform: static 1632 cap on big cores, watchdog OFF (baseline default state) --
+# static 1632 MHz cap on big cores, watchdog off
 platform_native_engine(){
   adb_safe_shell "su -c 'touch $WD_STOP; for c in cpu6 cpu7; do echo 1632000 > /sys/devices/system/cpu/\$c/cpufreq/scaling_max_freq; done'" < /dev/null
 }
-# -- muKV thermal actuator: same 1632 cap, PLUS surface-aware watchdog v2 running --
+# muKV: same cap plus the surface-aware watchdog v2
 start_watchdog(){ local tag=$1
   adb_safe_shell "su -c 'rm -f $WD_STOP; nohup sh /data/local/tmp/preempt_throttle_watchdog_v2.sh /data/local/tmp/cpu_wd_$tag.log $WD_STOP >/dev/null 2>&1 &'" < /dev/null; }
 stop_watchdog(){ adb_safe_shell "su -c 'touch $WD_STOP'" < /dev/null; }
@@ -85,11 +54,11 @@ run(){ local CELL=$1; local WD=$2; shift 2; local PD=$OUT/$CELL
 
 MU="--policy v1_fa2 --n-sink 4 --adaptive-anchor --adaptive-rmin 32 --obs-window 16 --snapkv-pool 7 --gate-alpha-floor 0.70"
 
-# ---- baselines: canonical setup, NO watchdog (WD=0) ----
+# baselines, no watchdog
 run vanilla  0 --policy vanilla
 run snapkv   0 --policy snapkv --obs-window 64 --n-sink 0
 run adakv    0 --policy adakv  --n-sink 4 --obs-window 16
-# ---- muKV: surface-aware watchdog v2 (WD=1) ----
+# muKV with watchdog
 run mukv     1 $MU
 
 # restore: watchdog off, native max clock, charging on

@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
-"""Run R-KV / KeyDiff / LaProx on the host-captured K/V data.
+"""Simulate R-KV, KeyDiff and LaProx at K=512 and 1024 on host K/V captures.
 
-For each model with a host K/V capture at /home/mislam22/EndurKV_workspace/logs/host_kv_<model>/,
-simulate at K ∈ {512, 1024}. Reuse the existing K/V-aware simulator in
-host_simulate_kv_baselines.py.
-
-Outputs:
-  EndurKV/figures/kv_aware_per_cell.csv     (per-cell)
-  appended to final comparison
+Reads logs/host_kv_<model>/ and uses the simulator in host_simulate_kv_baselines.py.
+Writes EndurKV/figures/kv_aware_per_cell.csv.
 """
 import sys, time
 from pathlib import Path
@@ -22,7 +17,7 @@ from host_simulate_kv_baselines import (
 MODELS = ["mistral", "qwen2", "gemma2", "r1distill", "phi3"]
 PROMPT_ID = "narrativeqa_pub_001"
 BUDGETS = [512, 1024]
-# K/V-aware policies + cross-check baselines (v1, tova)
+# K/V-aware policies plus two reference baselines (v1, tova)
 POLICIES = ["perhead_v1", "perhead_tova", "rkv", "keydiff", "laprox"]
 
 
@@ -45,7 +40,7 @@ def main():
         kv_data = load_kv_sidecar(kv_path)
         if kv_data is None:
             print(f"[{model}] kv load failed"); continue
-        # We don't have W_o, so LaProx will use ||V||_2 as proxy for projection.
+        # No W_o is captured, so LaProx uses ||V||_2 as a proxy for the projection.
         for K in BUDGETS:
             for pol in POLICIES:
                 kls, Ks, mass, _ = simulate(

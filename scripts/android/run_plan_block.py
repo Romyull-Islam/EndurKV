@@ -1,30 +1,7 @@
 #!/usr/bin/env python3
-"""Measure every GPU plan the scheduler can choose, in ONE session. (2026-09-22)
-
-WHY. The cost table was assembled from three campaigns weeks apart: the flat clocks from the
-2026-09-03 proof, the split plans from /tmp/split_proof, the 1050 and 967 rungs from the fine ladder
-of 2026-09-22. Absolute joules drift about 5% between sessions (the fine ladder measured 1200 MHz at
-853 J where the earlier ladder had 802), and the walk decides steps by percentage differences between
-rows. A step of 15% is safe against that drift; the mid tier's choice between a split plan and 967 MHz
-is not. So every row the walk compares has to come from one session, on one battery, one ambient.
-
-WHAT. Six plans, three rounds, order alternating so any drift inside the session cancels:
-    gpu1200_k1024        flat, the fast anchor
-    gpu1050_k1024        new rung
-    gpu967_k1024         new rung
-    gpu902_k1024         flat, the slow anchor
-    gpu1200d902_k1024    split: prefill 1200, decode capped at 902
-    gpu1200d726_k1024    split: prefill 1200, decode capped at 726
-826 MHz is left out: the fine ladder showed it slower than 902 and no cheaper, so no tier can take it.
-
-HOW. The scheduler itself runs each plan (--plan P), so the number in the table is measured by the
-same meter, on the same path, that the scheduler uses in deployment. --no-feedback freezes the lever
-and the table while we measure, and --force-soc 80 holds one lever for every plan, so the plans differ
-in nothing but their clocks. Every request is cooled first with charging off, and a request whose
-meter did not cover it is dropped and retried.
-
-The 1050 and 967 rows must exist before --plan will accept them: they are seeded from the fine ladder
-and overwritten from this campaign's own measurements by write_table().
+"""Measure every GPU plan in PLANS in one session, alternating order each round. Energy drifts
+about 5% between sessions, so rows the scheduler compares must come from the same session.
+Plans run through the scheduler with --plan and --no-feedback, cooled, then write_table() updates the phone table.
 Usage: ANDROID_SERIAL=... run_plan_block.py [--rounds 3]
 """
 import argparse, json, os, re, statistics as st, sys
@@ -34,7 +11,7 @@ import run_guarded_bandit as gb
 
 PLANS = ["gpu1200_k1024", "gpu1050_k1024", "gpu967_k1024", "gpu902_k1024",
          "gpu1200d902_k1024", "gpu1200d726_k1024"]
-SOC = 80                       # one lever for every plan; --plan overrides the walk anyway
+SOC = 80                       # one lever for every plan, --plan overrides the walk anyway
 NP, ND = 9737, 1024            # the prompt and answer this table is written for
 SEED_ROWS = {                  # from campaigns/clock_fine_20260921, so --plan accepts them on round 0
     "gpu1050_k1024": "gpu1050_k1024    gpu     1050    1024  54.5   189.4  13.7   21.4   1.00",
@@ -54,10 +31,7 @@ def seed_rows(out):
 
 
 def phases(tag, out):
-    """The phase split the scheduler already metered, from the log line run_request saved.
-
-    Field names are the scheduler's own: pre_J / dec_J and prefill_ms / decode_ms.
-    """
+    """Phase split (pre_J, dec_J, prefill_ms, decode_ms) from the saved scheduler log line."""
     f = os.path.join(out, "requests", tag, "sched_log.txt")
     if not os.path.exists(f):
         return None
@@ -96,11 +70,8 @@ def run_one(plan, tag, out):
 
 
 def write_table(state, out):
-    """Rewrite each measured row from this session: per-token energy (mJ) and time (ms).
-
-    Split rows keep the convention the table already documents: the prefill columns are the 1200 MHz
-    row's, because a split plan prefills at 1200 by construction.
-    """
+    """Rewrite measured rows with per-token energy (mJ) and time (ms).
+    Split plans prefill at 1200 MHz, so they take the 1200 row's prefill columns."""
     rows, flat1200 = {}, None
     for plan in PLANS:
         R = [r for r in state["runs"] if r["plan"] == plan]
@@ -135,8 +106,8 @@ def main():
     sp = os.path.join(a.out, "state.json")
     state = json.load(open(sp)) if os.path.exists(sp) else {"runs": []}
     done = {(r["plan"], r["round"]) for r in state["runs"]}
-    # freeze the lever and the table while we measure them: the flag reaches every launch because
-    # run_request builds its command from gb.SCHED, and ukv_sched.sh takes its flags in any order
+    # Freeze the lever and the table during measurement. run_request builds every
+    # command from gb.SCHED, so the flag reaches each launch.
     if "--no-feedback" not in gb.SCHED:
         gb.SCHED = gb.SCHED + " --no-feedback"
     gb.log(f"plan block: {len(PLANS)} plans x {a.rounds} rounds, one session, soc {SOC}, no feedback", a.out)

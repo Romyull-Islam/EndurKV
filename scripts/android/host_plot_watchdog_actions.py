@@ -1,39 +1,8 @@
 #!/usr/bin/env python3
-"""
-PLOT 17: Pre-empt-throttle watchdog -- action timeline (Wave-9 + Wave-10 + Wave-11).
-
-The watchdog runs as a root sidecar that polls the DDR thermal zone (zone47)
-once per second and clamps the big-core max-frequency via cpufreq scaling:
-
-   tier 0  -> MAX  = 1632 MHz    (no clamp)
-   tier 1  -> HIGH = 1497.6 MHz  (engages at DDR ~= 58 C)
-   tier 2  -> MED  = 1267.2 MHz  (engages at DDR ~= 62 C)
-   tier 3  -> LOW  =  883.2 MHz  (engages at DDR ~= 65 C, paper hard-cap)
-
-The log line format is:
-   [<unix_ts>] DDR=<int>C -> tier=<n> <NAME>=<khz>
-
-Three sources:
-  Wave-9  v1_fa2_stack_1780796320/watchdog.log         (single arm, 1 hour)
-  Wave-10 ksweep_1780815847/watchdog.log               (K=256/384/1024 phases, 4 hours)
-  Wave-11 wave11_eval_1780862534/Phi-3-mini-128k/v1_fa2_stack/ppl/watchdog.log
-          (will appear when the Wave-11 v1_fa2_stack arm finishes -- handled gracefully)
-
-3-panel figure:
-  Top    -- Wave-9 timeline      : DDR temp curve (from sensors.csv) overlaid
-                                   with watchdog tier-step trace + engagement
-                                   annotations.
-  Middle -- Wave-10 K-sweep      : per-K tier-transition density (counts/min)
-                                   stacked by K, on a shared minutes axis with
-                                   K-phase shading.
-  Bottom -- Wave-11 v1_fa2_stack : same layout as the top panel; falls back to
-                                   a friendly "data not yet available" panel
-                                   while the run is still in flight.
-
-Output:
-  /home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/17_watchdog_action_timeline.png
-  /home/mislam22/EndurKV_workspace/EndurKV/figures/relationship_plots/17_watchdog_action_timeline.schema.json
-"""
+"""Plot 17: pre-empt-throttle watchdog action timeline from three watchdog logs.
+Top: wave9 DDR temperature with the tier step trace. Middle: wave10 K-sweep tier transitions
+per minute. Bottom: wave11 v1_fa2_stack, or a placeholder if missing.
+Writes figures/relationship_plots/17_watchdog_action_timeline.png and .schema.json."""
 from __future__ import annotations
 
 import json
@@ -52,9 +21,7 @@ from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
 
 
-# ----------------------------------------------------------------------------
 # Paths
-# ----------------------------------------------------------------------------
 PHONE_LOGS = Path("/home/mislam22/EndurKV_workspace/phone-logs")
 WAVE9_DIR = PHONE_LOGS / "wave9_v1fa2_stack_1780796320"
 WAVE10_DIR = PHONE_LOGS / "wave10_ksweep_1780815847"
@@ -73,14 +40,15 @@ FIG_DIR = Path(
 OUT_PNG = FIG_DIR / "17_watchdog_action_timeline.png"
 OUT_SCHEMA = FIG_DIR / "17_watchdog_action_timeline.schema.json"
 
-# Tier frequency table (kHz -> MHz) as reported in the watchdog log.
+# Big-core max frequency per watchdog tier (MHz). Log lines look like
+# "[<unix_ts>] DDR=<int>C -> tier=<n> <NAME>=<khz>".
 TIER_FREQ_MHZ = {
     0: 1632.0,
     1: 1497.6,
     2: 1267.2,
     3: 883.2,
 }
-# Engagement temperature thresholds inferred from log transitions / watchdog source.
+# DDR temperature (C) at which each tier engages.
 TIER_ENGAGE_C = {1: 58, 2: 62, 3: 65}
 
 TIER_COLOR = {
@@ -90,19 +58,17 @@ TIER_COLOR = {
     3: "#a50026",  # paper hard cap
 }
 
-# Wave-10 K-phase boundaries (from progress.log, cross-checked against watchdog timestamps).
+# wave10 K-phase boundaries, taken from progress.log.
 WAVE10_K_PHASES: List[Tuple[int, int, int]] = [
     # (K, t_start_unix, t_end_unix)
     (1024, 1780815848, 1780819532),
-    (384,  1780821125, 1780825049),  # iters started after a cool-down ~25 min after K1024 end
+    (384,  1780821125, 1780825049),  # starts after a cool-down following K1024
     (256,  1780825049, 1780830432),
 ]
 K_COLOR = {256: "#2c7fb8", 384: "#7fbf7b", 1024: "#d7301f"}
 
 
-# ----------------------------------------------------------------------------
 # Parsers
-# ----------------------------------------------------------------------------
 WATCHDOG_RE = re.compile(
     r"^\[(?P<ts>\d+)\]\s+DDR=(?P<ddr>\d+)C\s+->\s+tier=(?P<tier>\d+)"
 )
@@ -135,8 +101,7 @@ def parse_watchdog(log_path: Path) -> List[TierEvent]:
 
 
 def parse_watchdog_window(log_path: Path) -> Tuple[Optional[int], Optional[int]]:
-    """Read the very first 'watchdog start' timestamp and the 'watchdog exit'
-    timestamp -- both are emitted with the same [unix_ts] prefix."""
+    """Return the first 'watchdog start' and the last 'watchdog exit' timestamps."""
     start_ts: Optional[int] = None
     exit_ts: Optional[int] = None
     if not log_path.exists():
@@ -156,9 +121,7 @@ def parse_watchdog_window(log_path: Path) -> Tuple[Optional[int], Optional[int]]
     return start_ts, exit_ts
 
 
-# ----------------------------------------------------------------------------
 # Sensor helpers
-# ----------------------------------------------------------------------------
 def load_ddr_sensors(csv_path: Path) -> pd.DataFrame:
     """Return DataFrame[wall_clock_s, ddr_c] from a sensors.csv."""
     if not csv_path.exists():
@@ -172,19 +135,13 @@ def load_ddr_sensors(csv_path: Path) -> pd.DataFrame:
     return df
 
 
-# ----------------------------------------------------------------------------
 # Step-trace builder
-# ----------------------------------------------------------------------------
 def build_tier_step_trace(events: List[TierEvent],
                           t_start: int, t_end: int) -> Tuple[np.ndarray, np.ndarray]:
-    """Convert a list of tier transitions to (xs, ys) suitable for plt.step.
-
-    The watchdog emits a log line only when the tier changes, so we hold the
-    last-set tier until the next event. We bookend the trace with tier=0
-    (watchdog boots at MAX) and the final value at t_end."""
+    """Tier transitions to (xs, ys) for plt.step. The log has a line only per change,
+    so the trace starts at tier 0 (the watchdog boots at MAX) and holds the last tier."""
     if not events:
         return np.array([t_start, t_end]), np.array([0, 0])
-    # Sort defensively.
     ev = sorted(events, key=lambda e: e.ts)
     xs = [t_start]
     ys = [0]
@@ -196,9 +153,7 @@ def build_tier_step_trace(events: List[TierEvent],
     return np.array(xs, dtype=float), np.array(ys, dtype=int)
 
 
-# ----------------------------------------------------------------------------
 # First-engagement detection (for annotations)
-# ----------------------------------------------------------------------------
 def first_engagements(events: List[TierEvent]) -> Dict[int, TierEvent]:
     """Return first time each tier>=1 is engaged."""
     seen: Dict[int, TierEvent] = {}
@@ -210,9 +165,8 @@ def first_engagements(events: List[TierEvent]) -> Dict[int, TierEvent]:
 
 def post_engagement_ddr_drop(sensors: pd.DataFrame, engage_ts: int,
                              window_s: int = 90) -> Optional[float]:
-    """Take the DDR temp at engage_ts and the minimum DDR temp in the
-    window_s seconds *following* engagement. Returns the delta (positive =
-    cooling). Returns None if the sensor coverage is insufficient."""
+    """DDR temp at engage_ts minus the minimum over the next window_s seconds
+    (positive = cooling), or None if sensor coverage is missing."""
     if sensors.empty:
         return None
     near_engage = sensors[
@@ -230,13 +184,11 @@ def post_engagement_ddr_drop(sensors: pd.DataFrame, engage_ts: int,
     return t_engage_c - t_min_c
 
 
-# ============================================================================
 # PANEL DRAWERS
-# ============================================================================
 def draw_top_wave9(ax_top: plt.Axes, ax_top_tier: plt.Axes,
                    events: List[TierEvent], sensors: pd.DataFrame,
                    t0: int, t1: int) -> Dict:
-    """Top panel: Wave-9 DDR temp + tier step trace + first-engagement annotations."""
+    """Top panel: wave9 DDR temp, tier step trace and first-engagement notes."""
     # Time axis in minutes since the watchdog started.
     s = sensors[(sensors["wall_clock_s"] >= t0) & (sensors["wall_clock_s"] <= t1)].copy()
     if not s.empty:
@@ -262,7 +214,7 @@ def draw_top_wave9(ax_top: plt.Axes, ax_top_tier: plt.Axes,
     ax_top_tier.set_ylabel("watchdog tier", color="#d7301f")
     ax_top_tier.tick_params(axis="y", colors="#d7301f")
 
-    # First-engagement annotation -- arrow pointing at the engagement moment + DDR drop note.
+    # First-engagement annotations with the DDR drop that followed.
     ax_top.set_ylabel("DDR temperature (degC)")
     ax_top.set_xlabel("time since watchdog start (min)")
     duration_min = (t1 - t0) / 60.0
@@ -277,7 +229,7 @@ def draw_top_wave9(ax_top: plt.Axes, ax_top_tier: plt.Axes,
 
     fe = first_engagements(events)
     drops: Dict[int, Optional[float]] = {}
-    # Stagger callouts so they don't overlap. Tier-1 goes below the curve; tier-2/3 above.
+    # Stagger callouts: tier 1 below the curve, tiers 2 and 3 above.
     callout_layout = {
         1: dict(dx=3.0, dy=-10.0),   # below the curve
         2: dict(dx=10.0, dy=+8.0),   # above + further right
@@ -333,9 +285,9 @@ def draw_top_wave9(ax_top: plt.Axes, ax_top_tier: plt.Axes,
 
 def draw_middle_wave10(ax: plt.Axes, events: List[TierEvent],
                        t0: int, t1: int) -> Dict:
-    """Middle panel: Wave-10 K-sweep transition density per K phase."""
+    """Middle panel: wave10 K-sweep transitions per minute, by K phase."""
     duration_min = (t1 - t0) / 60.0
-    # Bin transitions per minute, split by tier (1, 2 only -- tier-3 never engaged).
+    # Transitions per minute, split by tier.
     bin_edges = np.arange(0, np.ceil(duration_min) + 1, 1)  # 1-min bins
     bin_centers = bin_edges[:-1] + 0.5
     tier1_xs = [(e.ts - t0) / 60.0 for e in events if e.tier == 1 and t0 <= e.ts <= t1]
@@ -345,7 +297,7 @@ def draw_middle_wave10(ax: plt.Axes, events: List[TierEvent],
     h_t2, _ = np.histogram(tier2_xs, bins=bin_edges)
     h_t3, _ = np.histogram(tier3_xs, bins=bin_edges)
 
-    # Stacked bar: tier-1 (bottom) + tier-2 (on top).
+    # Stacked bars, tier 1 at the bottom.
     width = 0.95
     ax.bar(bin_centers, h_t1, width=width, color=TIER_COLOR[1], edgecolor="none",
            label=f"tier-1 engage (n={sum(h_t1)})")
@@ -359,13 +311,13 @@ def draw_middle_wave10(ax: plt.Axes, events: List[TierEvent],
     ax.set_xlabel("time since watchdog start (min)")
     ax.set_ylabel("watchdog actions per minute")
     ax.set_xlim(0, duration_min)
-    # Make room for K-phase labels at the top BEFORE drawing them.
+    # Set the y-limit first to leave room for the K-phase labels.
     y_top_data = max(1.0, float(np.nanmax(h_t1 + h_t2 + h_t3)))
     ax.set_ylim(0, y_top_data * 1.40)
     ax.grid(True, axis="y", alpha=0.25)
     ax.legend(loc="upper right", fontsize=8.5, framealpha=0.9)
 
-    # K-phase shading + labels (after final ylim so labels are placed correctly).
+    # K-phase shading and labels.
     per_k_summary = []
     label_y = ax.get_ylim()[1] * 0.93
     for k, ks_unix, ke_unix in WAVE10_K_PHASES:
@@ -413,8 +365,8 @@ def draw_bottom_wave11(ax_main: plt.Axes,
                        sensors: pd.DataFrame,
                        t0: Optional[int],
                        t1: Optional[int]) -> Dict:
-    """Bottom panel: Wave-11 v1_fa2_stack -- same layout as Wave-9 if data is
-    present, otherwise placeholder."""
+    """Bottom panel: wave11 v1_fa2_stack in the top-panel layout, or a placeholder
+    if the log is missing."""
     if not events or t0 is None or t1 is None:
         for ax in (ax_main, ax_tier):
             ax.set_xticks([])
@@ -439,7 +391,7 @@ def draw_bottom_wave11(ax_main: plt.Axes,
         )
         return {"available": False, "expected_path": str(WAVE11_WATCHDOG)}
 
-    # Mirror the Wave-9 layout.
+    # Same layout as the top panel.
     s = sensors.copy()
     if not s.empty:
         s = s[(s["wall_clock_s"] >= t0) & (s["wall_clock_s"] <= t1)]
@@ -527,13 +479,11 @@ def draw_bottom_wave11(ax_main: plt.Axes,
     }
 
 
-# ============================================================================
 # MAIN
-# ============================================================================
 def main():
     FIG_DIR.mkdir(parents=True, exist_ok=True)
 
-    # ----- Wave 9 -----
+    # Wave 9
     w9_log = WAVE9_DIR / "watchdog.log"
     w9_events = parse_watchdog(w9_log)
     w9_t_start, w9_t_end = parse_watchdog_window(w9_log)
@@ -545,7 +495,7 @@ def main():
     print(f"[wave9 ] events={len(w9_events)} window=[{w9_t_start},{w9_t_end}] "
           f"sensors_rows={len(w9_sensors)}")
 
-    # ----- Wave 10 -----
+    # Wave 10
     w10_log = WAVE10_DIR / "watchdog.log"
     w10_events = parse_watchdog(w10_log)
     w10_t_start, w10_t_end = parse_watchdog_window(w10_log)
@@ -555,7 +505,7 @@ def main():
         w10_t_end = w10_events[-1].ts + 30
     print(f"[wave10] events={len(w10_events)} window=[{w10_t_start},{w10_t_end}]")
 
-    # ----- Wave 11 (graceful) -----
+    # Wave 11, may be missing
     w11_events = parse_watchdog(WAVE11_WATCHDOG)
     w11_t_start, w11_t_end = parse_watchdog_window(WAVE11_WATCHDOG)
     if w11_t_start is None and w11_events:
@@ -569,9 +519,7 @@ def main():
     print(f"[wave11] events={len(w11_events)} window=[{w11_t_start},{w11_t_end}] "
           f"sensors_rows={len(w11_sensors)}")
 
-    # ----- Figure layout -----
-    # 3 stacked panels. Top + bottom panels each get a twin axis for the tier
-    # step trace; middle is a simple bar plot.
+    # Three stacked panels. Top and bottom get a twin axis for the tier trace.
     fig = plt.figure(figsize=(14.5, 13.5), constrained_layout=False)
     gs = fig.add_gridspec(
         3, 1, height_ratios=[1.0, 0.95, 1.0],
@@ -615,7 +563,7 @@ def main():
     plt.close(fig)
     print(f"[wrote] {OUT_PNG}")
 
-    # ----- ART_SCHEMA -----
+    # ART_SCHEMA
     schema = {
         "kind": "ANALYSIS_SCHEMA",
         "name": "17_watchdog_action_timeline",

@@ -1,51 +1,10 @@
 #!/bin/bash
-# ============================================================================
-# run_energy_aware_n3.sh -- the energy-aware result at n=3, with the run-order
-# confound removed. (2026-08-14)
+# run_energy_aware_n3.sh: energy-aware muKV at n=3 per battery tier on the phone GPU.
+# Tiers are simulated with SoC thresholds on an otherwise identical command line. Arm
+# order rotates across reps so session drift spreads over all arms instead of one.
 #
-# WHY THIS RE-RUN EXISTS. run_energy_aware_proof.sh established that the controller
-# closes the loop: identical command line, only the battery state it reads differs, and K
-# moved 1947 -> 974 -> 487 with total system energy 1552 -> 1473 -> 1414 J (-8.9%). Two
-# defects in that campaign stop it being publishable, and BOTH are design, not luck:
-#
-#   1. n=1 per arm. No error bar, so -8.9% cannot be separated from run-to-run spread.
-#      Six identical muKV arms in an earlier phone campaign spread 11.2% on energy, which
-#      is LARGER than the effect being claimed here. n=1 is therefore not merely weak, it
-#      is uninterpretable.
-#   2. Run order was confounded with the treatment. The arms ran strictly
-#      healthy -> mid -> low, which is also monotonically decreasing K AND monotonically
-#      decreasing battery charge, so any drift across the session (thermal history, pack
-#      voltage, background daemons) aliases directly onto the result. The one drift that
-#      could be checked -- pack voltage 4.210 -> 4.202 V -- happens to oppose the observed
-#      trend, so the effect was probably understated rather than manufactured, but
-#      "probably" is not a control.
-#
-# THE FIX FOR (2) IS A ROTATION, NOT A SHUFFLE. Each arm appears exactly once in each
-# ordinal position across the three repetitions:
-#       rep1:  healthy  mid      low
-#       rep2:  low      healthy  mid
-#       rep3:  mid      low      healthy
-# A random shuffle could by chance reproduce the original ordering; this cannot. Any
-# monotone session drift now contributes equally to all three arms instead of loading onto
-# one, so it inflates the variance rather than biasing the mean.
-#
-# WHAT IS *NOT* FIXED, AND MUST BE WRITTEN INTO THE CAPTION. These cells run with USB
-# attached. The OnePlus charger driver refuses to suspend the USB input -- writes to
-# /sys/class/power_supply/usb/input_current_limit read straight back to 1500000 and
-# current_max is SELinux-denied even to root -- so a genuinely unplugged run is not
-# possible on this device. Charging is disabled (status "Not charging"), so the pack is
-# not being topped up, but the rail still carries most of the load.
-# CONSEQUENCE FOR REPORTING: quote TOTAL system energy (rail + coulomb-counter), which is
-# what the phone consumed doing the work and transfers to the unplugged case where the
-# pack supplies all of it. Do NOT quote the battery-only delta (the -33% mAh figure): with
-# the rail carrying a near-constant load, the pack sees only the peaks, so that number
-# describes the plugged-in split rather than the workload.
-#
-# Everything else follows run_energy_aware_proof.sh exactly -- same binary at
-# /data/local/tmp/ukv (deliberately NOT the freshly rebuilt one, so these reps stay
-# comparable with the n=1 campaign), same cool gate, same threshold trick for simulating
-# state of charge, same sensor sampler.
-# ============================================================================
+# USB stays attached (this device will not suspend USB input) with charging disabled, so
+# report total system energy (rail plus coulomb counter), not the battery-only delta.
 set -u
 . /home/mislam22/EndurKV_workspace/EndurKV/scripts/android/adb_resilient.sh
 BIN=/data/local/tmp/ukv_n3
@@ -67,9 +26,7 @@ settle(){
     adb_safe_shell "su -c '. /data/local/tmp/endurkv/scripts/cool_gate.sh; cool_ddr36'" < /dev/null | tail -1
     adb_safe_shell "su -c 'prev=999; same=0; for i in \$(seq 1 90); do d=\$((\$(cat /sys/class/thermal/thermal_zone47/temp)/100)); diff=\$((d-prev)); [ \$diff -lt 0 ] && diff=\$((-diff)); if [ \$diff -le 3 ]; then same=\$((same+1)); else same=0; fi; [ \$same -ge 3 ] && break; prev=\$d; sleep 10; done'" < /dev/null >/dev/null
     R=$(adb_safe_shell "su -c 'echo \$(cat /sys/class/thermal/thermal_zone47/temp) \$(cat /sys/class/thermal/thermal_zone93/temp)'" < /dev/null | tr -d '\r')
-    # NOTE: these MUST stay `local`. An earlier version assigned D=... without local and
-    # bash dynamic scoping clobbered cell()'s $D, so every pull wrote into a directory
-    # named after the DDR temperature. That bug cost a whole campaign.
+    # Keep these local, or bash dynamic scoping clobbers variables in cell().
     local _sd=$(echo $R|awk '{print int($1/1000)}'); local _sb=$(echo $R|awk '{print int($2/1000)}')
     echo "    post-settle ddr=${_sd}C batt=${_sb}C"
     [ "${_sd:-99}" -le 35 ] && [ "${_sb:-99}" -le 33 ] && return 0
@@ -100,10 +57,10 @@ TH_HEALTHY="--ea-soc-hi 50 --ea-soc-lo 20"   # real SoC sits above both  -> leve
 TH_MID="--ea-soc-hi 99 --ea-soc-lo 20"       # real SoC falls between    -> level 1, k-pct 10
 TH_LOW="--ea-soc-hi 99 --ea-soc-lo 99"       # real SoC sits below both  -> level 2, k-pct 5
 
-echo "=== rep1: healthy, mid, low ==="
+echo "rep1: healthy, mid, low"
 cell r1_healthy "$TH_HEALTHY"; cell r1_mid "$TH_MID"; cell r1_low "$TH_LOW"
-echo "=== rep2: low, healthy, mid  (rotated) ==="
+echo "rep2: low, healthy, mid  (rotated)"
 cell r2_low "$TH_LOW"; cell r2_healthy "$TH_HEALTHY"; cell r2_mid "$TH_MID"
-echo "=== rep3: mid, low, healthy  (rotated) ==="
+echo "rep3: mid, low, healthy  (rotated)"
 cell r3_mid "$TH_MID"; cell r3_low "$TH_LOW"; cell r3_healthy "$TH_HEALTHY"
 echo EA_N3_DONE
