@@ -98,9 +98,11 @@ struct Args {
     bool        ignore_eos = false;   // if true: ignore EOS and generate all max_tokens (sustained-throughput runs)
     int         keydiff_decode_block = 128; // KeyDiff only: re-evict every N decode steps to hold the cache at its budget
                                             // (0 = select once at the end of prefill)
+    bool        sllm_window = false;  // StreamingLLM as in its paper: 4 sinks + newest K-4 tokens each step, positions inside the cache
     bool        decode_bound = false; // decode: when n_kv > 1.5*k_nominal, keep [0, n_sink) and the last k_nominal - n_sink cells (recency only)
     bool        decode_tiered = false;// v1_FA² mode: keep all prefill anchors plus a recent window, drop the oldest decode-time cells
     int         recent_budget = 256;  // tiered decode recent window (tokens), evicts when n_kv > 1.25*(n_anchored + recent_budget)
+    bool        sinks_extra = false;  // μKV: keep the n_sink sinks in addition to the A scored anchors, so sinks + A + R = K
     int         anchor_top_k = 0;     // if > 0, keep only the top anchor_top_k prefill survivors by score as anchors (0 = all)
     std::string anchor_score_mode = "mean"; // mean | entropy (broadly attended) | neg_entropy (sharply attended) | hybrid: mean*(1 + hybrid_alpha*(1 - normalized entropy))
     float       hybrid_alpha = 0.5f;        // weight of the sharpness term in hybrid mode (0 = pure mean)
@@ -281,9 +283,11 @@ bool parse_args(int argc, char ** argv, Args & a) {
         else if (k == "--no-evict-decode"){ a.no_evict_decode= true; }
         else if (k == "--ignore-eos")   { a.ignore_eos    = true; }
         else if (k == "--decode-bound") { a.decode_bound  = true; }
+        else if (k == "--sllm-window")  { a.sllm_window   = true; }
         else if (k == "--decode-tiered"){ a.decode_tiered = true; }
         else if (k == "--keydiff-decode-block"){ a.keydiff_decode_block = std::stoi(argv[++i]); }
         else if (k == "--recent-budget"){ a.recent_budget = std::atoi(need(1).c_str()); i++; }
+        else if (k == "--sinks-extra")  { a.sinks_extra   = true; }
         else if (k == "--anchor-top-k") { a.anchor_top_k  = std::atoi(need(1).c_str()); i++; }
         else if (k == "--anchor-score-mode") { a.anchor_score_mode = need(1); i++; }
         else if (k == "--gate-mode") { a.gate_mode = need(1); i++; }
@@ -2455,7 +2459,7 @@ int main(int argc, char ** argv) {
                 std::fprintf(stderr, "[v1_fa2] adaptive anchor: coverage=%.2f -> top=%d/%d positions\n",
                              args.anchor_coverage, top, (int)ranked.size());
             } else {
-                top = std::min<int>(args.anchor_top_k, (int)ranked.size());
+                top = std::min<int>(args.anchor_top_k + (args.sinks_extra ? args.n_sink : 0), (int)ranked.size());
                 if (top < (int)ranked.size()) {
                     std::nth_element(ranked.begin(), ranked.begin() + top, ranked.end(),
                                      [](const auto & a, const auto & b) { return a.first > b.first; });
@@ -3322,6 +3326,22 @@ int main(int argc, char ** argv) {
                                                             args.n_sink, n_recent);
                 evicted_this   += dropped;
                 n_total_evicted += dropped;
+            }
+            // StreamingLLM as in its paper and reference code (start_size 4, recent_size K - 4):
+            // after each step keep the 4 sink tokens and the newest K - 4 tokens, and give the
+            // window positions inside the cache (n_sink .. K-1), as StreamingLLM does instead of
+            // using positions in the original text. seq_add re-rotates the cached keys.
+            if (args.sllm_window && args.policy == "streamingllm" && !g_evict_by_cell_index) {
+                llama_memory_t mem    = llama_get_memory(ctx);
+                const int      pmax   = (int) llama_memory_seq_pos_max(mem, 0);
+                const int      window = args.k_nominal - args.n_sink;
+                const int      excess = (pmax + 1 - args.n_sink) - window;
+                if (excess > 0) {
+                    llama_memory_seq_rm (mem, 0, args.n_sink, args.n_sink + excess);
+                    llama_memory_seq_add(mem, 0, args.n_sink + excess, pmax + 1, -excess);
+                    evicted_this    += 1;
+                    n_total_evicted += 1;
+                }
             }
         }
         // Now write the per-step row with the correct evicted_this count
