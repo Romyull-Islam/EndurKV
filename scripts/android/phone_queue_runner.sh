@@ -5,6 +5,7 @@
 # Cell line: TAG|KIND|BINDIR|eviction_bench args (without the --out-* flags)
 #   gpu:  cooling gate + DDR settle check, sensors at 2 Hz, pinned, like the host GPU campaigns
 #   niah: cooling gate, sensors at 5 Hz, timeout 3600 s, like run_niah_sllm2004.sh
+#   niahq: as niah, but cools only when the phone is hot (accuracy only, nothing timed)
 #   cpu:  cooling gate, sensors at 2 Hz, timeout 7200 s (CPU speed cells)
 #   lb:   no cooling gate, timeout 1200 s, like run_longbench_wide.sh (accuracy only)
 # A cell with OUT/TAG.done is skipped, so the runner can be restarted at any time.
@@ -80,6 +81,16 @@ while IFS='|' read -r TAG KIND BIN ARGS; do
       log "cooling for $TAG"
       CG=$(cool_ddr36); echo "$CG" | tail -1 >> $OUT/run.log
       case "$CG" in *"cool ddr="*) : ;; *) log "SKIP-HOT $TAG"; echo hot > $OUT/$TAG.done; continue ;; esac
+      echo 0 > /sys/class/oplus_chg/battery/mmi_charging_enable 2>/dev/null
+      sh /data/local/tmp/endurkv/scripts/sample_sensors.sh --out $OUT/$TAG.sensors.csv --hz 5 >/dev/null 2>&1 &
+      SP=$!
+      log "running $TAG"
+      LD_LIBRARY_PATH=$BIN timeout 3600 $BIN/eviction_bench $ARGS \
+          --out-meta $OUT/$TAG.json --out-csv /dev/null --out-gen $OUT/$TAG.gen \
+          > /dev/null 2> $OUT/$TAG.err < /dev/null
+      kill $SP 2>/dev/null; pkill -f sample_sensors 2>/dev/null ;;
+    niahq)
+      if hot; then log "hot before $TAG: cooling"; cool_ddr36 >> $OUT/run.log 2>&1; fi
       echo 0 > /sys/class/oplus_chg/battery/mmi_charging_enable 2>/dev/null
       sh /data/local/tmp/endurkv/scripts/sample_sensors.sh --out $OUT/$TAG.sensors.csv --hz 5 >/dev/null 2>&1 &
       SP=$!
