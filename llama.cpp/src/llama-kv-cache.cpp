@@ -2049,6 +2049,9 @@ size_t llama_kv_cache::size_v_bytes() const {
     return size_v_bytes;
 }
 
+// EndurKV: set by llama_endurkv_set_pure_kshift().
+bool g_endurkv_pure_kshift = false;
+
 ggml_tensor * llama_kv_cache::build_rope_shift(
         const llama_cparams & cparams,
                ggml_context * ctx,
@@ -2064,7 +2067,10 @@ ggml_tensor * llama_kv_cache::build_rope_shift(
     const auto & yarn_ext_factor  = cparams.yarn_ext_factor;
     const auto & yarn_beta_fast   = cparams.yarn_beta_fast;
     const auto & yarn_beta_slow   = cparams.yarn_beta_slow;
-    const auto & yarn_attn_factor = cparams.yarn_attn_factor;
+    // EndurKV: with the pure K-shift on, cancel the YaRN mscale that ggml applies when
+    // ext_factor != 0 and drop attn_factor, so the shift only rotates.
+    const float yarn_attn_factor = !g_endurkv_pure_kshift ? cparams.yarn_attn_factor
+        : yarn_ext_factor != 0.0f ? 1.0f / (1.0f + 0.1f * logf(1.0f / freq_scale)) : 1.0f;
 
     const auto & n_rot     = hparams.n_rot(il);
     const auto & rope_type = hparams.rope_type == LLAMA_ROPE_TYPE_MROPE || hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE

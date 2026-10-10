@@ -45,7 +45,10 @@ The policy flags are:
 
 `--sllm-window` gives StreamingLLM's published behaviour: 4 sink tokens and a rolling window of
 2000 recent tokens, trimmed at every decode step, with positions assigned inside the cache, so
-every cached key is re-rotated at each step. Without it, `--policy streamingllm` keeps the window
+every cached key is re-rotated at each step. The flag also makes that re-rotation a pure
+rotation (`llama_endurkv_set_pure_kshift()`): by default llama.cpp's K-shift applies the RoPE
+magnitude factor again (YaRN for Bonsai, the LongRoPE attention factor for Phi-3), which compounds
+at every step and corrupts the output. Without it, `--policy streamingllm` keeps the window
 chosen after prefill and does not trim during decode. The paper uses that untrimmed version only
 as a control for fused attention ("Window 4+2000, kernel off").
 

@@ -725,6 +725,11 @@ extern "C" {
     // (default). This lets score-based eviction keep FlashAttention on.
     LLAMA_API void llama_endurkv_set_evict_obs_window(int32_t w);
 
+    // EndurKV: make the K-shift a pure rotation (off by default). Stored keys already carry
+    // the RoPE magnitude factor (attn_factor, and the YaRN mscale), and the default K-shift
+    // applies it again, so a cache that shifts every step compounds it.
+    LLAMA_API void llama_endurkv_set_pure_kshift(bool on);
+
     // EndurKV: remove KV cells by cell index instead of by position. Needed for M-RoPE
     // (vision) caches, where all tokens of an image share one position. keep[i] != 0
     // retains cell i, and kept cells keep their positions. Returns the cells removed.

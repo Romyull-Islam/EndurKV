@@ -2086,6 +2086,8 @@ int main(int argc, char ** argv) {
     // --fa-on-evict: enable the kq_evict side node for prefill so the gate is captured with
     // FA on. It is disabled again after prefill and eviction.
     if (args.fa_on_evict) llama_endurkv_set_evict_obs_window(cap.obs_window);
+    // StreamingLLM re-rotates every cached key at each step, which must not rescale them.
+    if (args.sllm_window) llama_endurkv_set_pure_kshift(true);
     int64_t t_prefill_0 = ggml_time_us();
     // H2O accumulates attention over every forward pass, prefill chunks included. Each
     // chunk is folded in after its llama_decode, since eval_callback overwrites per_layer.

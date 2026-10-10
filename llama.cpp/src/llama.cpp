@@ -1225,3 +1225,9 @@ void llama_endurkv_set_evict_obs_window(int32_t w) {
     g_endurkv_evict_obs_window = w < 0 ? 0 : w;
 }
 
+// EndurKV: pure-rotation K-shift (see llama.h). Read by build_rope_shift.
+void llama_endurkv_set_pure_kshift(bool on) {
+    extern bool g_endurkv_pure_kshift;
+    g_endurkv_pure_kshift = on;
+}
+
